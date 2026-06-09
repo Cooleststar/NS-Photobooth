@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+client-ns-photobooth/node_modules/
+
+# Yarn
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.cjs
+.pnp.loader.mjs
+
+# Build output
+dist/
+client-ns-photobooth/dist/
+
+# Vite cache
+client-ns-photobooth/.vite/
+
+# Environment variables
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
