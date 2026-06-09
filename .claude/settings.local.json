@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command \"Get-ChildItem 'c:\\\\Users\\\\Admin\\\\Desktop\\\\jenas stuffs\\\\photobooth\\\\backend' | Select-Object Name, CreationTime, LastWriteTime\")"
+    ]
+  }
+}
