@@ -9,7 +9,7 @@ import { Modal } from '../components'
 const displayStyle = css`
   ${tw`fixed inset-0 bg-black flex items-center justify-center`}
   > canvas {
-    ${tw`max-w-full h-full object-contain cursor[none]`}
+    ${tw`max-w-full h-full object-contain`}
   }
 `
 

@@ -213,6 +213,15 @@ export default function Display({
 
   const targetFinder = createTargetCalculator(height, width)
 
+  // Auto-select the first available camera if none is selected
+  useEffect(() => {
+    if (deviceId) return
+    navigator.mediaDevices.enumerateDevices().then((devices) => {
+      const cam = devices.find((d) => d.kind === 'videoinput')
+      if (cam) selectedDevice.set(cam.deviceId)
+    })
+  }, [])
+
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
     videoRef.current.srcObject = stream

@@ -35,11 +35,13 @@ export default function HUD({ photographerRef }: HUDProps) {
       pointerEnabled.set(false)
       freezePosition.set(true)
       await sleep(countdown * 1000)
+      document.body.style.cursor = 'none'
       window.document.body.style.opacity = '0.2'
       setPicture(await imgGetter())
       await sleep(100)
       window.document.body.style.opacity = '1'
       await sleep(100)
+      document.body.style.cursor = ''
       setState('confirm')
       pointerEnabled.set(true)
       freezePosition.set(false)
