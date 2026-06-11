@@ -22,6 +22,7 @@ import {
   owlEnabled,
   pictures,
   router,
+  rtspURL,
   selectedDevice,
   selectedGif,
   textureCache,
@@ -60,6 +61,7 @@ export default function Settings() {
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
   const deviceId = useStore(selectedDevice)
+  const rtspUrl = useStore(rtspURL)
   const niceRos = useNiceROSState()
 
   useKeybind('KeyD', () => {
@@ -112,6 +114,27 @@ export default function Settings() {
           deviceIdHook={[deviceId, selectedDevice.set]}
           videoConstraints={camRes}
         />
+        <label>
+          RTSP URL:{' '}
+          <input
+            type='text'
+            value={rtspUrl}
+            placeholder='rtsp://user:pass@192.168.1.x'
+            onChange={(e) =>
+              rtspURL.set((e.target as HTMLInputElement).value)
+            }
+          />
+          {rtspUrl && (
+            <button onClick={() => rtspURL.set('')} tw='ml-1 text-red-500'>
+              ✕
+            </button>
+          )}
+        </label>
+        {rtspUrl && (
+          <small tw='text-green-600'>
+            RTSP active — proxied via backend on port 8080. Overrides Stream URL and camera.
+          </small>
+        )}
         <Toggle label='Disable Online Features' boolVar={offlineOnly} />
         <Toggle label='Enable Debug Anim' boolVar={debugEnabled} />
         <Toggle label='Enable Owl Anim' boolVar={owlEnabled} />
