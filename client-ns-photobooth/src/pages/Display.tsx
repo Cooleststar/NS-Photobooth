@@ -35,6 +35,7 @@ import {
   owlEnabled,
   pointerEnabled,
   poseInd,
+  rtspURL,
   selectedDevice,
   selectedGif,
 } from '../store'
@@ -216,12 +217,18 @@ export default function Display({
     mmpose: { 0: [] },
   })
   const videoRef = useRef<HTMLVideoElement>(null)
+  const imgRef = useRef<HTMLImageElement>(null)
   const divRef = useRef<HTMLDivElement>(null)
 
   const deviceId = useStore(selectedDevice)
   const camRes = useStore(camSize)
   const url = useStore(nicepipeURL)
   const gifOption = useStore(selectedGif)
+  const rtspUrlValue = useStore(rtspURL)
+  const isRtspMode = !!rtspUrlValue
+  const mjpegProxyUrl = isRtspMode
+    ? `http://localhost:8080/stream?url=${encodeURIComponent(rtspUrlValue)}`
+    : ''
 
   const targetFinder = createTargetCalculator(height, width)
 
@@ -239,7 +246,8 @@ export default function Display({
     videoRef.current.srcObject = stream
   }, [])
 
-  useCam({ deviceId, videoConstraints: camRes, videoCallback: setVideo })
+  useCam({ deviceId: isRtspMode ? undefined : deviceId, videoConstraints: camRes, videoCallback: setVideo })
+
 
   useNiceROS(url, { enabled: true })
 
@@ -253,8 +261,9 @@ export default function Display({
   useNiceROSAnalysis(rawRef)
 
   // Send video frames to backend pose detector at /video endpoint
+  // Skipped in RTSP mode — backend reads the stream directly
   useEffect(() => {
-    if (!deviceId) return
+    if (isRtspMode || !deviceId) return
     const video = videoRef.current
     if (!video) return
 
@@ -303,7 +312,7 @@ export default function Display({
       clearInterval(intervalId)
       ws?.close()
     }
-  }, [deviceId, url])
+  }, [deviceId, isRtspMode, url])
 
   useEffect(() => {
     if (!videoRef.current) return
@@ -313,9 +322,9 @@ export default function Display({
 
   useEffect(() => {
     const divElm = divRef.current
-    const video = videoRef.current
     if (!divElm) return
-    if (!video) return
+    const activeRef = isRtspMode ? imgRef : videoRef
+    if (!activeRef.current) return
 
     // https://pixijs.download/release/docs/PIXI.Application.html
     // sharedTicker is false to ensure any rogue update functions are cleaned up
@@ -330,7 +339,7 @@ export default function Display({
     divElm.replaceChildren()
     divElm.appendChild(app.view)
 
-    let [canvas, update] = createReceivingCtx(videoRef, dataRef, {
+    let [canvas, update] = createReceivingCtx(activeRef, dataRef, {
       width,
       height,
     })
@@ -463,7 +472,7 @@ export default function Display({
       }
       canvas.remove()
     }
-  }, [height, width, gifOption]) // including the ref currents here triggers an unnecessary rerender
+  }, [height, width, gifOption, isRtspMode]) // including the ref currents here triggers an unnecessary rerender
   return (
     <>
       <div ref={divRef} {...props}></div>
@@ -474,6 +483,15 @@ export default function Display({
         muted
         tw='fixed z-50 w-48 bottom-0 left-9 invisible'
       ></video>
+      {isRtspMode && (
+        <img
+          ref={imgRef}
+          src={mjpegProxyUrl}
+          crossOrigin='anonymous'
+          tw='fixed z-50 w-48 bottom-0 left-9 invisible'
+          alt=''
+        />
+      )}
     </>
   )
 }

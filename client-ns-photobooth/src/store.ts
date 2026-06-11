@@ -32,6 +32,8 @@ export const pointerEnabled = atom(true)
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)
 
+export const rtspURL = persistentAtom<string>('rtspURL', '')
+
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
 
 export const canvasSize = persistentAtom(
