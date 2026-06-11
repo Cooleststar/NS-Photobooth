@@ -3,7 +3,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useState } from 'react'
 import 'twin.macro'
 import { Btn, Modal } from '../components'
-import { pictures } from '../store'
+import { pictures, router } from '../store'
 
 /* TODO: Sidebar for previous images. */
 
@@ -30,6 +30,9 @@ export default function QRPage() {
         </Btn>
         <Btn disabled={!hasNext} onClick={() => setPicInd(picInd + 1)}>
           Next
+        </Btn>
+        <Btn onClick={() => router.open('/')}>
+          Back to Booth
         </Btn>
       </span>
     </Modal>

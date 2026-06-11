@@ -91,6 +91,8 @@ export default function HUD({ photographerRef }: HUDProps) {
     }
   }
 
+  useKeybind('Space', takePicture)
+
   useKeybind('PageDown', () => {
     if (!['ready', 'timing'].includes(state)) return
     poseInd.set(poseInd.get() + 1)
