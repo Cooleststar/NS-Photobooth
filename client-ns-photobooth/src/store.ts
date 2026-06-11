@@ -17,6 +17,16 @@ const opts = {
 export const debugEnabled = persistentAtom('debugEnabled', false, opts)
 export const owlEnabled = persistentAtom('owlEnabled', true, opts)
 export const bannerEnabled = persistentAtom('bannerEnabled', true, opts)
+
+export const GIF_OPTIONS = {
+  owl: 'Owl',
+  globe: 'Globe',
+  parrot: 'Parrot',
+  laptop: 'Laptop',
+  v15: 'V15 Drone',
+} as const
+export type GifOption = keyof typeof GIF_OPTIONS
+export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
 export const pointerEnabled = atom(true)
 
 // new backend requires video be sent to backend rather than the other way around

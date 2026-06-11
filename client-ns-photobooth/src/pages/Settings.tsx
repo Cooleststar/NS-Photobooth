@@ -11,6 +11,8 @@ import {
   useKeybind,
 } from '../components'
 import {
+  GIF_OPTIONS,
+  GifOption,
   bannerEnabled,
   camSize,
   canvasSize,
@@ -21,6 +23,7 @@ import {
   pictures,
   router,
   selectedDevice,
+  selectedGif,
   textureCache,
 } from '../store'
 
@@ -53,6 +56,7 @@ export default function Settings() {
   const route = useStore(router)?.route
   const [shown, setShown] = useState(false)
   const url = useStore(nicepipeURL)
+  const gifOption = useStore(selectedGif)
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
   const deviceId = useStore(selectedDevice)
@@ -111,6 +115,19 @@ export default function Settings() {
         <Toggle label='Disable Online Features' boolVar={offlineOnly} />
         <Toggle label='Enable Debug Anim' boolVar={debugEnabled} />
         <Toggle label='Enable Owl Anim' boolVar={owlEnabled} />
+        <label>
+          Animation GIF:{' '}
+          <select
+            value={gifOption}
+            onChange={(e) =>
+              selectedGif.set((e.target as HTMLSelectElement).value as GifOption)
+            }
+          >
+            {Object.entries(GIF_OPTIONS).map(([key, label]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
+          </select>
+        </label>
         <Toggle label='Enable Banner Anim' boolVar={bannerEnabled} />
         <span>
           <KeybindBtn

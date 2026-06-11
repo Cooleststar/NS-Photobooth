@@ -9,6 +9,6 @@ RUN yarn install --immutable
 
 COPY . .
 
-EXPOSE 5173
+EXPOSE 3000
 
-CMD ["yarn", "dev", "--host"]
+CMD ["yarn", "dev", "--host", "--port", "3000"]

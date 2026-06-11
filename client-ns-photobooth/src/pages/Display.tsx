@@ -17,14 +17,17 @@ import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
+import { calculateArmFromPose } from '../api/nicepipe/mpPose'
 import { createTargetCalculator } from '../api/nicepipe/propDetection'
 import { useNiceROSAnalysis } from '../api/niceRos'
 import globeGif from '../assets/globe.gif'
-// import laptopGif from '../assets/laptop.gif'
+import laptopGif from '../assets/laptop.gif'
 import anafiGif from '../assets/parrot_idle.gif'
 import v15Gif from '../assets/v15_redesigned_idle.gif'
 import * as PIXI from '../pixi'
 import {
+  GifOption,
+  GIF_OPTIONS,
   bannerEnabled,
   camSize,
   debugEnabled,
@@ -33,7 +36,15 @@ import {
   pointerEnabled,
   poseInd,
   selectedDevice,
+  selectedGif,
 } from '../store'
+
+const GIF_URLS: Record<Exclude<GifOption, 'owl'>, string> = {
+  globe: globeGif,
+  parrot: anafiGif,
+  laptop: laptopGif,
+  v15: v15Gif,
+}
 
 const MARGIN_X = 270 / 1920
 const MARGIN_T = 40 / 1080
@@ -210,6 +221,7 @@ export default function Display({
   const deviceId = useStore(selectedDevice)
   const camRes = useStore(camSize)
   const url = useStore(nicepipeURL)
+  const gifOption = useStore(selectedGif)
 
   const targetFinder = createTargetCalculator(height, width)
 
@@ -326,17 +338,41 @@ export default function Display({
     attachStream2Pixi(app, canvas)
     ;(async () => {
       console.log('Beginning animation load...')
+
+      // Create the main arm-gesture animation based on selected GIF
+      let mainAnimContainer: PIXI.Container
+      let updateMainAnim: (pose: typeof dataRef.current.mp_pose.pose) => void
+      if (gifOption === 'owl') {
+        const [container, update] = await createOwlAnim(app)
+        mainAnimContainer = container
+        updateMainAnim = update
+      } else {
+        const [container, update] = await createSimpleFadePropAnim(app, {
+          animUrl: GIF_URLS[gifOption],
+          kalman: { R: 0.01, Q: 5 },
+          sizeFactor: 1.5,
+        })
+        mainAnimContainer = container
+        updateMainAnim = (pose) => {
+          if (!pose) return
+          const [, coords] = calculateArmFromPose(pose, height, width)
+          update(coords ? {
+            x: coords.x,
+            y: coords.y,
+            size: coords.length * 2.5,
+            angle: (coords.angle * 180) / Math.PI,
+          } : undefined)
+        }
+      }
+
       const [
-        [owl, updateOwl],
         [arrow, updateArrow],
         [owlProp, updateOwlProp],
         [laptopProp, updateLaptopProp],
         [v15Prop, updateV15Prop],
         [anafiProp, updateAnafiProp],
-        // [laptop2Prop, updateLaptop2Prop],
         banner,
       ] = await Promise.all([
-        createOwlAnim(app),
         createArrowPointer(app),
         createOwlPropAnim(app, {
           kalman: { R: 0.01, Q: 5 },
@@ -363,22 +399,13 @@ export default function Display({
           xOffset: -0.04,
           flip: true,
         }),
-        // add laptop gif animation
-        // createSimpleFadePropAnim(app, {
-        //   animUrl: laptopGif,
-        //   kalman: { R: 0.01, Q: 3 },
-        //   sizeFactor: 0.9,
-        //   xOffset: -0.04,
-        //   flip: true,
-        // }),
         createBanner(app),
       ])
-      app.stage.addChild(owl)
+      app.stage.addChild(mainAnimContainer)
       app.stage.addChild(owlProp)
       app.stage.addChild(laptopProp)
       app.stage.addChild(v15Prop)
       app.stage.addChild(anafiProp)
-      // app.stage.addChild(laptop2Prop)
       app.stage.addChild(banner)
       app.stage.addChild(arrow)
       console.log('Animations added')
@@ -386,9 +413,9 @@ export default function Display({
       // when its too expensive to reconstruct the app so it has to be done imperatively
       app.ticker.add(() => update(rawRef.current, poseInd.get()))
       app.ticker.add(() => {
-        owl.visible = owlEnabled.get()
+        mainAnimContainer.visible = owlEnabled.get()
         const curPose = dataRef.current.mp_pose?.pose
-        if (curPose) updateOwl(curPose)
+        if (curPose) updateMainAnim(curPose)
       })
 
       app.ticker.add(() => {
@@ -436,7 +463,7 @@ export default function Display({
       }
       canvas.remove()
     }
-  }, [height, width]) // including the ref currents here triggers an unnecessary rerender
+  }, [height, width, gifOption]) // including the ref currents here triggers an unnecessary rerender
   return (
     <>
       <div ref={divRef} {...props}></div>
