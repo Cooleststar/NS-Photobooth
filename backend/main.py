@@ -6,15 +6,23 @@ Photobooth pose detection backend.
   POST http://localhost:8080/stream/stop       -> stop the RTSP reader
 """
 import asyncio
+import base64
 import json
 import logging
+import os
+import pathlib
 import threading
 import queue
+from datetime import datetime
+from urllib.parse import unquote
 import cv2
 import numpy as np
 import mediapipe as mp
 import websockets
 from aiohttp import web
+
+# Force RTSP over TCP — Hikvision cameras often silently fail with UDP
+os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'rtsp_transport;tcp')
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -49,6 +57,7 @@ TOPIC_TYPES = {
 # ---------------------------------------------------------------------------
 _loop: asyncio.AbstractEventLoop | None = None
 _mjpeg_clients: set = set()          # set of asyncio.Queue, one per browser connection
+_rtsp_lock: asyncio.Lock | None = None  # serialises camera switches
 
 _rtsp_stop_event = threading.Event()
 _rtsp_thread: threading.Thread | None = None
@@ -187,8 +196,24 @@ def _distribute_frame(jpg_bytes: bytes):
 
 
 def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
+    rtsp_url = unquote(rtsp_url)  # decode %40 → @ so OpenCV doesn't mistake it for an image pattern
     log.info(f"RTSP reader starting: {rtsp_url}")
-    cap = cv2.VideoCapture(rtsp_url)
+
+    def open_cap(url: str) -> cv2.VideoCapture:
+        cap = cv2.VideoCapture()
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000)
+        cap.open(url, cv2.CAP_FFMPEG)
+        return cap
+
+    if stop_event.is_set():
+        return
+    cap = open_cap(rtsp_url)
+    if not cap.isOpened():
+        log.error(f"Failed to open RTSP stream (check URL/credentials): {rtsp_url}")
+        return
+    log.info("RTSP stream opened successfully")
+
     frame_count = 0
     try:
         while not stop_event.is_set():
@@ -198,7 +223,10 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                 cap.release()
                 if stop_event.wait(3):
                     break
-                cap = cv2.VideoCapture(rtsp_url)
+                cap = open_cap(rtsp_url)
+                if not cap.isOpened():
+                    log.error("Failed to reopen RTSP stream, stopping")
+                    break
                 continue
 
             frame_count += 1
@@ -220,20 +248,26 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
         log.info("RTSP reader stopped")
 
 
-def start_rtsp_reader(rtsp_url: str):
+async def switch_rtsp_reader(rtsp_url: str):
+    """Switch to a new RTSP URL. Waits for the old reader to stop without blocking the event loop."""
     global _rtsp_stop_event, _rtsp_thread, _current_rtsp_url
-    if rtsp_url == _current_rtsp_url and _rtsp_thread and _rtsp_thread.is_alive():
-        return
-    stop_rtsp_reader()
-    _current_rtsp_url = rtsp_url
-    _rtsp_stop_event = threading.Event()
-    _rtsp_thread = threading.Thread(
-        target=_rtsp_reader,
-        args=(rtsp_url, _rtsp_stop_event),
-        daemon=True,
-    )
-    _rtsp_thread.start()
-    log.info(f"RTSP reader thread started for {rtsp_url}")
+    async with _rtsp_lock:
+        if rtsp_url == _current_rtsp_url and _rtsp_thread and _rtsp_thread.is_alive():
+            return
+        old_thread = _rtsp_thread
+        stop_rtsp_reader()
+        if old_thread and old_thread.is_alive():
+            log.info("Waiting for previous RTSP reader to stop...")
+            await asyncio.to_thread(old_thread.join, 12)
+        _current_rtsp_url = rtsp_url
+        _rtsp_stop_event = threading.Event()
+        _rtsp_thread = threading.Thread(
+            target=_rtsp_reader,
+            args=(rtsp_url, _rtsp_stop_event),
+            daemon=True,
+        )
+        _rtsp_thread.start()
+        log.info(f"RTSP reader thread started for {rtsp_url}")
 
 
 def stop_rtsp_reader():
@@ -256,7 +290,7 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
     if not rtsp_url:
         return web.Response(status=400, text='Missing ?url= parameter')
 
-    start_rtsp_reader(rtsp_url)
+    await switch_rtsp_reader(rtsp_url)
 
     response = web.StreamResponse(headers={
         'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
@@ -269,7 +303,7 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
     log.info(f"MJPEG client connected (total: {len(_mjpeg_clients)})")
     try:
         while True:
-            jpg_bytes: bytes = await asyncio.wait_for(q.get(), timeout=10.0)
+            jpg_bytes: bytes = await asyncio.wait_for(q.get(), timeout=20.0)
             await response.write(
                 b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg_bytes + b'\r\n'
             )
@@ -287,10 +321,61 @@ async def stop_stream_handler(request: web.Request) -> web.Response:
     return web.Response(text='RTSP reader stopped', headers=_CORS)
 
 
+async def save_photo_handler(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        b64img: str = data.get('image', '')
+        directory: str = data.get('directory', './photos').strip()
+
+        if not b64img:
+            return web.Response(status=400, text='Missing image', headers=_CORS)
+
+        # Parse data URL: data:image/png;base64,<data>
+        if ',' in b64img:
+            header, b64data = b64img.split(',', 1)
+            ext = header.split('/')[1].split(';')[0]  # e.g. png, webp, jpeg
+        else:
+            b64data = b64img
+            ext = 'jpg'
+
+        pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filepath = os.path.join(directory, f'photo_{timestamp}.{ext}')
+
+        with open(filepath, 'wb') as f:
+            f.write(base64.b64decode(b64data))
+
+        log.info(f"Photo saved: {filepath}")
+        return web.Response(text=filepath, headers=_CORS)
+    except Exception as e:
+        log.error(f"Save photo error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
+async def browse_handler(request: web.Request) -> web.Response:
+    raw = request.rel_url.query.get('path', '/app/photos').strip()
+    try:
+        p = pathlib.Path(raw).resolve()
+        if not p.exists() or not p.is_dir():
+            p = pathlib.Path('/app/photos').resolve()
+        dirs = sorted(d.name for d in p.iterdir() if d.is_dir())
+        parent = str(p.parent) if p != p.parent else None
+        return web.Response(
+            text=json.dumps({'path': str(p), 'parent': parent, 'dirs': dirs}),
+            content_type='application/json',
+            headers=_CORS,
+        )
+    except Exception as e:
+        log.error(f"Browse error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
 def make_http_app() -> web.Application:
     app = web.Application()
     app.router.add_get('/stream', stream_handler)
     app.router.add_post('/stream/stop', stop_stream_handler)
+    app.router.add_post('/save', save_photo_handler)
+    app.router.add_get('/browse', browse_handler)
     return app
 
 # ---------------------------------------------------------------------------
@@ -298,8 +383,9 @@ def make_http_app() -> web.Application:
 # ---------------------------------------------------------------------------
 
 async def main():
-    global _loop
+    global _loop, _rtsp_lock
     _loop = asyncio.get_running_loop()
+    _rtsp_lock = asyncio.Lock()
 
     log.info("Photobooth backend starting...")
 

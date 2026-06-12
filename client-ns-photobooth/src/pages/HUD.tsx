@@ -1,20 +1,42 @@
 import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
-import { downloadImage, uploadImage } from '../api/cloudinary'
+import { uploadImage } from '../api/cloudinary'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
 import { Countdown, KeybindBtn, Modal, useKeybind } from '../components'
+import { ensurePermission } from '../lib/dirHandle'
 import {
   addPicture,
   freezePosition,
   offlineOnly,
   pointerEnabled,
   poseInd,
+  saveDirHandle,
 } from '../store'
 import { sleep } from '../utils'
 
 const countdown = parseInt(import.meta.env.VITE_PHOTO_COUNTDOWN)
 
-type CamState = 'ready' | 'timing' | 'confirm' | 'uploading' | 'error'
+type CamState = 'ready' | 'timing' | 'confirm' | 'uploading' | 'saving' | 'error'
+
+async function saveToDirHandle(b64img: string): Promise<void> {
+  const handle = saveDirHandle.get()
+  if (!handle) throw new Error('No save folder selected. Choose one in Settings → Storage.')
+
+  const ok = await ensurePermission(handle)
+  if (!ok) throw new Error('Permission denied for save folder.')
+
+  const mimeType = b64img.split(';')[0].slice(5)
+  const ext = mimeType.split('/')[1]
+  const date = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const filename = `photo_${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}.${ext}`
+
+  const fileHandle = await handle.getFileHandle(filename, { create: true })
+  const blob = await fetch(b64img).then((r) => r.blob())
+  const writable = await fileHandle.createWritable()
+  await writable.write(blob)
+  await writable.close()
+}
 
 export interface HUDProps {
   photographerRef: MutableRefObject<(() => Promise<string>) | undefined>
@@ -53,41 +75,33 @@ export default function HUD({ photographerRef }: HUDProps) {
   const confirmUpload = () => {
     if (state !== 'confirm')
       return console.warn('attempted upload in wrong state!', state)
-    setState('uploading')
 
     if (!offlineOnly.get()) {
+      setState('uploading')
       uploadImage(picture)
         .then((resp) => {
-          console.debug('Cloudinary Response', resp)
           const imgUrl = resp.secure_url
-          const url = `${
-            import.meta.env.VITE_LANDING_PAGE_URL
-          }${imgUrl.substring(
+          const url = `${import.meta.env.VITE_LANDING_PAGE_URL}${imgUrl.substring(
             'https://res.cloudinary.com/aoh2022/image/upload/'.length,
-            imgUrl.length,
           )}`
-          addPicture({
-            timestamp: Date.now(),
-            data: imgUrl,
-            url,
-          })
+          addPicture({ timestamp: Date.now(), data: imgUrl, url })
           setState('ready')
         })
         .catch((e) => {
-          console.warn(e)
           setError(e.toString())
           setState('error')
-          downloadImage(picture)
         })
     } else {
-      const date = new Date()
-      downloadImage(picture)
-      addPicture({
-        timestamp: date.getTime(),
-        data: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAAC0SDtlAAAADklEQVQY02NgGAVDEgAAAbkAAe14KSUAAAAASUVORK5CYII=', // TODO: need cheap placeholder
-        url: `https://example.com/?id=${date.getTime()}`,
-      })
-      setTimeout(() => setState('ready'), 5000)
+      setState('saving')
+      saveToDirHandle(picture)
+        .then(() => {
+          addPicture({ timestamp: Date.now(), data: picture, url: '' })
+          setState('ready')
+        })
+        .catch((e: any) => {
+          setError(e?.message ?? e.toString())
+          setState('error')
+        })
     }
   }
 
@@ -142,6 +156,12 @@ export default function HUD({ photographerRef }: HUDProps) {
       return (
         <Modal locked>
           <h2>Uploading...</h2>
+        </Modal>
+      )
+    case 'saving':
+      return (
+        <Modal locked>
+          <h2>Saving...</h2>
         </Modal>
       )
     case 'error':
