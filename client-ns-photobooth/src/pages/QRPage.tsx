@@ -31,7 +31,7 @@ export default function QRPage() {
         <Btn disabled={!hasNext} onClick={() => setPicInd(picInd + 1)}>
           Next
         </Btn>
-        <Btn onClick={() => router.open('/')}>
+        <Btn onClick={() => router.open('/booth')}>
           Back to Booth
         </Btn>
       </span>

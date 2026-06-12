@@ -4,9 +4,11 @@ import tw from 'twin.macro'
 import {
   CameraSource,
   HIKVISION_IPS,
+  cameraInitialized,
   camSize,
   cameraSource,
   customRtspURL,
+  router,
   selectedDevice,
 } from '../store'
 
@@ -79,12 +81,15 @@ export default function CameraSelect() {
           </div>
         )}
 
-        <a
-          href='/booth'
+        <button
           tw='mt-2 bg-white text-black text-center py-3 rounded-lg text-lg font-semibold hover:bg-gray-200 transition-colors'
+          onClick={() => {
+            cameraInitialized.set(true)
+            router.open('/booth')
+          }}
         >
           Start
-        </a>
+        </button>
       </div>
     </div>
   )
