@@ -6,6 +6,8 @@ services:
     ports:
       - "9090:9090"
       - "8080:8080"
+    volumes:
+      - ./photos:/app/photos
     restart: unless-stopped
 
   frontend:

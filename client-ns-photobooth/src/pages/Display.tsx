@@ -34,8 +34,11 @@ import {
   nicepipeURL,
   owlEnabled,
   pointerEnabled,
+  HIKVISION_IPS,
+  RTSP_BASE,
+  cameraSource,
+  customRtspURL,
   poseInd,
-  rtspURL,
   selectedDevice,
   selectedGif,
 } from '../store'
@@ -224,7 +227,11 @@ export default function Display({
   const camRes = useStore(camSize)
   const url = useStore(nicepipeURL)
   const gifOption = useStore(selectedGif)
-  const rtspUrlValue = useStore(rtspURL)
+  const camSource = useStore(cameraSource)
+  const customUrl = useStore(customRtspURL)
+  const rtspUrlValue = (HIKVISION_IPS as readonly string[]).includes(camSource)
+    ? RTSP_BASE + camSource
+    : camSource === 'custom' ? customUrl : ''
   const isRtspMode = !!rtspUrlValue
   const mjpegProxyUrl = isRtspMode
     ? `http://localhost:8080/stream?url=${encodeURIComponent(rtspUrlValue)}`
@@ -232,14 +239,15 @@ export default function Display({
 
   const targetFinder = createTargetCalculator(height, width)
 
-  // Auto-select the first available camera if none is selected
+  // Auto-select the first available webcam if in webcam mode and none is selected
   useEffect(() => {
+    if (camSource !== 'webcam') return
     if (deviceId) return
     navigator.mediaDevices.enumerateDevices().then((devices) => {
       const cam = devices.find((d) => d.kind === 'videoinput')
       if (cam) selectedDevice.set(cam.deviceId)
     })
-  }, [])
+  }, [camSource])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return

@@ -32,9 +32,16 @@ export const pointerEnabled = atom(true)
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)
 
-export const rtspURL = persistentAtom<string>('rtspURL', '')
+export const HIKVISION_IPS = ['65', '66', '67', '68', '69', '70'] as const
+export type HikvisionIP = typeof HIKVISION_IPS[number]
+export const RTSP_BASE = 'rtsp://admin:CV@hikvision@192.168.1.'
+export type CameraSource = HikvisionIP | 'custom' | 'webcam'
+export const cameraSource = persistentAtom<CameraSource>('cameraSource', '65', opts)
+export const customRtspURL = persistentAtom<string>('customRtspURL', '')
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
+export const saveDirHandle = atom<FileSystemDirectoryHandle | null>(null)
+export const saveDirName = persistentAtom<string>('saveDirName', '')
 
 export const canvasSize = persistentAtom(
   'canvasSize',
@@ -75,7 +82,8 @@ export function addPicture(pic: Picture) {
 }
 
 export const router = createRouter({
-  home: '/',
+  select: '/',
+  booth: '/booth',
   qr: '/qr',
 })
 
