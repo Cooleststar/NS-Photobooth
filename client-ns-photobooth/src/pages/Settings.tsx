@@ -15,6 +15,7 @@ import {
   nicepipeURL,
   offlineOnly,
   owlEnabled,
+  cameraInitialized,
   pictures,
   pointerEnabled,
   router,
@@ -270,6 +271,7 @@ export default function Settings() {
               onClick={() => {
                 pictures.set([])
                 textureCache.set({})
+                cameraInitialized.set(false)
                 router.open('/')
               }}
             >

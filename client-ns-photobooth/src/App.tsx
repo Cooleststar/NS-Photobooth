@@ -5,7 +5,7 @@ import CameraSelect from './pages/CameraSelect'
 import QRPage from './pages/QRPage'
 import Settings from './pages/Settings'
 import { loadDirHandle } from './lib/dirHandle'
-import { router, saveDirHandle } from './store'
+import { cameraInitialized, router, saveDirHandle } from './store'
 
 export default function App() {
   const route = useStore(router)?.route
@@ -15,6 +15,12 @@ export default function App() {
       if (handle) saveDirHandle.set(handle)
     })
   }, [])
+
+  useEffect(() => {
+    if ((route === 'booth' || route === 'qr') && !cameraInitialized.get()) {
+      router.open('/')
+    }
+  }, [route])
 
   if (!route) return <div>404. Not Found.</div>
   return (

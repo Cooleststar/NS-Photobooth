@@ -40,6 +40,7 @@ export const cameraSource = persistentAtom<CameraSource>('cameraSource', '65', o
 export const customRtspURL = persistentAtom<string>('customRtspURL', '')
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
+export const cameraInitialized = persistentAtom('cameraInitialized', false, opts)
 export const saveDirHandle = atom<FileSystemDirectoryHandle | null>(null)
 export const saveDirName = persistentAtom<string>('saveDirName', '')
 
