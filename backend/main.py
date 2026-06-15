@@ -21,8 +21,11 @@ import mediapipe as mp
 import websockets
 from aiohttp import web
 
-# Force RTSP over TCP — Hikvision cameras often silently fail with UDP
-os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'rtsp_transport;tcp')
+# Force RTSP over TCP and minimise buffering for lower display latency
+os.environ.setdefault(
+    'OPENCV_FFMPEG_CAPTURE_OPTIONS',
+    'rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|probesize;32|analyzeduration;0',
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -204,6 +207,7 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)
         cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000)
         cap.open(url, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
     if stop_event.is_set():
