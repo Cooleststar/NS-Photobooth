@@ -235,18 +235,21 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
 
             frame_count += 1
 
-            # Encode as JPEG and push to MJPEG streaming clients
-            _, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            # Resize for display before encoding — smaller frame = faster encode + less bytes to send
+            display = cv2.resize(frame, (960, 540))
+            _, jpg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, 60])
             _loop.call_soon_threadsafe(_distribute_frame, jpg.tobytes())
 
-            # Run pose detection every 3rd frame to avoid overloading the CPU
+            # Run pose detection every 3rd frame on a separate thread to avoid blocking reads
             if frame_count % 3 == 0:
                 small = cv2.resize(frame, (320, 240))
-                pose_msg = run_pose_detection(small)
-                if pose_msg:
-                    asyncio.run_coroutine_threadsafe(
-                        broadcast("/pose_out", pose_msg), _loop
-                    )
+                threading.Thread(
+                    target=lambda f=small: (
+                        (msg := run_pose_detection(f)) and
+                        asyncio.run_coroutine_threadsafe(broadcast("/pose_out", msg), _loop)
+                    ),
+                    daemon=True,
+                ).start()
     finally:
         cap.release()
         log.info("RTSP reader stopped")
@@ -302,7 +305,7 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
-    q: asyncio.Queue = asyncio.Queue(maxsize=5)
+    q: asyncio.Queue = asyncio.Queue(maxsize=1)
     _mjpeg_clients.add(q)
     log.info(f"MJPEG client connected (total: {len(_mjpeg_clients)})")
     try:
