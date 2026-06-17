@@ -4,8 +4,8 @@ services:
   backend:
     build: ./backend
     ports:
-      - "9090:9090"
-      - "8080:8080"
+      - "9091:9091"
+      - "8081:8081"
     volumes:
       - ./photos:/app/photos
     restart: unless-stopped

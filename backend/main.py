@@ -1,9 +1,9 @@
 """
 Photobooth pose detection backend.
-  ws://localhost:9090/                         -> rosbridge (sends pose data to frontend)
-  ws://localhost:9090/video                    -> receives camera frames from browser
-  http://localhost:8080/stream?url=<rtsp-url>  -> MJPEG proxy for RTSP cameras
-  POST http://localhost:8080/stream/stop       -> stop the RTSP reader
+  ws://localhost:9091/                         -> rosbridge (sends pose data to frontend)
+  ws://localhost:9091/video                    -> receives camera frames from browser
+  http://localhost:8081/stream?url=<rtsp-url>  -> MJPEG proxy for RTSP cameras
+  POST http://localhost:8081/stream/stop       -> stop the RTSP reader
 """
 import asyncio
 import base64
@@ -396,15 +396,15 @@ async def main():
 
     log.info("Photobooth backend starting...")
 
-    ws_server = await websockets.serve(handler, "0.0.0.0", 9090)
-    log.info("WebSocket server ready on port 9090")
+    ws_server = await websockets.serve(handler, "0.0.0.0", 9091)
+    log.info("WebSocket server ready on port 9091")
 
     http_app = make_http_app()
     runner = web.AppRunner(http_app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    site = web.TCPSite(runner, "0.0.0.0", 8081)
     await site.start()
-    log.info("MJPEG HTTP server ready on port 8080")
+    log.info("MJPEG HTTP server ready on port 8081")
 
     await asyncio.Future()
 
