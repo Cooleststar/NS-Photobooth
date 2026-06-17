@@ -234,7 +234,7 @@ export default function Display({
     : camSource === 'custom' ? customUrl : ''
   const isRtspMode = !!rtspUrlValue
   const mjpegProxyUrl = isRtspMode
-    ? `http://localhost:8080/stream?url=${encodeURIComponent(rtspUrlValue)}`
+    ? `http://localhost:8081/stream?url=${encodeURIComponent(rtspUrlValue)}`
     : ''
 
   const targetFinder = createTargetCalculator(height, width)

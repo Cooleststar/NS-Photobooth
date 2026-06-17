@@ -66,7 +66,7 @@ export const enableRTC = atom(false)
 
 export const nicepipeURL = persistentAtom<string>(
   'nicepipeURL',
-  'ws://localhost:9090',
+  'ws://localhost:9091',
 )
 
 export interface Picture {

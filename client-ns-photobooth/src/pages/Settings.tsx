@@ -170,7 +170,7 @@ export default function Settings() {
                 tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
                 type='text'
                 value={url}
-                placeholder='ws://localhost:9090'
+                placeholder='ws://localhost:9091'
                 onChange={(e) =>
                   nicepipeURL.set((e.target as HTMLInputElement).value)
                 }
