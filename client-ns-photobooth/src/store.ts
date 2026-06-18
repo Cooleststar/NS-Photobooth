@@ -20,10 +20,9 @@ export const bannerEnabled = persistentAtom('bannerEnabled', true, opts)
 
 export const GIF_OPTIONS = {
   owl: 'Owl',
+  bat: 'Bat',
   globe: 'Globe',
-  parrot: 'Parrot',
   laptop: 'Laptop',
-  v15: 'V15 Drone',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
@@ -35,9 +34,12 @@ export const selectedDevice = atom<string | undefined>(undefined)
 export const HIKVISION_IPS = ['65', '66', '67', '68', '69', '70'] as const
 export type HikvisionIP = typeof HIKVISION_IPS[number]
 export const RTSP_BASE = 'rtsp://admin:CV@hikvision@192.168.1.'
+export const HIKVISION_USER = 'admin'
+export const HIKVISION_PASS = 'CV@hikvision'
 export type CameraSource = HikvisionIP | 'custom' | 'webcam'
 export const cameraSource = persistentAtom<CameraSource>('cameraSource', '65', opts)
 export const customRtspURL = persistentAtom<string>('customRtspURL', '')
+
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
 export const cameraInitialized = persistentAtom('cameraInitialized', false, opts)

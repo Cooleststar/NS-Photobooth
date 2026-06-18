@@ -7,7 +7,7 @@ An interactive photobooth application for events. It captures photos via a webca
 | Part | Tech | Port |
 |---|---|---|
 | Frontend (`client-ns-photobooth`) | Vite + Preact + PixiJS + TypeScript | 3000 |
-| Backend (`backend`) | Python + MediaPipe + WebSockets | 9090 |
+| Backend (`backend`) | Python + MediaPipe + WebSockets | 8081 (HTTP/WS), 9091 (rosbridge) |
 
 ## Features
 
