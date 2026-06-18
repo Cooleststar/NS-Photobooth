@@ -38,9 +38,8 @@ export async function createSimpleFadePropAnim(
   const container = new PIXI.Container()
   if (flip) container.scale.x = -1
 
-  //.clone(), // cloning needed if there is multiple independent instances
   const [sprite, scanEntrySprite, scanExitSprite] = await Promise.all([
-    PIXI.ensureLoaded(loader, animUrl).then((r) => r.animation!),
+    PIXI.ensureLoaded(loader, animUrl).then((r) => r.animation!.clone()),
     useScanAnim
       ? PIXI.ensureLoaded(loader, scanEntry).then((r) => r.animation!.clone())
       : Promise.resolve(undefined),

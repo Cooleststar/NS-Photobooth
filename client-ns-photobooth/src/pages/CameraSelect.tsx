@@ -4,8 +4,9 @@ import tw from 'twin.macro'
 import {
   CameraSource,
   HIKVISION_IPS,
+  HIKVISION_USER,
+  HIKVISION_PASS,
   cameraInitialized,
-  camSize,
   cameraSource,
   customRtspURL,
   router,
@@ -15,8 +16,10 @@ import {
 export default function CameraSelect() {
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
-  const camRes = useStore(camSize)
   const [detectedCam, setDetectedCam] = useState<string>('')
+  const [starting, setStarting] = useState(false)
+
+  const isHikvision = (HIKVISION_IPS as readonly string[]).includes(camSource)
 
   useEffect(() => {
     if (camSource !== 'webcam') return
@@ -30,6 +33,33 @@ export default function CameraSelect() {
       }
     })
   }, [camSource])
+
+  const handleStart = async () => {
+    if (starting) return
+    setStarting(true)
+
+    if (isHikvision) {
+      try {
+        await fetch('http://localhost:8081/camera/configure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ip: `192.168.1.${camSource}`,
+            user: HIKVISION_USER,
+            password: HIKVISION_PASS,
+            channel: parseInt(camSource),
+            stream: 1,
+            mjpeg: false,
+          }),
+        })
+      } catch {
+        // Camera config is best-effort; proceed even if it fails
+      }
+    }
+
+    cameraInitialized.set(true)
+    router.open('/booth')
+  }
 
   return (
     <div tw='fixed inset-0 bg-black flex flex-col items-center justify-center gap-8 text-white'>
@@ -82,13 +112,11 @@ export default function CameraSelect() {
         )}
 
         <button
-          tw='mt-2 bg-white text-black text-center py-3 rounded-lg text-lg font-semibold hover:bg-gray-200 transition-colors'
-          onClick={() => {
-            cameraInitialized.set(true)
-            router.open('/booth')
-          }}
+          tw='mt-2 bg-white text-black text-center py-3 rounded-lg text-lg font-semibold hover:bg-gray-200 transition-colors disabled:opacity-50'
+          disabled={starting}
+          onClick={handleStart}
         >
-          Start
+          {starting ? 'Configuring camera...' : 'Start'}
         </button>
       </div>
     </div>

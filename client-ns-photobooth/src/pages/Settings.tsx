@@ -237,7 +237,6 @@ export default function Settings() {
                 ))}
               </select>
             </div>
-            <SwitchRow label='Owl Animation' boolVar={owlEnabled} />
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />

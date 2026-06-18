@@ -12,27 +12,21 @@ import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
 import { createBanner } from '../anim/banner'
 import { createOwlAnim } from '../anim/owl'
-import { createOwlPropAnim } from '../anim/owlProp'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
-import { calculateArmFromPose } from '../api/nicepipe/mpPose'
-import { createTargetCalculator } from '../api/nicepipe/propDetection'
 import { useNiceROSAnalysis } from '../api/niceRos'
-import globeGif from '../assets/globe.gif'
-import laptopGif from '../assets/laptop.gif'
-import anafiGif from '../assets/parrot_idle.gif'
-import v15Gif from '../assets/v15_redesigned_idle.gif'
+import batGif from '../assets/Bat_anim/Bat.gif'
+import globeGif from '../assets/globe_anim/globe.gif'
+import laptopGif from '../assets/laptop_anim/laptop.gif'
 import * as PIXI from '../pixi'
 import {
   GifOption,
-  GIF_OPTIONS,
   bannerEnabled,
   camSize,
   debugEnabled,
   nicepipeURL,
-  owlEnabled,
   pointerEnabled,
   HIKVISION_IPS,
   RTSP_BASE,
@@ -44,10 +38,9 @@ import {
 } from '../store'
 
 const GIF_URLS: Record<Exclude<GifOption, 'owl'>, string> = {
+  bat: batGif,
   globe: globeGif,
-  parrot: anafiGif,
   laptop: laptopGif,
-  v15: v15Gif,
 }
 
 const MARGIN_X = 270 / 1920
@@ -230,14 +223,12 @@ export default function Display({
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
   const rtspUrlValue = (HIKVISION_IPS as readonly string[]).includes(camSource)
-    ? RTSP_BASE + camSource
+    ? RTSP_BASE + camSource + '/Streaming/Channels/101'
     : camSource === 'custom' ? customUrl : ''
   const isRtspMode = !!rtspUrlValue
-  const mjpegProxyUrl = isRtspMode
-    ? `http://localhost:8081/stream?url=${encodeURIComponent(rtspUrlValue)}`
+  const wsStreamUrl = isRtspMode
+    ? `ws://localhost:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}`
     : ''
-
-  const targetFinder = createTargetCalculator(height, width)
 
   // Auto-select the first available webcam if in webcam mode and none is selected
   useEffect(() => {
@@ -328,6 +319,45 @@ export default function Display({
     videoRef.current.srcObject = null
   }, [deviceId])
 
+  // Receive RTSP frames over WebSocket and feed them to the <img> via blob URLs
+  useEffect(() => {
+    if (!isRtspMode || !wsStreamUrl) return
+    const img = imgRef.current
+    if (!img) return
+
+    let ws: WebSocket | null = null
+    let active = true
+    let prevBlobUrl = ''
+
+    function connect() {
+      if (!active) return
+      try {
+        ws = new WebSocket(wsStreamUrl)
+        ws.binaryType = 'blob'
+        ws.onmessage = (e) => {
+          const blobUrl = URL.createObjectURL(e.data as Blob)
+          if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl)
+          prevBlobUrl = blobUrl
+          img.src = blobUrl
+        }
+        ws.onclose = () => {
+          if (active) setTimeout(connect, 2000)
+        }
+        ws.onerror = () => ws?.close()
+      } catch {
+        if (active) setTimeout(connect, 2000)
+      }
+    }
+
+    connect()
+
+    return () => {
+      active = false
+      ws?.close()
+      if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl)
+    }
+  }, [isRtspMode, wsStreamUrl])
+
   useEffect(() => {
     const divElm = divRef.current
     if (!divElm) return
@@ -353,86 +383,68 @@ export default function Display({
     })
 
     attachStream2Pixi(app, canvas)
+    // Corner positions within the visible camera area (inside the border margins)
+    const visLeft = MARGIN_X * width
+    const visRight = (1 - MARGIN_X) * width
+    const visTop = MARGIN_T * height
+    const visBot = (1 - MARGIN_B) * height
+    const CORNER_SIZE = Math.min(width, height) * 0.14
+    const pad = CORNER_SIZE * 0.6
+    const CORNER_POSITIONS = [
+      { x: visLeft + pad, y: visTop + pad },     // top-left
+      { x: visRight - pad, y: visTop + pad },    // top-right
+      { x: visLeft + pad, y: visBot - pad },     // bottom-left
+      { x: visRight - pad, y: visBot - pad },    // bottom-right
+    ]
+
     ;(async () => {
       console.log('Beginning animation load...')
 
-      // Create the main arm-gesture animation based on selected GIF
-      let mainAnimContainer: PIXI.Container
-      let updateMainAnim: (pose: typeof dataRef.current.mp_pose.pose) => void
+      // Owl: arm-tracking animation. Others: 4 copies at screen corners.
+      let mainAnimContainer: PIXI.Container | null = null
+      let updateMainAnim: ((pose: typeof dataRef.current.mp_pose.pose) => void) | null = null
+      const cornerAnims: ((hasPerson: boolean) => void)[] = []
+
       if (gifOption === 'owl') {
         const [container, update] = await createOwlAnim(app)
         mainAnimContainer = container
         updateMainAnim = update
       } else {
-        const [container, update] = await createSimpleFadePropAnim(app, {
-          animUrl: GIF_URLS[gifOption],
-          kalman: { R: 0.01, Q: 5 },
-          sizeFactor: 1.5,
-        })
-        mainAnimContainer = container
-        updateMainAnim = (pose) => {
-          if (!pose) return
-          const [, coords] = calculateArmFromPose(pose, height, width)
-          update(coords ? {
-            x: coords.x,
-            y: coords.y,
-            size: coords.length * 2.5,
-            angle: (coords.angle * 180) / Math.PI,
-          } : undefined)
-        }
+        const animUrl = GIF_URLS[gifOption]
+        const corners = await Promise.all(
+          CORNER_POSITIONS.map((pos) =>
+            createSimpleFadePropAnim(app, {
+              animUrl,
+              kalman: { R: 0.01, Q: 5 },
+              sizeFactor: 1,
+            }).then(([container, update]) => {
+              app.stage.addChild(container)
+              return (hasPerson: boolean) => {
+                update(hasPerson ? { x: pos.x, y: pos.y, size: CORNER_SIZE, angle: 0 } : undefined)
+              }
+            })
+          )
+        )
+        cornerAnims.push(...corners)
       }
 
-      const [
-        [arrow, updateArrow],
-        [owlProp, updateOwlProp],
-        [laptopProp, updateLaptopProp],
-        [v15Prop, updateV15Prop],
-        [anafiProp, updateAnafiProp],
-        banner,
-      ] = await Promise.all([
+      const [[arrow, updateArrow], banner] = await Promise.all([
         createArrowPointer(app),
-        createOwlPropAnim(app, {
-          kalman: { R: 0.01, Q: 5 },
-          sizeFactor: 1.35,
-          xOffset: -0.03,
-          flip: true,
-        }),
-        createSimpleFadePropAnim(app, {
-          animUrl: globeGif,
-          kalman: { R: 0.01, Q: 5 },
-          xOffset: -0.06,
-          yOffset: -0.15,
-        }),
-        createSimpleFadePropAnim(app, {
-          animUrl: v15Gif,
-          kalman: { R: 0.01, Q: 3 },
-          sizeFactor: 0.9,
-          flip: true,
-        }),
-        createSimpleFadePropAnim(app, {
-          animUrl: anafiGif,
-          kalman: { R: 0.01, Q: 3 },
-          sizeFactor: 0.9,
-          xOffset: -0.04,
-          flip: true,
-        }),
         createBanner(app),
       ])
-      app.stage.addChild(mainAnimContainer)
-      app.stage.addChild(owlProp)
-      app.stage.addChild(laptopProp)
-      app.stage.addChild(v15Prop)
-      app.stage.addChild(anafiProp)
+      if (mainAnimContainer) app.stage.addChild(mainAnimContainer)
       app.stage.addChild(banner)
       app.stage.addChild(arrow)
       console.log('Animations added')
 
-      // when its too expensive to reconstruct the app so it has to be done imperatively
       app.ticker.add(() => update(rawRef.current, poseInd.get()))
+
       app.ticker.add(() => {
-        mainAnimContainer.visible = owlEnabled.get()
         const curPose = dataRef.current.mp_pose?.pose
-        if (curPose) updateMainAnim(curPose)
+        if (updateMainAnim && curPose) updateMainAnim(curPose)
+
+        const hasPerson = !!(curPose && curPose.length > 0)
+        for (const updateCorner of cornerAnims) updateCorner(hasPerson)
       })
 
       app.ticker.add(() => {
@@ -443,15 +455,6 @@ export default function Display({
 
       app.ticker.add(() => {
         banner.visible = bannerEnabled.get()
-      })
-
-      app.ticker.add(() => {
-        const curPropDets = dataRef.current.kp ?? []
-        updateOwlProp(targetFinder('owl', curPropDets))
-        updateLaptopProp(targetFinder('laptop', curPropDets))
-        updateV15Prop(targetFinder('v15', curPropDets))
-        updateAnafiProp(targetFinder('anafi', curPropDets))
-        // updateLaptop2Prop(targetFinder('laptop2', curPropDets))
       })
     })()
 
@@ -494,7 +497,6 @@ export default function Display({
       {isRtspMode && (
         <img
           ref={imgRef}
-          src={mjpegProxyUrl}
           crossOrigin='anonymous'
           tw='fixed z-50 w-48 bottom-0 left-9 invisible'
           alt=''
