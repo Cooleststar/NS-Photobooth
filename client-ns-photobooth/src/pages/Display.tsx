@@ -10,6 +10,7 @@ import {
 } from 'react'
 import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
+import { createBatAnim } from '../anim/bat'
 import { createBanner } from '../anim/banner'
 import { createOwlAnim } from '../anim/owl'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
@@ -400,13 +401,17 @@ export default function Display({
     ;(async () => {
       console.log('Beginning animation load...')
 
-      // Owl: arm-tracking animation. Others: 4 copies at screen corners.
+      // Owl: arm-tracking. Bat: orbits head. Others: 4 copies at screen corners.
       let mainAnimContainer: PIXI.Container | null = null
       let updateMainAnim: ((pose: typeof dataRef.current.mp_pose.pose) => void) | null = null
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
 
       if (gifOption === 'owl') {
         const [container, update] = await createOwlAnim(app)
+        mainAnimContainer = container
+        updateMainAnim = update
+      } else if (gifOption === 'bat') {
+        const [container, update] = await createBatAnim(app)
         mainAnimContainer = container
         updateMainAnim = update
       } else {
