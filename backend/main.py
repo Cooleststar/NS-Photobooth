@@ -64,6 +64,7 @@ _rtsp_lock: asyncio.Lock | None = None  # serialises camera switches
 _rtsp_stop_event = threading.Event()
 _rtsp_thread: threading.Thread | None = None
 _current_rtsp_url: str = ""
+_current_stream_size: tuple[int, int] = (0, 0)
 _stream_size: tuple[int, int] = (1920, 1080)   # (width, height) for JPEG encode
 
 # ---------------------------------------------------------------------------
@@ -379,10 +380,12 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
 
 
 async def switch_rtsp_reader(rtsp_url: str):
-    """Switch to a new RTSP URL. Waits for the old reader to stop without blocking the event loop."""
-    global _rtsp_stop_event, _rtsp_thread, _current_rtsp_url
+    """Restart the RTSP reader if the URL or stream resolution changed."""
+    global _rtsp_stop_event, _rtsp_thread, _current_rtsp_url, _current_stream_size
     async with _rtsp_lock:
-        if rtsp_url == _current_rtsp_url and _rtsp_thread and _rtsp_thread.is_alive():
+        same_url = rtsp_url == _current_rtsp_url
+        same_size = _stream_size == _current_stream_size
+        if same_url and same_size and _rtsp_thread and _rtsp_thread.is_alive():
             return
         old_thread = _rtsp_thread
         stop_rtsp_reader()
@@ -390,6 +393,7 @@ async def switch_rtsp_reader(rtsp_url: str):
             log.info("Waiting for previous RTSP reader to stop...")
             await asyncio.to_thread(old_thread.join, 12)
         _current_rtsp_url = rtsp_url
+        _current_stream_size = _stream_size
         _rtsp_stop_event = threading.Event()
         _rtsp_thread = threading.Thread(
             target=_rtsp_reader,
@@ -397,7 +401,7 @@ async def switch_rtsp_reader(rtsp_url: str):
             daemon=True,
         )
         _rtsp_thread.start()
-        log.info(f"RTSP reader thread started for {rtsp_url}")
+        log.info(f"RTSP reader thread started for {rtsp_url} at {_stream_size[0]}×{_stream_size[1]}")
 
 
 def stop_rtsp_reader():
