@@ -21,6 +21,16 @@ const ORBIT_RADIUS_FACTOR = 0.6
 const ORBIT_Y_SQUISH = 0.45
 const SCARY_HOLD_TIME = 1.5
 
+interface FeedBounds { left: number; right: number; top: number; bottom: number }
+
+function clampPos(x: number, y: number, size: number, b: FeedBounds) {
+  const half = size * 0.5
+  return {
+    x: Math.max(b.left + half, Math.min(b.right - half, x)),
+    y: Math.max(b.top + half, Math.min(b.bottom - half, y)),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Pose analysis
 // ---------------------------------------------------------------------------
@@ -90,6 +100,7 @@ async function createSwarmBat(
   startY: number,
   orbitOffset: number,
   orbitSpeedMul: number,
+  bounds: FeedBounds,
 ) {
   const { ticker, loader } = app
   const container = new PIXI.Container()
@@ -153,10 +164,12 @@ async function createSwarmBat(
       flySprite.alpha = 0
 
       const progress = lerpEO(elapsed, 0, swoopDuration)
-      container.position.set(
+      const sp = clampPos(
         startX + (targetX - startX) * progress,
         startY + (targetY - startY) * progress,
+        batSize * 0.8, bounds,
       )
+      container.position.set(sp.x, sp.y)
 
       if (elapsed >= swoopDuration) phase = 'flying'
     } else {
@@ -166,10 +179,12 @@ async function createSwarmBat(
       container.alpha = 1
 
       orbitAngle += ticker.deltaMS / 1000 * ORBIT_SPEED * orbitSpeedMul
-      container.position.set(
+      const fp = clampPos(
         targetX + Math.cos(orbitAngle) * orbitR,
         targetY + Math.sin(orbitAngle) * orbitR * ORBIT_Y_SQUISH,
+        batSize * 0.8, bounds,
       )
+      container.position.set(fp.x, fp.y)
     }
   }
 
@@ -180,12 +195,19 @@ async function createSwarmBat(
 // Main bat animation
 // ---------------------------------------------------------------------------
 
-export async function createBatAnim(app: PIXI.Application) {
+export async function createBatAnim(app: PIXI.Application, margins = { mx: 30/1920, mt: 30/1080, mb: 30/1080 }) {
   const {
     renderer: { height, width },
     ticker,
     loader,
   } = app
+
+  const bounds: FeedBounds = {
+    left: margins.mx * width,
+    right: (1 - margins.mx) * width,
+    top: margins.mt * height,
+    bottom: (1 - margins.mb) * height,
+  }
 
   const parentContainer = new PIXI.Container()
 
@@ -211,7 +233,7 @@ export async function createBatAnim(app: PIXI.Application) {
     { x: width, y: height, offset: Math.PI * 1.5,   speed: 0.7 },
   ]
   const swarmBats = await Promise.all(
-    cornerDefs.map((c) => createSwarmBat(app, c.x, c.y, c.offset, c.speed))
+    cornerDefs.map((c) => createSwarmBat(app, c.x, c.y, c.offset, c.speed, bounds))
   )
   swarmBats.forEach((s) => parentContainer.addChild(s.container))
 
@@ -309,10 +331,12 @@ export async function createBatAnim(app: PIXI.Application) {
         const progress = lerpEO(time, 0, swoopDuration)
         const swoopStartX = headX + width * 0.4
         const swoopStartY = headY - height * 0.3
-        mainContainer.position.set(
+        const ep = clampPos(
           swoopStartX + (headX - swoopStartX) * progress,
           swoopStartY + (headY - swoopStartY) * progress,
+          batSize, bounds,
         )
+        mainContainer.position.set(ep.x, ep.y)
 
         if (time >= swoopDuration) animManager.transition()
         break
@@ -323,7 +347,6 @@ export async function createBatAnim(app: PIXI.Application) {
         vanishSprite.alpha = 0
 
         if (scaryActive) {
-          // Hide main bat during scary pose — swarm bats take over
           mainContainer.alpha = 0
           flySprite.stop()
         } else if (isHang && poseResult.type === 'hang') {
@@ -332,7 +355,8 @@ export async function createBatAnim(app: PIXI.Application) {
           flySprite.alpha = 1
           const wx = kf.hangX.filter(poseResult.wristX)
           const wy = kf.hangY.filter(poseResult.wristY)
-          mainContainer.position.set(wx, wy + batSize * 0.3)
+          const hp = clampPos(wx, wy + batSize * 0.3, batSize, bounds)
+          mainContainer.position.set(hp.x, hp.y)
           mainContainer.scale.set(1, -1)
         } else {
           mainContainer.alpha = 1
@@ -340,10 +364,12 @@ export async function createBatAnim(app: PIXI.Application) {
           if (!flySprite.playing) flySprite.play()
           flySprite.alpha = 1
           orbitAngle += ticker.deltaMS / 1000 * ORBIT_SPEED
-          mainContainer.position.set(
+          const op = clampPos(
             headX + Math.cos(orbitAngle) * orbitR,
             headY + Math.sin(orbitAngle) * orbitR * ORBIT_Y_SQUISH,
+            batSize, bounds,
           )
+          mainContainer.position.set(op.x, op.y)
         }
         break
 
@@ -351,10 +377,12 @@ export async function createBatAnim(app: PIXI.Application) {
         mainContainer.scale.set(1, 1)
         mainContainer.alpha = 1
         orbitAngle += ticker.deltaMS / 1000 * ORBIT_SPEED
-        mainContainer.position.set(
+        const lp = clampPos(
           headX + Math.cos(orbitAngle) * orbitR,
           headY + Math.sin(orbitAngle) * orbitR * ORBIT_Y_SQUISH,
+          batSize, bounds,
         )
+        mainContainer.position.set(lp.x, lp.y)
         for (const sb of swarmBats) sb.reset()
         scaryActive = false
         if (time >= ANIM.RETRACK) animManager.transition()

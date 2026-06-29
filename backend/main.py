@@ -231,10 +231,15 @@ def _distribute_frame(jpg_bytes: bytes):
     _stream_clients.difference_update(dead)
 
 
-# Shared frame state — written by ffmpeg reader, read by encode + pose threads
+# Shared frame state — written by ffmpeg reader, read by distribute + pose threads
 _current_frame: np.ndarray | None = None
+_current_jpg: bytes | None = None
 _frame_id: int = 0
 _frame_rwlock = RWLock()
+
+
+_JPEG_SOI = b'\xff\xd8'
+_JPEG_EOI = b'\xff\xd9'
 
 
 def _ffmpeg_read_loop(
@@ -243,13 +248,14 @@ def _ffmpeg_read_loop(
     width: int,
     height: int,
 ):
-    """Read raw BGR24 frames from an FFmpeg subprocess and store the latest one.
+    """Read MJPEG frames from an FFmpeg subprocess and store the latest one.
 
-    FFmpeg is launched with every buffering knob turned off so frames arrive
-    as close to real-time as the network allows.  Each new frame overwrites
-    the previous one — there is no queue.
+    FFmpeg outputs JPEG-compressed frames instead of raw video, cutting pipe
+    bandwidth by ~95%.  Each JPEG is delimited by SOI (FF D8) and EOI (FF D9)
+    markers.  The latest JPEG bytes and decoded numpy frame are stored for the
+    encode/distribute thread — there is no queue.
     """
-    global _current_frame, _frame_id
+    global _current_frame, _current_jpg, _frame_id
 
     cmd = [
         'ffmpeg',
@@ -264,14 +270,15 @@ def _ffmpeg_read_loop(
         '-reorder_queue_size', '0',
         '-i', rtsp_url,
         '-vf', f'scale={width}:{height}',
-        '-f', 'rawvideo',
-        '-pix_fmt', 'bgr24',
+        '-f', 'image2pipe',
+        '-c:v', 'mjpeg',
+        '-q:v', '3',
         '-an', '-sn',
         'pipe:1',
     ]
 
-    frame_bytes = width * height * 3
-    max_buf = frame_bytes * 10
+    CHUNK = 65536
+    MAX_BUF = 5 * 1024 * 1024
 
     while not stop_event.is_set():
         log.info(f"FFmpeg launching: {rtsp_url} ({width}×{height})")
@@ -285,24 +292,37 @@ def _ffmpeg_read_loop(
         buf = bytearray()
         try:
             while not stop_event.is_set():
-                chunk = proc.stdout.read(frame_bytes)
+                chunk = proc.stdout.read(CHUNK)
                 if not chunk:
                     break
                 buf.extend(chunk)
 
-                # Discard old data if buffer grew too large (system was busy)
-                if len(buf) > max_buf:
-                    excess = (len(buf) // frame_bytes - 1) * frame_bytes
-                    del buf[:excess]
+                if len(buf) > MAX_BUF:
+                    last_soi = buf.rfind(_JPEG_SOI)
+                    if last_soi > 0:
+                        del buf[:last_soi]
 
-                while len(buf) >= frame_bytes:
-                    raw = bytes(buf[:frame_bytes])
-                    del buf[:frame_bytes]
-                    frame = np.frombuffer(raw, dtype=np.uint8).reshape(
-                        (height, width, 3)
-                    )
+                while True:
+                    soi = buf.find(_JPEG_SOI)
+                    if soi < 0:
+                        buf.clear()
+                        break
+                    eoi = buf.find(_JPEG_EOI, soi + 2)
+                    if eoi < 0:
+                        if soi > 0:
+                            del buf[:soi]
+                        break
+                    jpg_bytes = bytes(buf[soi:eoi + 2])
+                    del buf[:eoi + 2]
+
+                    arr = np.frombuffer(jpg_bytes, np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is None:
+                        continue
+
                     _frame_rwlock.write_acquire()
                     _current_frame = frame
+                    _current_jpg = jpg_bytes
                     _frame_id += 1
                     _frame_rwlock.write_release()
 
@@ -350,18 +370,18 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             _frame_rwlock.read_acquire()
             fid = _frame_id
             frame = _current_frame
+            jpg = _current_jpg
             _frame_rwlock.read_release()
 
-            if fid == prev_id or frame is None:
+            if fid == prev_id or jpg is None:
                 time.sleep(0.005)
                 continue
             prev_id = fid
             frame_count += 1
 
-            _, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-            _loop.call_soon_threadsafe(_distribute_frame, jpg.tobytes())
+            _loop.call_soon_threadsafe(_distribute_frame, jpg)
 
-            if frame_count % 3 == 0:
+            if frame_count % 3 == 0 and frame is not None:
                 small = cv2.resize(frame, (320, 240))
                 threading.Thread(
                     target=lambda f=small: (

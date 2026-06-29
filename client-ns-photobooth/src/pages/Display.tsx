@@ -44,13 +44,9 @@ const GIF_URLS: Record<Exclude<GifOption, 'owl'>, string> = {
   laptop: laptopGif,
 }
 
-const MARGIN_X = 270 / 1920
-const MARGIN_T = 40 / 1080
-const MARGIN_B = 270 / 1080
-
-// const MARGIN_X = 0
-// const MARGIN_T = 0
-// const MARGIN_B = 0
+const MARGIN_X = 30 / 1920
+const MARGIN_T = 30 / 1080
+const MARGIN_B = 30 / 1080
 
 function postprocessPicture(pic: HTMLCanvasElement) {
   const { width, height } = pic
@@ -411,7 +407,7 @@ export default function Display({
         mainAnimContainer = container
         updateMainAnim = update
       } else if (gifOption === 'bat') {
-        const [container, update] = await createBatAnim(app)
+        const [container, update] = await createBatAnim(app, { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B })
         mainAnimContainer = container
         updateMainAnim = update
       } else {
