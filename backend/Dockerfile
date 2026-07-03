@@ -2,7 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# System dependencies required by OpenCV, MediaPipe, and raw FFmpeg subprocess
+# System dependencies required by OpenCV, PyTorch (ultralytics), and raw FFmpeg subprocess
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \

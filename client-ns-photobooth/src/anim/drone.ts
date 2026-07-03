@@ -29,19 +29,23 @@ function clampPos(x: number, y: number, size: number, b: FeedBounds) {
   }
 }
 
-function getPalmUpForHand(
+// Detects a raised-hand gesture using wrist vs elbow position.
+// Works with COCO-17 keypoints (YOLOv8) which don't include finger landmarks.
+// Triggers when the wrist is above the elbow in screen space (arm raised upward).
+function getRaisedHand(
   pose: NormalizedLandmarkList,
   wristIdx: number,
-  indexTipIdx: number,
+  elbowIdx: number,
   height: number,
   width: number,
 ): { x: number; y: number } | undefined {
   if (pose.length === 0) return undefined
   const wrist = pose[wristIdx]
-  const indexTip = pose[indexTipIdx]
-  if (!wrist || !indexTip) return undefined
-  if (wrist.visibility! < 0.5 || indexTip.visibility! < 0.3) return undefined
-  if (indexTip.y >= wrist.y) return undefined
+  const elbow = pose[elbowIdx]
+  if (!wrist || !elbow) return undefined
+  if (wrist.visibility! < 0.5 || elbow.visibility! < 0.5) return undefined
+  // Wrist must be above the elbow in screen space (smaller y = higher on screen)
+  if (wrist.y >= elbow.y) return undefined
   const p = convertPoint(wrist, height, width)
   return { x: p.x, y: p.y }
 }
@@ -49,7 +53,7 @@ function getPalmUpForHand(
 async function createHandDrone(
   app: PIXI.Application,
   wristIdx: number,
-  indexTipIdx: number,
+  elbowIdx: number,
   droneSize: number,
   hoverOffset: number,
   bobAmplitude: number,
@@ -84,7 +88,7 @@ async function createHandDrone(
   const animManager = new AnimStateManager()
 
   const update = (pose: NormalizedLandmarkList) => {
-    const rawWrist = getPalmUpForHand(pose, wristIdx, indexTipIdx, height, width)
+    const rawWrist = getRaisedHand(pose, wristIdx, elbowIdx, height, width)
 
     if (rawWrist) {
       palmHoldTimer = PALM_HOLD_TIME
@@ -171,11 +175,13 @@ export async function createDroneAnim(
   const hoverOffset = droneSize
   const bobAmplitude = height * BOB_AMPLITUDE_FACTOR
 
+  // Left hand: wrist=15, elbow=13 — right hand: wrist=16, elbow=14
+  // These are all present in COCO-17 (YOLOv8), unlike finger-tip landmarks.
   const [leftContainer, updateLeft] = await createHandDrone(
-    app, 15, 19, droneSize, hoverOffset, bobAmplitude, bounds,
+    app, 15, 13, droneSize, hoverOffset, bobAmplitude, bounds,
   )
   const [rightContainer, updateRight] = await createHandDrone(
-    app, 16, 20, droneSize, hoverOffset, bobAmplitude, bounds,
+    app, 16, 14, droneSize, hoverOffset, bobAmplitude, bounds,
   )
 
   const parentContainer = new PIXI.Container()

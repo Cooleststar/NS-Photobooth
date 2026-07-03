@@ -22,41 +22,101 @@ from datetime import datetime
 from urllib.parse import unquote
 import cv2
 import numpy as np
-import mediapipe as mp
 import websockets
 from aiohttp import web
+from ultralytics import YOLO
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pose detector — supports single and multi-person via MediaPipe Tasks API
+# Pose detector — YOLOv8-Pose (replaces MediaPipe)
 # ---------------------------------------------------------------------------
-from mediapipe.tasks import python as mp_tasks
-from mediapipe.tasks.python import vision as mp_vision
-
-_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task'
-_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pose_landmarker_lite.task')
-
-if not os.path.exists(_MODEL_PATH):
-    log.info("Downloading pose landmarker model...")
-    urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
-    log.info("Model downloaded")
-
-def _create_landmarker(num_poses: int) -> mp_vision.PoseLandmarker:
-    opts = mp_vision.PoseLandmarkerOptions(
-        base_options=mp_tasks.BaseOptions(model_asset_path=_MODEL_PATH),
-        running_mode=mp_vision.RunningMode.IMAGE,
-        num_poses=num_poses,
-        min_pose_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-    return mp_vision.PoseLandmarker.create_from_options(opts)
-
-_detector_single = _create_landmarker(1)
-_detector_multi = _create_landmarker(5)
-detector_lock = threading.Lock()
+# Change 'yolov8n-pose.pt' to 's'/'m'/'l' for better accuracy at cost of speed.
+# The model is auto-downloaded on first run (~6 MB for nano).
+_yolo = YOLO('yolov8n-pose.pt')
+_yolo_lock = threading.Lock()
 _multi_target: bool = False
+
+# Maps COCO-17 keypoint index → MediaPipe-33 landmark index.
+# Landmarks that have no COCO equivalent are left at x=y=0, score=0 (not visible).
+_COCO_TO_MP: dict[int, int] = {
+    0:  0,   # nose
+    1:  2,   # left eye
+    2:  5,   # right eye
+    3:  7,   # left ear
+    4:  8,   # right ear
+    5:  11,  # left shoulder
+    6:  12,  # right shoulder
+    7:  13,  # left elbow
+    8:  14,  # right elbow
+    9:  15,  # left wrist
+    10: 16,  # right wrist
+    11: 23,  # left hip
+    12: 24,  # right hip
+    13: 25,  # left knee
+    14: 26,  # right knee
+    15: 27,  # left ankle
+    16: 28,  # right ankle
+}
+
+
+def _to_mp33(xyn, conf):
+    """Map 17 normalised COCO keypoints to a 33-element MediaPipe landmark list."""
+    x      = [0.0] * 33
+    y      = [0.0] * 33
+    scores = [0.0] * 33
+    for ci, mi in _COCO_TO_MP.items():
+        x[mi]      = float(xyn[ci, 0])
+        y[mi]      = float(xyn[ci, 1])
+        scores[mi] = float(conf[ci]) if conf is not None else 1.0
+    return x, y, scores
+
+
+def run_pose_detection(frame: np.ndarray) -> dict:
+    """Run YOLOv8-Pose on a BGR frame. Always returns a pose msg dict."""
+    with _yolo_lock:
+        results = _yolo.track(
+            frame,
+            persist=True,   # maintains stable track IDs across frames
+            verbose=False,
+            conf=0.4,
+            imgsz=640,      # lower to 320 for faster inference on weak hardware
+        )
+
+    if not results:
+        return {"poses": []}
+
+    r = results[0]
+    if r.keypoints is None or len(r.keypoints) == 0:
+        return {"poses": []}
+
+    kps_xyn  = r.keypoints.xyn.cpu().numpy()                          # (N, 17, 2)
+    kps_conf = (r.keypoints.conf.cpu().numpy()                        # (N, 17)
+                if r.keypoints.conf is not None else None)
+    ids = (r.boxes.id.cpu().numpy().astype(int).tolist()
+           if r.boxes.id is not None else list(range(len(kps_xyn))))
+
+    # In single-target mode keep only the highest-confidence detection
+    if not _multi_target and len(kps_xyn) > 1:
+        best = int(np.argmax(r.boxes.conf.cpu().numpy()))
+        kps_xyn  = kps_xyn[best:best + 1]
+        kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
+        ids      = [ids[best]]
+
+    poses = []
+    for i in range(len(kps_xyn)):
+        conf_row = kps_conf[i] if kps_conf is not None else None
+        x, y, scores = _to_mp33(kps_xyn[i], conf_row)
+        poses.append({
+            "x":      x,
+            "y":      y,
+            "z":      [0.0] * 33,
+            "scores": scores,
+            "track":  {"id": int(ids[i])},
+        })
+
+    return {"poses": poses}
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
@@ -82,80 +142,7 @@ _current_rtsp_url: str = ""
 _current_stream_size: tuple[int, int] = (0, 0)
 _stream_size: tuple[int, int] = (1920, 1080)   # (width, height) for JPEG encode
 
-# ---------------------------------------------------------------------------
-# Shared pose detection helper with simple position-based tracker
-# ---------------------------------------------------------------------------
 
-_prev_centers: dict[int, tuple[float, float]] = {}
-_next_track_id = 0
-
-
-def _assign_track_ids(
-    landmarks_list: list,
-    h: int, w: int,
-) -> list[int]:
-    """Assign stable track IDs by matching shoulder-center positions across frames."""
-    global _prev_centers, _next_track_id
-
-    centers: list[tuple[float, float]] = []
-    for lms in landmarks_list:
-        ls, rs = lms[11], lms[12]
-        cx = ((1 - ls.x) + (1 - rs.x)) / 2 * w
-        cy = (ls.y + rs.y) / 2 * h
-        centers.append((cx, cy))
-
-    assigned: list[int] = [-1] * len(centers)
-    used_prev: set[int] = set()
-    DIST_THRESH = max(h, w) * 0.15
-
-    for i, (cx, cy) in enumerate(centers):
-        best_id = -1
-        best_dist = DIST_THRESH
-        for pid, (px, py) in _prev_centers.items():
-            if pid in used_prev:
-                continue
-            d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
-            if d < best_dist:
-                best_dist = d
-                best_id = pid
-        if best_id >= 0:
-            assigned[i] = best_id
-            used_prev.add(best_id)
-
-    for i in range(len(assigned)):
-        if assigned[i] < 0:
-            assigned[i] = _next_track_id
-            _next_track_id += 1
-
-    _prev_centers = {assigned[i]: centers[i] for i in range(len(centers))}
-    return assigned
-
-
-def run_pose_detection(frame: np.ndarray) -> dict | None:
-    """Run MediaPipe pose on a BGR frame. Returns pose msg dict or None."""
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    h, w = frame.shape[:2]
-
-    with detector_lock:
-        detector = _detector_multi if _multi_target else _detector_single
-        results = detector.detect(mp_image)
-
-    if not results.pose_landmarks:
-        return None
-
-    track_ids = _assign_track_ids(results.pose_landmarks, h, w)
-
-    poses = []
-    for idx, lms in enumerate(results.pose_landmarks):
-        poses.append({
-            "x": [l.x for l in lms],
-            "y": [l.y for l in lms],
-            "z": [l.z for l in lms],
-            "scores": [l.visibility for l in lms],
-            "track": {"id": track_ids[idx]},
-        })
-    return {"poses": poses}
 
 # ---------------------------------------------------------------------------
 # Rosbridge helpers
@@ -232,9 +219,9 @@ async def handle_video(ws):
             if frame_count % 30 == 0:
                 log.info(f"Frames: {frame_count}, Poses: {pose_count}")
             pose_msg = run_pose_detection(frame)
-            if pose_msg:
+            if pose_msg["poses"]:
                 pose_count += 1
-                await broadcast("/pose_out", pose_msg)
+            await broadcast("/pose_out", pose_msg)
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -454,8 +441,7 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                 threading.Thread(
                     target=lambda f=small: (
                         asyncio.run_coroutine_threadsafe(
-                            broadcast("/pose_out",
-                                      run_pose_detection(f) or {"poses": []}),
+                            broadcast("/pose_out", run_pose_detection(f)),
                             _loop,
                         )
                     ),
