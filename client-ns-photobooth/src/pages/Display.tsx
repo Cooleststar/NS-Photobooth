@@ -12,6 +12,7 @@ import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
 import { createBatAnim } from '../anim/bat'
 import { createBanner } from '../anim/banner'
+import { createDroneAnim } from '../anim/drone'
 import { createGlobeAnim } from '../anim/globe'
 import { createOwlAnim } from '../anim/owl'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
@@ -19,8 +20,6 @@ import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
 import { useNiceROSAnalysis } from '../api/niceRos'
-import batGif from '../assets/Bat_anim/Bat.gif'
-import globeGif from '../assets/globe_anim/globe.gif'
 import laptopGif from '../assets/laptop_anim/laptop.gif'
 import * as PIXI from '../pixi'
 import {
@@ -40,9 +39,7 @@ import {
   selectedGif,
 } from '../store'
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl'>, string> = {
-  bat: batGif,
-  globe: globeGif,
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone'>, string> = {
   laptop: laptopGif,
 }
 
@@ -420,6 +417,8 @@ export default function Display({
         return await createBatAnim(app, marginOpts)
       } else if (option === 'globe') {
         return await createGlobeAnim(app, marginOpts)
+      } else if (option === 'drone') {
+        return await createDroneAnim(app, marginOpts)
       }
       return null
     }
@@ -431,7 +430,7 @@ export default function Display({
       const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
 
-      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe') {
+      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone') {
         const count = isMulti ? MAX_PEOPLE : 1
         const results = await Promise.all(
           Array.from({ length: count }, () => createAnimForGif(gifOption))
