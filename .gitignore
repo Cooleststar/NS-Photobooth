@@ -2,6 +2,11 @@
 node_modules/
 client-ns-photobooth/node_modules/
 
+# Python virtual environment
+venv/
+.venv/
+env/
+
 # Yarn
 .yarn/cache
 .yarn/unplugged
