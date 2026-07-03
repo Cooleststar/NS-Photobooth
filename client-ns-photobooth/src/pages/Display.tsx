@@ -12,6 +12,7 @@ import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
 import { createBatAnim } from '../anim/bat'
 import { createBanner } from '../anim/banner'
+import { createGlobeAnim } from '../anim/globe'
 import { createOwlAnim } from '../anim/owl'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
@@ -27,6 +28,7 @@ import {
   bannerEnabled,
   camSize,
   debugEnabled,
+  multiTarget,
   nicepipeURL,
   pointerEnabled,
   HIKVISION_IPS,
@@ -54,21 +56,10 @@ function postprocessPicture(pic: HTMLCanvasElement) {
   tmpCanvas.width = width
   tmpCanvas.height = height
 
+  // capture exactly what's shown live — no extra flip, so the saved
+  // photo matches the on-screen (mirrored) preview
   const ctx = tmpCanvas.getContext('2d')!
   ctx.drawImage(pic, 0, 0)
-
-  const mx = MARGIN_X * width
-  const mt = MARGIN_T * height
-  const mb = MARGIN_B * height
-  const iw = width - 2 * mx
-  const ih = height - mt - mb
-
-  // flip specifically the picture, excluding borders
-  ctx.save()
-  ctx.translate(width, 0)
-  ctx.scale(-1, 1)
-  ctx.drawImage(pic, mx, mt, iw, ih, mx, mt, iw, ih)
-  ctx.restore()
   return tmpCanvas
 }
 
@@ -167,6 +158,17 @@ function createReceivingCtx(
       })
       dataRef.current.mp_pose!.pose = pose
 
+      // remap all people's poses for multi-target animations
+      const allPoses: { [id: number]: typeof pose } = {}
+      for (const [id, kps] of Object.entries(mmpose ?? {})) {
+        const converted = convert2mpPose(kps as any)
+        allPoses[parseInt(id)] = converted.map((p) => {
+          const [rx, ry] = remapPoint(p.x, p.y, width / height, imgWidth / imgHeight)
+          return { ...p, x: rx, y: ry }
+        })
+      }
+      dataRef.current.allPoses = allPoses
+
       // recalculate prop coordinates
       const rawProps = data.kp ?? []
       const propDets = rawProps.map((det) => {
@@ -219,12 +221,13 @@ export default function Display({
   const gifOption = useStore(selectedGif)
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
+  const isMulti = useStore(multiTarget)
   const rtspUrlValue = (HIKVISION_IPS as readonly string[]).includes(camSource)
     ? RTSP_BASE + camSource + '/Streaming/Channels/101'
     : camSource === 'custom' ? customUrl : ''
   const isRtspMode = !!rtspUrlValue
   const wsStreamUrl = isRtspMode
-    ? `ws://localhost:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}`
+    ? `ws://localhost:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}&multi=${isMulti ? '1' : '0'}`
     : ''
 
   // Auto-select the first available webcam if in webcam mode and none is selected
@@ -380,6 +383,19 @@ export default function Display({
     })
 
     attachStream2Pixi(app, canvas)
+
+    // Masked layer for animations — clips GIFs at the video feed boundary.
+    // Uses a Sprite (from the built-in white texture) as the mask shape since
+    // @pixi/graphics isn't a project dependency.
+    const animLayer = new PIXI.Container()
+    const feedMask = new PIXI.Sprite(PIXI.Texture.WHITE)
+    feedMask.position.set(MARGIN_X * width, MARGIN_T * height)
+    feedMask.width = width * (1 - 2 * MARGIN_X)
+    feedMask.height = height * (1 - MARGIN_T - MARGIN_B)
+    app.stage.addChild(animLayer)
+    animLayer.addChild(feedMask)
+    animLayer.mask = feedMask
+
     // Corner positions within the visible camera area (inside the border margins)
     const visLeft = MARGIN_X * width
     const visRight = (1 - MARGIN_X) * width
@@ -394,22 +410,39 @@ export default function Display({
       { x: visRight - pad, y: visBot - pad },    // bottom-right
     ]
 
+    const MAX_PEOPLE = 4
+    const marginOpts = { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B }
+
+    async function createAnimForGif(option: GifOption) {
+      if (option === 'owl') {
+        return await createOwlAnim(app)
+      } else if (option === 'bat') {
+        return await createBatAnim(app, marginOpts)
+      } else if (option === 'globe') {
+        return await createGlobeAnim(app, marginOpts)
+      }
+      return null
+    }
+
     ;(async () => {
       console.log('Beginning animation load...')
 
-      // Owl: arm-tracking. Bat: orbits head. Others: 4 copies at screen corners.
-      let mainAnimContainer: PIXI.Container | null = null
-      let updateMainAnim: ((pose: typeof dataRef.current.mp_pose.pose) => void) | null = null
+      type AnimUpdate = (pose: typeof dataRef.current.mp_pose.pose) => void
+      const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
 
-      if (gifOption === 'owl') {
-        const [container, update] = await createOwlAnim(app)
-        mainAnimContainer = container
-        updateMainAnim = update
-      } else if (gifOption === 'bat') {
-        const [container, update] = await createBatAnim(app, { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B })
-        mainAnimContainer = container
-        updateMainAnim = update
+      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe') {
+        const count = isMulti ? MAX_PEOPLE : 1
+        const results = await Promise.all(
+          Array.from({ length: count }, () => createAnimForGif(gifOption))
+        )
+        for (const result of results) {
+          if (result) {
+            const [container, update] = result
+            animLayer.addChild(container)
+            animSlots.push({ container, update })
+          }
+        }
       } else {
         const animUrl = GIF_URLS[gifOption]
         const corners = await Promise.all(
@@ -419,7 +452,7 @@ export default function Display({
               kalman: { R: 0.01, Q: 5 },
               sizeFactor: 1,
             }).then(([container, update]) => {
-              app.stage.addChild(container)
+              animLayer.addChild(container)
               return (hasPerson: boolean) => {
                 update(hasPerson ? { x: pos.x, y: pos.y, size: CORNER_SIZE, angle: 0 } : undefined)
               }
@@ -429,29 +462,56 @@ export default function Display({
         cornerAnims.push(...corners)
       }
 
-      const [[arrow, updateArrow], banner] = await Promise.all([
-        createArrowPointer(app),
+      const arrowCount = isMulti ? MAX_PEOPLE : 1
+      const [arrows, banner] = await Promise.all([
+        Promise.all(Array.from({ length: arrowCount }, () => createArrowPointer(app))),
         createBanner(app),
       ])
-      if (mainAnimContainer) app.stage.addChild(mainAnimContainer)
+      for (const [container] of arrows) animLayer.addChild(container)
       app.stage.addChild(banner)
-      app.stage.addChild(arrow)
       console.log('Animations added')
 
       app.ticker.add(() => update(rawRef.current, poseInd.get()))
 
       app.ticker.add(() => {
-        const curPose = dataRef.current.mp_pose?.pose
-        if (updateMainAnim && curPose) updateMainAnim(curPose)
+        if (isMulti && animSlots.length > 1) {
+          // Multi-person: assign each detected person to an animation slot
+          const allPoses = dataRef.current.allPoses ?? {}
+          const ids = Object.keys(allPoses).map(Number)
+          for (let i = 0; i < animSlots.length; i++) {
+            if (i < ids.length) {
+              animSlots[i].update(allPoses[ids[i]])
+            } else {
+              animSlots[i].update([])
+            }
+          }
+        } else if (animSlots.length > 0) {
+          // Single-person: use selected pose
+          const curPose = dataRef.current.mp_pose?.pose
+          if (curPose) animSlots[0].update(curPose)
+        }
 
+        const curPose = dataRef.current.mp_pose?.pose
         const hasPerson = !!(curPose && curPose.length > 0)
         for (const updateCorner of cornerAnims) updateCorner(hasPerson)
       })
 
       app.ticker.add(() => {
-        arrow.visible = pointerEnabled.get()
-        const curPose = dataRef.current.mp_pose?.pose
-        if (curPose) updateArrow(curPose)
+        const visible = pointerEnabled.get()
+        for (const [container] of arrows) container.visible = visible
+        if (!visible) return
+
+        if (isMulti && arrows.length > 1) {
+          const allPoses = dataRef.current.allPoses ?? {}
+          const ids = Object.keys(allPoses).map(Number)
+          for (let i = 0; i < arrows.length; i++) {
+            const [, updateArrow] = arrows[i]
+            updateArrow(i < ids.length ? allPoses[ids[i]] : [])
+          }
+        } else {
+          const curPose = dataRef.current.mp_pose?.pose
+          if (curPose) arrows[0][1](curPose)
+        }
       })
 
       app.ticker.add(() => {
@@ -484,7 +544,7 @@ export default function Display({
       }
       canvas.remove()
     }
-  }, [height, width, gifOption, isRtspMode]) // including the ref currents here triggers an unnecessary rerender
+  }, [height, width, gifOption, isRtspMode, isMulti]) // including the ref currents here triggers an unnecessary rerender
   return (
     <>
       <div ref={divRef} {...props}></div>

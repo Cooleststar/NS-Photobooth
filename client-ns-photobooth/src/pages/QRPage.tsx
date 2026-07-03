@@ -11,19 +11,37 @@ export default function QRPage() {
   const [picInd, setPicInd] = useState(-1)
   const pics = useStore(pictures)
 
+  if (pics.length === 0) {
+    return (
+      <Modal locked>
+        <h2>No pictures taken</h2>
+        <Btn onClick={() => router.open('/booth')}>
+          Back to Booth
+        </Btn>
+      </Modal>
+    )
+  }
+
   if (picInd > -1) setPicInd(-1)
   const { data, url } = pics.at(picInd)!
   const hasPrev = pics.at(picInd - 1) !== undefined
   const hasNext = picInd < -1
+  const hasShareLink = !!url
+
   return (
     <Modal locked>
       <h2>Get your picture here!</h2>
       <span tw='flex flex-row flex-nowrap'>
-        <QRCodeSVG value={url} tw='flex-shrink-0 w-52 h-auto' />
+        {hasShareLink && (
+          <QRCodeSVG value={url} tw='flex-shrink-0 w-52 h-auto' />
+        )}
         <div tw='flex-shrink'>
           <img src={data} tw='w-auto' />
         </div>
       </span>
+      {!hasShareLink && (
+        <p tw='text-sm text-gray-500'>Saved offline</p>
+      )}
       <span tw='flex gap-5'>
         <Btn disabled={!hasPrev} onClick={() => setPicInd(picInd - 1)}>
           Previous

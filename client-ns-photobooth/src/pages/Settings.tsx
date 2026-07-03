@@ -9,12 +9,15 @@ import {
   GIF_OPTIONS,
   GifOption,
   bannerEnabled,
+  burstCount,
+  burstIntervalSec,
+  burstModeEnabled,
   camSize,
   canvasSize,
   debugEnabled,
+  multiTarget,
   nicepipeURL,
   offlineOnly,
-  owlEnabled,
   cameraInitialized,
   pictures,
   pointerEnabled,
@@ -103,6 +106,37 @@ function ResRow({
 }
 
 
+function NumberRow({
+  label,
+  value,
+  setter,
+  min = 1,
+  max = 30,
+}: {
+  label: string
+  value: number
+  setter: (v: number) => void
+  min?: number
+  max?: number
+}) {
+  return (
+    <div tw='flex items-center justify-between py-0.5'>
+      <span tw='text-sm text-gray-300'>{label}</span>
+      <input
+        tw='w-16 bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-blue-500'
+        type='number'
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => {
+          const v = parseInt((e.target as HTMLInputElement).value)
+          if (!isNaN(v)) setter(Math.max(min, Math.min(max, v)))
+        }}
+      />
+    </div>
+  )
+}
+
 export default function Settings() {
   const route = useStore(router)?.route
   const [shown, setShown] = useState(false)
@@ -112,6 +146,9 @@ export default function Settings() {
   const gifOption = useStore(selectedGif)
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
+  const burstOn = useStore(burstModeEnabled)
+  const burstN = useStore(burstCount)
+  const burstSec = useStore(burstIntervalSec)
   const niceRos = useNiceROSState()
 
   useKeybind('KeyD', () => debugEnabled.set(!debugEnabled.get()))
@@ -152,7 +189,7 @@ export default function Settings() {
             <Section title='Navigate'>
               {route === 'booth' && (
                 <a href='/qr' tw='text-sm text-blue-400 hover:text-blue-300 transition-colors'>
-                  Go to QR Page →
+                  Go to Gallery →
                 </a>
               )}
               {route === 'qr' && (
@@ -222,6 +259,28 @@ export default function Settings() {
             <ResRow label='Camera Size' value={camRes} setter={camSize.set} />
           </Section>
 
+          <Section title='Burst Mode'>
+            <SwitchRow label='Enable Burst Mode' boolVar={burstModeEnabled} />
+            {burstOn && (
+              <>
+                <NumberRow
+                  label='Photos per Burst'
+                  value={burstN}
+                  setter={burstCount.set}
+                  min={1}
+                  max={12}
+                />
+                <NumberRow
+                  label='Interval between Shots (s)'
+                  value={burstSec}
+                  setter={burstIntervalSec.set}
+                  min={1}
+                  max={10}
+                />
+              </>
+            )}
+          </Section>
+
           <Section title='Animation'>
             <div tw='flex flex-col gap-1'>
               <span tw='text-xs text-gray-500'>Animation GIF</span>
@@ -237,6 +296,7 @@ export default function Settings() {
                 ))}
               </select>
             </div>
+            <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
@@ -279,11 +339,7 @@ export default function Settings() {
           </Section>
         </div>
 
-        <div tw='px-5 py-3 border-t border-gray-800'>
-          <p tw='text-[10px] text-gray-600 text-center'>
-            Powered by JHTech | NiceROS Backend
-          </p>
-        </div>
+        
       </div>
     </>
   )

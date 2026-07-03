@@ -27,6 +27,7 @@ export const GIF_OPTIONS = {
 export type GifOption = keyof typeof GIF_OPTIONS
 export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
 export const pointerEnabled = atom(true)
+export const multiTarget = persistentAtom('multiTarget', false, opts)
 
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)
@@ -70,6 +71,10 @@ export const nicepipeURL = persistentAtom<string>(
   'nicepipeURL',
   'ws://localhost:9091',
 )
+
+export const burstModeEnabled = persistentAtom('burstModeEnabled', false, opts)
+export const burstCount = persistentAtom('burstCount', 3, opts)
+export const burstIntervalSec = persistentAtom<number>('burstIntervalSec', 1, opts)
 
 export interface Picture {
   timestamp: number

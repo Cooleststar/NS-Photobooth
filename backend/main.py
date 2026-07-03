@@ -30,18 +30,33 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pose detector — shared between browser-video path and RTSP path
-# Protected by a threading lock so both can call it safely
+# Pose detector — supports single and multi-person via MediaPipe Tasks API
 # ---------------------------------------------------------------------------
-_mp = mp.solutions.pose
-detector = _mp.Pose(
-    static_image_mode=False,
-    model_complexity=1,
-    enable_segmentation=False,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5,
-)
+from mediapipe.tasks import python as mp_tasks
+from mediapipe.tasks.python import vision as mp_vision
+
+_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task'
+_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pose_landmarker_lite.task')
+
+if not os.path.exists(_MODEL_PATH):
+    log.info("Downloading pose landmarker model...")
+    urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    log.info("Model downloaded")
+
+def _create_landmarker(num_poses: int) -> mp_vision.PoseLandmarker:
+    opts = mp_vision.PoseLandmarkerOptions(
+        base_options=mp_tasks.BaseOptions(model_asset_path=_MODEL_PATH),
+        running_mode=mp_vision.RunningMode.IMAGE,
+        num_poses=num_poses,
+        min_pose_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mp_vision.PoseLandmarker.create_from_options(opts)
+
+_detector_single = _create_landmarker(1)
+_detector_multi = _create_landmarker(5)
 detector_lock = threading.Lock()
+_multi_target: bool = False
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
@@ -68,26 +83,79 @@ _current_stream_size: tuple[int, int] = (0, 0)
 _stream_size: tuple[int, int] = (1920, 1080)   # (width, height) for JPEG encode
 
 # ---------------------------------------------------------------------------
-# Shared pose detection helper
+# Shared pose detection helper with simple position-based tracker
 # ---------------------------------------------------------------------------
+
+_prev_centers: dict[int, tuple[float, float]] = {}
+_next_track_id = 0
+
+
+def _assign_track_ids(
+    landmarks_list: list,
+    h: int, w: int,
+) -> list[int]:
+    """Assign stable track IDs by matching shoulder-center positions across frames."""
+    global _prev_centers, _next_track_id
+
+    centers: list[tuple[float, float]] = []
+    for lms in landmarks_list:
+        ls, rs = lms[11], lms[12]
+        cx = ((1 - ls.x) + (1 - rs.x)) / 2 * w
+        cy = (ls.y + rs.y) / 2 * h
+        centers.append((cx, cy))
+
+    assigned: list[int] = [-1] * len(centers)
+    used_prev: set[int] = set()
+    DIST_THRESH = max(h, w) * 0.15
+
+    for i, (cx, cy) in enumerate(centers):
+        best_id = -1
+        best_dist = DIST_THRESH
+        for pid, (px, py) in _prev_centers.items():
+            if pid in used_prev:
+                continue
+            d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+            if d < best_dist:
+                best_dist = d
+                best_id = pid
+        if best_id >= 0:
+            assigned[i] = best_id
+            used_prev.add(best_id)
+
+    for i in range(len(assigned)):
+        if assigned[i] < 0:
+            assigned[i] = _next_track_id
+            _next_track_id += 1
+
+    _prev_centers = {assigned[i]: centers[i] for i in range(len(centers))}
+    return assigned
+
 
 def run_pose_detection(frame: np.ndarray) -> dict | None:
     """Run MediaPipe pose on a BGR frame. Returns pose msg dict or None."""
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    h, w = frame.shape[:2]
+
     with detector_lock:
-        results = detector.process(rgb)
+        detector = _detector_multi if _multi_target else _detector_single
+        results = detector.detect(mp_image)
+
     if not results.pose_landmarks:
         return None
-    lm = results.pose_landmarks.landmark
-    return {
-        "poses": [{
-            "x": [l.x for l in lm],
-            "y": [l.y for l in lm],
-            "z": [l.z for l in lm],
-            "scores": [l.visibility for l in lm],
-            "track": {"id": 0},
-        }]
-    }
+
+    track_ids = _assign_track_ids(results.pose_landmarks, h, w)
+
+    poses = []
+    for idx, lms in enumerate(results.pose_landmarks):
+        poses.append({
+            "x": [l.x for l in lms],
+            "y": [l.y for l in lms],
+            "z": [l.z for l in lms],
+            "scores": [l.visibility for l in lms],
+            "track": {"id": track_ids[idx]},
+        })
+    return {"poses": poses}
 
 # ---------------------------------------------------------------------------
 # Rosbridge helpers
@@ -441,7 +509,7 @@ _CORS = {
 
 async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
     """Low-latency WebSocket endpoint: sends raw JPEG blobs to the browser."""
-    global _stream_size
+    global _stream_size, _multi_target
     rtsp_url = request.rel_url.query.get('url', '').strip()
     if not rtsp_url:
         return web.Response(status=400, text='Missing ?url= parameter')
@@ -451,6 +519,9 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
     if w > 0 and h > 0:
         _stream_size = (w, h)
         log.info(f"Stream resolution set to {w}×{h}")
+
+    _multi_target = request.rel_url.query.get('multi', '0') == '1'
+    log.info(f"Multi-target: {_multi_target}")
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)

@@ -1,6 +1,6 @@
 import * as PIXI from '../pixi'
 
-import bannerImg from '../assets/borders/border_design4.png'
+import bannerImg from '../assets/borders/border_design6.png'
 
 export async function createBanner(app: PIXI.Application) {
   const {

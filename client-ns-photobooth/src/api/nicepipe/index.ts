@@ -17,6 +17,7 @@ export type Analysis = {
   mmpose?: {
     [id: number]: PoseKeypoint[]
   }
+  allPoses?: { [id: number]: NormalizedLandmarkList }
 }
 
 export type FrameEvent = {
