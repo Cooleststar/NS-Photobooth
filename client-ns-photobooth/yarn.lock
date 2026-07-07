@@ -660,7 +660,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@pixi/gif@npm:^1.0.2":
+"@pixi/gif@npm:1.0.2":
   version: 1.0.2
   resolution: "@pixi/gif@npm:1.0.2"
   peerDependencies:
@@ -671,6 +671,20 @@ __metadata:
     "@pixi/sprite": ">=5"
     "@pixi/ticker": ">=5"
   checksum: 5f93533b16d2ef2ad452c9c0be33454453c76b49d69af385fe9e984ec1d0595ca62ab739d2279cfd63a41f458d513c909bbb8e366626ff841c84751e7dd76539
+  languageName: node
+  linkType: hard
+
+"@pixi/gif@patch:@pixi/gif@npm%3A1.0.2#./.yarn/patches/@pixi-gif-npm-1.0.2-6346ad659d.patch::locator=photobooth%40workspace%3A.":
+  version: 1.0.2
+  resolution: "@pixi/gif@patch:@pixi/gif@npm%3A1.0.2#./.yarn/patches/@pixi-gif-npm-1.0.2-6346ad659d.patch::version=1.0.2&hash=f51058&locator=photobooth%40workspace%3A."
+  peerDependencies:
+    "@pixi/constants": ">=5"
+    "@pixi/core": ">=5"
+    "@pixi/loaders": ">=5"
+    "@pixi/settings": ">=5"
+    "@pixi/sprite": ">=5"
+    "@pixi/ticker": ">=5"
+  checksum: 951fa67d015fed05ae0a164019f193418305b622b5b4579b6e91e6facb348d6d2f2a593e3cda0fa87ff248f2a1c4a9053b7d98731a8a39b16979cf8fea9da5ca
   languageName: node
   linkType: hard
 

@@ -45,13 +45,13 @@ Python packages (installed via `pip`): `mediapipe==0.10.8`, `opencv-python-headl
 ## Getting the Code
 
 ```bash
-git clone https://github.com/jenastyx/photobooth.git
+git clone https://github.com/Cooleststar/NS-Photobooth
 cd photobooth
 ```
 
 ---
 
-## Installation & Running — With Docker
+## Installation & Running — With Docker.
 
 ```bash
 docker-compose up -d --build
