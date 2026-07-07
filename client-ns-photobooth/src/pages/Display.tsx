@@ -418,7 +418,10 @@ export default function Display({
       } else if (option === 'globe') {
         return await createGlobeAnim(app, marginOpts)
       } else if (option === 'drone') {
-        return await createDroneAnim(app, marginOpts)
+        const [container, updateDrone] = await createDroneAnim(app, marginOpts)
+        // Drone uses MediaPipe hand landmarks, not body pose — ignore pose arg
+        const wrappedUpdate = (_pose: any) => updateDrone(rawRef.current.hands ?? [])
+        return [container, wrappedUpdate] as const
       }
       return null
     }

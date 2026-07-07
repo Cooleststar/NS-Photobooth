@@ -7,6 +7,15 @@ export type PropDetection = [string, [Point, Point, Point, Point]]
 /** x,y,z,conf as 8-bit ints, need to convert back to float */
 export type PoseKeypoint = [number, number, number, number]
 
+/** One detected hand from MediaPipe Hands (21 landmarks, normalized 0–1) */
+export type HandData = {
+  x: number[]
+  y: number[]
+  z: number[]
+  label: 'Left' | 'Right'
+  palmUp: boolean
+}
+
 /** structure of analysis from nicepipe */
 export type Analysis = {
   mp_pose?: {
@@ -18,6 +27,7 @@ export type Analysis = {
     [id: number]: PoseKeypoint[]
   }
   allPoses?: { [id: number]: NormalizedLandmarkList }
+  hands?: HandData[]
 }
 
 export type FrameEvent = {

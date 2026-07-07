@@ -83,13 +83,19 @@ export default function HUD({ photographerRef }: HUDProps) {
     ;(async () => {
       pointerEnabled.set(false)
       freezePosition.set(true)
-      await sleep(countdown * 1000)
-      const img = await flash(imgGetter)
-      setImages([img])
-      setPreviewIndex(0)
-      setState('confirm')
-      pointerEnabled.set(true)
-      freezePosition.set(false)
+      try {
+        await sleep(countdown * 1000)
+        const img = await flash(imgGetter)
+        setImages([img])
+        setPreviewIndex(0)
+        setState('confirm')
+      } catch (e: any) {
+        setError(e?.message ?? e.toString())
+        setState('error')
+      } finally {
+        pointerEnabled.set(true)
+        freezePosition.set(false)
+      }
     })()
   }
 
@@ -99,38 +105,47 @@ export default function HUD({ photographerRef }: HUDProps) {
     ;(async () => {
       pointerEnabled.set(false)
       freezePosition.set(true)
-      await sleep(countdown * 1000)
+      try {
+        await sleep(countdown * 1000)
 
-      const total = burstCount.get()
-      const captured: string[] = []
-      for (let i = 0; i < total; i++) {
-        setBurstProgress({ current: i + 1, total })
-        setState('bursting')
-        document.body.style.cursor = 'none'
-        window.document.body.style.opacity = '0.4'
-        captured.push(await imgGetter())
-        await sleep(FLASH_MS)
-        window.document.body.style.opacity = '1'
-        document.body.style.cursor = ''
-        if (i < total - 1) {
-          const intervalMs = BURST_INTERVAL_MS()
-          const intervalSec = burstIntervalSec.get()
-          setIntervalDuration(intervalSec)
-          setIntervalTimerKey((k: number) => k + 1)
-          setShowIntervalTimer(true)
-          await sleep(intervalMs - FLASH_MS)
-          setShowIntervalTimer(false)
+        const total = burstCount.get()
+        const captured: string[] = []
+        for (let i = 0; i < total; i++) {
+          setBurstProgress({ current: i + 1, total })
+          setState('bursting')
+          document.body.style.cursor = 'none'
+          window.document.body.style.opacity = '0.4'
+          captured.push(await imgGetter())
+          await sleep(FLASH_MS)
+          window.document.body.style.opacity = '1'
+          document.body.style.cursor = ''
+          if (i < total - 1) {
+            const intervalMs = BURST_INTERVAL_MS()
+            const intervalSec = burstIntervalSec.get()
+            setIntervalDuration(intervalSec)
+            setIntervalTimerKey((k: number) => k + 1)
+            setShowIntervalTimer(true)
+            await sleep(intervalMs - FLASH_MS)
+            setShowIntervalTimer(false)
+          }
         }
-      }
 
-      const strips = await Promise.all(
-        chunkArray(captured, STRIP_SIZE).map(createPhotoStrip),
-      )
-      setImages(strips)
-      setPreviewIndex(0)
-      setState('confirm')
-      pointerEnabled.set(true)
-      freezePosition.set(false)
+        const strips = await Promise.all(
+          chunkArray(captured, STRIP_SIZE).map(createPhotoStrip),
+        )
+        setImages(strips)
+        setPreviewIndex(0)
+        setState('confirm')
+      } catch (e: any) {
+        setError(e?.message ?? e.toString())
+        setState('error')
+      } finally {
+        document.body.style.cursor = ''
+        window.document.body.style.opacity = '1'
+        setShowIntervalTimer(false)
+        pointerEnabled.set(true)
+        freezePosition.set(false)
+      }
     })()
   }
 

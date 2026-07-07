@@ -30,6 +30,73 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# MediaPipe Hands — palm orientation detection (mediapipe >= 0.10 tasks API)
+# ---------------------------------------------------------------------------
+_mp_hands_available = False
+_mp_hands_lock = threading.Lock()
+_hand_landmarker = None
+
+try:
+    import mediapipe as _mp
+    from mediapipe.tasks import python as _mp_python
+    from mediapipe.tasks.python import vision as _mp_vision
+
+    _HAND_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'hand_landmarker.task')
+    _HAND_MODEL_URL = (
+        'https://storage.googleapis.com/mediapipe-models/'
+        'hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+    )
+
+    if not os.path.exists(_HAND_MODEL_PATH):
+        log.info("Downloading hand_landmarker.task (~23 MB) …")
+        urllib.request.urlretrieve(_HAND_MODEL_URL, _HAND_MODEL_PATH)
+        log.info("Hand landmarker model saved to %s", _HAND_MODEL_PATH)
+
+    _hand_landmarker = _mp_vision.HandLandmarker.create_from_options(
+        _mp_vision.HandLandmarkerOptions(
+            base_options=_mp_python.BaseOptions(model_asset_path=_HAND_MODEL_PATH),
+            num_hands=2,
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            running_mode=_mp_vision.RunningMode.IMAGE,
+        )
+    )
+    _mp_hands_available = True
+    log.info("MediaPipe HandLandmarker initialised")
+
+except Exception as _e:
+    log.warning("MediaPipe Hands unavailable — drone palm-up detection disabled: %s", _e)
+
+
+def run_hand_detection(frame: np.ndarray) -> list:
+    """Run MediaPipe HandLandmarker on a BGR frame. Returns a list of hand dicts."""
+    if not _mp_hands_available or _hand_landmarker is None:
+        return []
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=rgb)
+    with _mp_hands_lock:
+        result = _hand_landmarker.detect(mp_image)
+    hands = []
+    for i, hand_lms in enumerate(result.hand_landmarks):
+        x = [float(lm.x) for lm in hand_lms]
+        y = [float(lm.y) for lm in hand_lms]
+        z = [float(lm.z) for lm in hand_lms]
+        label = result.handedness[i][0].category_name  # "Left" or "Right"
+        # Palm-up: MCP knuckles avg-y (5,9,13,17) above wrist (0) in image space
+        mcp_y = (hand_lms[5].y + hand_lms[9].y + hand_lms[13].y + hand_lms[17].y) / 4
+        palm_up = bool(mcp_y < hand_lms[0].y)
+        hands.append({
+            "x":       x,
+            "y":       y,
+            "z":       z,
+            "label":   label,
+            "palm_up": palm_up,
+        })
+    return hands
+
+
+# ---------------------------------------------------------------------------
 # Pose detector — YOLOv8-Pose (replaces MediaPipe)
 # ---------------------------------------------------------------------------
 # Change 'yolov8n-pose.pt' to 's'/'m'/'l' for better accuracy at cost of speed.
@@ -81,6 +148,7 @@ def run_pose_detection(frame: np.ndarray) -> dict:
             persist=True,   # maintains stable track IDs across frames
             verbose=False,
             conf=0.4,
+            iou=0.45,       # tighter NMS to prevent double-detecting one person
             imgsz=640,      # lower to 320 for faster inference on weak hardware
         )
 
@@ -99,7 +167,9 @@ def run_pose_detection(frame: np.ndarray) -> dict:
 
     # In single-target mode keep only the highest-confidence detection
     if not _multi_target and len(kps_xyn) > 1:
-        best = int(np.argmax(r.boxes.conf.cpu().numpy()))
+        box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
+                    else np.ones(len(kps_xyn)))
+        best = int(np.argmax(box_conf))
         kps_xyn  = kps_xyn[best:best + 1]
         kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
         ids      = [ids[best]]
@@ -116,13 +186,14 @@ def run_pose_detection(frame: np.ndarray) -> dict:
             "track":  {"id": int(ids[i])},
         })
 
-    return {"poses": poses}
+    hands = run_hand_detection(frame)
+    return {"poses": poses, "hands": hands}
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
 # ---------------------------------------------------------------------------
 rosbridge_clients: set = set()
-clients_lock = asyncio.Lock()
+clients_lock: asyncio.Lock  # initialised inside main() to avoid wrong-loop bind
 
 TOPIC_TYPES = {
     "/pose_out": "nice_ros_msgs/WholeBodyArray",
@@ -141,6 +212,7 @@ _rtsp_thread: threading.Thread | None = None
 _current_rtsp_url: str = ""
 _current_stream_size: tuple[int, int] = (0, 0)
 _stream_size: tuple[int, int] = (1920, 1080)   # (width, height) for JPEG encode
+_rtsp_pose_busy: bool = False  # drop RTSP pose frames while inference is running
 
 
 
@@ -207,6 +279,19 @@ async def handle_video(ws):
     log.info("Video feed connected")
     frame_count = 0
     pose_count = 0
+    inferring = False
+
+    async def run_inference(frame):
+        nonlocal inferring, pose_count
+        inferring = True
+        try:
+            pose_msg = await asyncio.to_thread(run_pose_detection, frame)
+            if pose_msg["poses"]:
+                pose_count += 1
+            await broadcast("/pose_out", pose_msg)
+        finally:
+            inferring = False
+
     try:
         async for message in ws:
             if not isinstance(message, bytes):
@@ -218,10 +303,8 @@ async def handle_video(ws):
                 continue
             if frame_count % 30 == 0:
                 log.info(f"Frames: {frame_count}, Poses: {pose_count}")
-            pose_msg = run_pose_detection(frame)
-            if pose_msg["poses"]:
-                pose_count += 1
-            await broadcast("/pose_out", pose_msg)
+            if not inferring:
+                asyncio.create_task(run_inference(frame))
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -356,6 +439,8 @@ def _ffmpeg_read_loop(
                     last_soi = buf.rfind(_JPEG_SOI)
                     if last_soi > 0:
                         del buf[:last_soi]
+                    elif last_soi < 0:
+                        buf.clear()
 
                 while True:
                     soi = buf.find(_JPEG_SOI)
@@ -437,16 +522,20 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             _loop.call_soon_threadsafe(_distribute_frame, jpg)
 
             if frame_count % 3 == 0 and frame is not None:
+                global _rtsp_pose_busy
                 small = cv2.resize(frame, (320, 240))
-                threading.Thread(
-                    target=lambda f=small: (
-                        asyncio.run_coroutine_threadsafe(
-                            broadcast("/pose_out", run_pose_detection(f)),
-                            _loop,
-                        )
-                    ),
-                    daemon=True,
-                ).start()
+                if not _rtsp_pose_busy:
+                    _rtsp_pose_busy = True
+                    def _rtsp_infer(f):
+                        global _rtsp_pose_busy
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                broadcast("/pose_out", run_pose_detection(f)),
+                                _loop,
+                            ).result()
+                        finally:
+                            _rtsp_pose_busy = False
+                    threading.Thread(target=_rtsp_infer, args=(small,), daemon=True).start()
     finally:
         stop_event.set()
         ffmpeg_thread.join(timeout=10)
@@ -702,9 +791,10 @@ def make_http_app() -> web.Application:
 # ---------------------------------------------------------------------------
 
 async def main():
-    global _loop, _rtsp_lock
+    global _loop, _rtsp_lock, clients_lock
     _loop = asyncio.get_running_loop()
     _rtsp_lock = asyncio.Lock()
+    clients_lock = asyncio.Lock()  # must be created inside the running loop
 
     log.info("Photobooth backend starting...")
 

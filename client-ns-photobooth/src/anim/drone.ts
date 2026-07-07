@@ -1,10 +1,9 @@
-import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
 import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
-import { convertPoint } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
+import { HandData } from '../api/nicepipe'
 
 import droneGif from '../assets/drone_anim/drone.gif'
 
@@ -29,31 +28,29 @@ function clampPos(x: number, y: number, size: number, b: FeedBounds) {
   }
 }
 
-// Detects a raised-hand gesture using wrist vs elbow position.
-// Works with COCO-17 keypoints (YOLOv8) which don't include finger landmarks.
-// Triggers when the wrist is above the elbow in screen space (arm raised upward).
-function getRaisedHand(
-  pose: NormalizedLandmarkList,
-  wristIdx: number,
-  elbowIdx: number,
+// Returns the wrist pixel position of the nth palm-up hand (sorted left-to-right
+// in screen space after mirroring).  handIndex 0 = leftmost, 1 = rightmost.
+function getPalmUpWrist(
+  hands: HandData[],
+  handIndex: number,
   height: number,
   width: number,
 ): { x: number; y: number } | undefined {
-  if (pose.length === 0) return undefined
-  const wrist = pose[wristIdx]
-  const elbow = pose[elbowIdx]
-  if (!wrist || !elbow) return undefined
-  if (wrist.visibility! < 0.5 || elbow.visibility! < 0.5) return undefined
-  // Wrist must be above the elbow in screen space (smaller y = higher on screen)
-  if (wrist.y >= elbow.y) return undefined
-  const p = convertPoint(wrist, height, width)
-  return { x: p.x, y: p.y }
+  const palmUpHands = hands.filter(h => h.palmUp)
+  if (palmUpHands.length === 0) return undefined
+  // Sort by mirrored x so index 0 is always the leftmost on screen
+  palmUpHands.sort((a, b) => a.x[0] - b.x[0])
+  const hand = palmUpHands[handIndex]
+  if (!hand) return undefined
+  return {
+    x: (1 - hand.x[0]) * width,  // mirror x to match flipped canvas
+    y: hand.y[0] * height,
+  }
 }
 
 async function createHandDrone(
   app: PIXI.Application,
-  wristIdx: number,
-  elbowIdx: number,
+  handIndex: number,
   droneSize: number,
   hoverOffset: number,
   bobAmplitude: number,
@@ -87,8 +84,8 @@ async function createHandDrone(
   let palmHoldTimer = 0
   const animManager = new AnimStateManager()
 
-  const update = (pose: NormalizedLandmarkList) => {
-    const rawWrist = getRaisedHand(pose, wristIdx, elbowIdx, height, width)
+  const update = (hands: HandData[]) => {
+    const rawWrist = getPalmUpWrist(hands, handIndex, height, width)
 
     if (rawWrist) {
       palmHoldTimer = PALM_HOLD_TIME
@@ -175,22 +172,17 @@ export async function createDroneAnim(
   const hoverOffset = droneSize
   const bobAmplitude = height * BOB_AMPLITUDE_FACTOR
 
-  // Left hand: wrist=15, elbow=13 — right hand: wrist=16, elbow=14
-  // These are all present in COCO-17 (YOLOv8), unlike finger-tip landmarks.
-  const [leftContainer, updateLeft] = await createHandDrone(
-    app, 15, 13, droneSize, hoverOffset, bobAmplitude, bounds,
-  )
-  const [rightContainer, updateRight] = await createHandDrone(
-    app, 16, 14, droneSize, hoverOffset, bobAmplitude, bounds,
-  )
+  // Two drone slots: index 0 = first detected palm-up hand, index 1 = second
+  const [container0, update0] = await createHandDrone(app, 0, droneSize, hoverOffset, bobAmplitude, bounds)
+  const [container1, update1] = await createHandDrone(app, 1, droneSize, hoverOffset, bobAmplitude, bounds)
 
   const parentContainer = new PIXI.Container()
-  parentContainer.addChild(leftContainer)
-  parentContainer.addChild(rightContainer)
+  parentContainer.addChild(container0)
+  parentContainer.addChild(container1)
 
-  const update = (pose: NormalizedLandmarkList) => {
-    updateLeft(pose)
-    updateRight(pose)
+  const update = (hands: HandData[]) => {
+    update0(hands)
+    update1(hands)
   }
 
   return [parentContainer, update] as const

@@ -5,7 +5,7 @@
 import { useNiceROSState } from 'nice-ros-react'
 import { AnyTopicMap, MSG } from 'nice-ros-sdk'
 import { MutableRefObject, useEffect } from 'react'
-import { Analysis, PoseKeypoint } from './nicepipe'
+import { Analysis, HandData, PoseKeypoint } from './nicepipe'
 import { Point } from './nicepipe/propDetection'
 
 /** ImageMarker isn't part of nice-ros-sdk.MSG... Typing below is incomplete but sufficient */
@@ -28,7 +28,11 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
   const niceROS = useNiceROSState<BackendTyping>()
 
   useEffect(() => {
-    const unsub1 = niceROS.subscribeTopic('/pose_out', ({ poses }) => {
+    const unsub1 = niceROS.subscribeTopic('/pose_out', (msg: any) => {
+      const { poses, hands } = msg as {
+        poses: { x: number[]; y: number[]; z: number[]; scores: number[]; track: { id: number } }[]
+        hands?: { x: number[]; y: number[]; z: number[]; label: string; palm_up: boolean }[]
+      }
       dataRef.current.mmpose = Object.fromEntries(
         poses.map(({ x, y, z, scores, track }) => [
           track.id,
@@ -40,6 +44,13 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
           ]),
         ]),
       )
+      dataRef.current.hands = (hands ?? []).map<HandData>(h => ({
+        x: h.x,
+        y: h.y,
+        z: h.z,
+        label: h.label as 'Left' | 'Right',
+        palmUp: h.palm_up,
+      }))
     })
     const unsub2 = niceROS.subscribeTopic('/rect_out', ({ markers }) => {
       dataRef.current.kp = markers.map(({ ns, points }) => [
