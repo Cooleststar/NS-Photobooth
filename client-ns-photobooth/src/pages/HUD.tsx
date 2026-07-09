@@ -1,10 +1,14 @@
 import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
-import { uploadImage } from '../api/cloudinary'
+import { cloudinaryUrlToShareUrl, uploadImage } from '../api/cloudinary'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
 import { Countdown, KeybindBtn, Modal, useKeybind } from '../components'
-import { ensurePermission } from '../lib/dirHandle'
-import { chunkArray, createPhotoStrip } from '../lib/photoStrip'
+import {
+  addQrToStrip,
+  chunkArray,
+  createPhotoStrip,
+  DEFAULT_STRIP_BG,
+} from '../lib/photoStrip'
 import {
   addPicture,
   burstCount,
@@ -14,7 +18,6 @@ import {
   offlineOnly,
   pointerEnabled,
   poseInd,
-  saveDirHandle,
 } from '../store'
 import { sleep } from '../utils'
 
@@ -29,28 +32,7 @@ type CamState =
   | 'bursting'
   | 'confirm'
   | 'uploading'
-  | 'saving'
   | 'error'
-
-async function saveToDirHandle(b64img: string): Promise<void> {
-  const handle = saveDirHandle.get()
-  if (!handle) throw new Error('No save folder selected. Choose one in Settings → Storage.')
-
-  const ok = await ensurePermission(handle)
-  if (!ok) throw new Error('Permission denied for save folder.')
-
-  const mimeType = b64img.split(';')[0].slice(5)
-  const ext = mimeType.split('/')[1]
-  const date = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const filename = `photo_${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}.${ext}`
-
-  const fileHandle = await handle.getFileHandle(filename, { create: true })
-  const blob = await fetch(b64img).then((r) => r.blob())
-  const writable = await fileHandle.createWritable()
-  await writable.write(blob)
-  await writable.close()
-}
 
 async function flash(imgGetter: () => Promise<string>): Promise<string> {
   document.body.style.cursor = 'none'
@@ -71,6 +53,7 @@ export default function HUD({ photographerRef }: HUDProps) {
   const [error, setError] = useState('')
   const [state, setState] = useState<CamState>('ready')
   const [images, setImages] = useState<string[]>([])
+  const [stripGroups, setStripGroups] = useState<string[][]>([])
   const [previewIndex, setPreviewIndex] = useState(0)
   const [burstProgress, setBurstProgress] = useState({ current: 0, total: 0 })
   const [intervalTimerKey, setIntervalTimerKey] = useState(0)
@@ -86,7 +69,11 @@ export default function HUD({ photographerRef }: HUDProps) {
       try {
         await sleep(countdown * 1000)
         const img = await flash(imgGetter)
-        setImages([img])
+        // single photos get the same card border treatment as burst strips
+        // (see photoStrip.ts) instead of the old baked-in banner overlay
+        const card = await createPhotoStrip([img])
+        setImages([card])
+        setStripGroups([[img]])
         setPreviewIndex(0)
         setState('confirm')
       } catch (e: any) {
@@ -130,10 +117,12 @@ export default function HUD({ photographerRef }: HUDProps) {
           }
         }
 
+        const groups = chunkArray(captured, STRIP_SIZE)
         const strips = await Promise.all(
-          chunkArray(captured, STRIP_SIZE).map(createPhotoStrip),
+          groups.map((group) => createPhotoStrip(group)),
         )
         setImages(strips)
+        setStripGroups(groups)
         setPreviewIndex(0)
         setState('confirm')
       } catch (e: any) {
@@ -173,13 +162,21 @@ export default function HUD({ photographerRef }: HUDProps) {
       setState('uploading')
       ;(async () => {
         try {
-          for (const img of images) {
+          for (let i = 0; i < images.length; i++) {
+            const img = images[i]
             const resp = await uploadImage(img)
-            const imgUrl = resp.secure_url
-            const url = `${import.meta.env.VITE_LANDING_PAGE_URL}${imgUrl.substring(
-              'https://res.cloudinary.com/aoh2022/image/upload/'.length,
-            )}`
-            addPicture({ timestamp: Date.now(), data: imgUrl, url })
+            const url = cloudinaryUrlToShareUrl(resp.secure_url)
+            // bake a QR to the share link into the card's reserved footer,
+            // now that the link is known (only possible after upload)
+            const data = await addQrToStrip(img, url)
+            addPicture({
+              timestamp: Date.now(),
+              data,
+              url,
+              isStrip: true,
+              stripPhotos: stripGroups[i],
+              bgColor: DEFAULT_STRIP_BG,
+            })
           }
           setState('ready')
         } catch (e: any) {
@@ -188,19 +185,19 @@ export default function HUD({ photographerRef }: HUDProps) {
         }
       })()
     } else {
-      setState('saving')
-      ;(async () => {
-        try {
-          for (const img of images) {
-            await saveToDirHandle(img)
-            addPicture({ timestamp: Date.now(), data: img, url: '' })
-          }
-          setState('ready')
-        } catch (e: any) {
-          setError(e?.message ?? e.toString())
-          setState('error')
-        }
-      })()
+      // Offline photos aren't auto-saved to disk here — the user saves them
+      // explicitly via the "Save to PC" button in the gallery instead.
+      for (let i = 0; i < images.length; i++) {
+        addPicture({
+          timestamp: Date.now(),
+          data: images[i],
+          url: '',
+          isStrip: true,
+          stripPhotos: stripGroups[i],
+          bgColor: DEFAULT_STRIP_BG,
+        })
+      }
+      setState('ready')
     }
   }
 
@@ -291,12 +288,6 @@ export default function HUD({ photographerRef }: HUDProps) {
       return (
         <Modal locked>
           <h2>Uploading...</h2>
-        </Modal>
-      )
-    case 'saving':
-      return (
-        <Modal locked>
-          <h2>Saving...</h2>
         </Modal>
       )
     case 'error':

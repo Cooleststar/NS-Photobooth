@@ -1,6 +1,7 @@
 import { persistentAtom } from '@nanostores/persistent'
 import { createRouter } from '@nanostores/router'
 import { atom, map } from 'nanostores'
+import { savePictures } from './lib/picturesDb'
 import * as PIXI from './pixi'
 
 const opts = {
@@ -81,13 +82,34 @@ export interface Picture {
   timestamp: number
   data: string
   url: string
+  /** burst-mode photo strip — already has its own QR code baked into the image */
+  isStrip?: boolean
+  /** raw (un-composited) photos that make up the strip, so it can be
+   * regenerated in a different background color */
+  stripPhotos?: string[]
+  /** current strip background color, so recoloring knows what to regenerate from */
+  bgColor?: string
 }
 
-export const pictures = persistentAtom<Picture[]>('picturesTaken', [], opts)
+// Backed by IndexedDB (see lib/picturesDb.ts) instead of persistentAtom's
+// localStorage, since base64 photo data quickly exceeds localStorage's quota
+// and would otherwise silently fail to persist across app restarts.
+export const pictures = atom<Picture[]>([])
+pictures.listen((pics) => {
+  savePictures(pics)
+})
 export function addPicture(pic: Picture) {
   pictures.set(
     [...pictures.get(), pic].sort((a, b) => a.timestamp - b.timestamp),
   )
+}
+export function updatePicture(timestamp: number, patch: Partial<Picture>) {
+  pictures.set(
+    pictures.get().map((p) => (p.timestamp === timestamp ? { ...p, ...patch } : p)),
+  )
+}
+export function deletePicture(timestamp: number) {
+  pictures.set(pictures.get().filter((p) => p.timestamp !== timestamp))
 }
 
 export const router = createRouter({

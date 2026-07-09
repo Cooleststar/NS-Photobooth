@@ -41,6 +41,13 @@ export async function uploadImage(b64img: string, uploadTimeout = 30000) {
   ).json()
 }
 
+/** converts a cloudinary secure_url into this app's shareable landing-page URL */
+export function cloudinaryUrlToShareUrl(imgUrl: string): string {
+  return `${import.meta.env.VITE_LANDING_PAGE_URL}${imgUrl.substring(
+    'https://res.cloudinary.com/aoh2022/image/upload/'.length,
+  )}`
+}
+
 /** used for testing. downloads image so that quality & size can be inspected. */
 export function downloadImage(b64img: string) {
   const ext = b64img.substring('data:image/'.length, b64img.indexOf(';base64'))

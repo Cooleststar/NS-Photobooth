@@ -409,12 +409,16 @@ export default function Display({
 
     const MAX_PEOPLE = 4
     const marginOpts = { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B }
+    // hoisted so photographerRef.current (defined outside the IIFE below)
+    // can hide the decorative banner during capture — captured photos get
+    // their own border treatment in the gallery instead
+    let bannerContainer: PIXI.Container | undefined
 
     async function createAnimForGif(option: GifOption) {
       if (option === 'owl') {
         return await createOwlAnim(app)
       } else if (option === 'bat') {
-        return await createBatAnim(app, marginOpts)
+        return await createBatAnim(app)
       } else if (option === 'globe') {
         return await createGlobeAnim(app, marginOpts)
       } else if (option === 'drone') {
@@ -471,6 +475,7 @@ export default function Display({
       ])
       for (const [container] of arrows) animLayer.addChild(container)
       app.stage.addChild(banner)
+      bannerContainer = banner
       console.log('Animations added')
 
       app.ticker.add(() => update(rawRef.current, poseInd.get()))
@@ -522,7 +527,15 @@ export default function Display({
     })()
 
     photographerRef.current = async () => {
+      // Captured photos get their own border/branding in the gallery
+      // (see photoStrip.ts) instead of the live-preview banner overlay, so
+      // force one render with it hidden right before grabbing the frame.
+      const prevBannerVisible = bannerContainer?.visible ?? true
+      if (bannerContainer) bannerContainer.visible = false
+      app.renderer.render(app.stage)
       const imCanvas = postprocessPicture(app.renderer.view)
+      if (bannerContainer) bannerContainer.visible = prevBannerVisible
+
       return imCanvas.toDataURL(
         // TODO: should these be configurable instead of hardcoded
         import.meta.env.VITE_IMG_UPLOAD_FORMAT,

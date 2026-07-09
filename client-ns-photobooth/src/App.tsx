@@ -5,7 +5,8 @@ import CameraSelect from './pages/CameraSelect'
 import QRPage from './pages/QRPage'
 import Settings from './pages/Settings'
 import { loadDirHandle } from './lib/dirHandle'
-import { cameraInitialized, router, saveDirHandle } from './store'
+import { loadPictures } from './lib/picturesDb'
+import { cameraInitialized, pictures, router, saveDirHandle } from './store'
 
 export default function App() {
   const route = useStore(router)?.route
@@ -13,6 +14,9 @@ export default function App() {
   useEffect(() => {
     loadDirHandle().then((handle) => {
       if (handle) saveDirHandle.set(handle)
+    })
+    loadPictures().then((pics) => {
+      if (pics.length) pictures.set(pics)
     })
   }, [])
 
