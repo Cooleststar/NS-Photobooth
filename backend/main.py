@@ -97,11 +97,12 @@ def run_hand_detection(frame: np.ndarray) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Pose detector — YOLOv8-Pose (replaces MediaPipe)
+# Pose detector — YOLO26-Pose (upgraded from YOLOv8n-Pose)
 # ---------------------------------------------------------------------------
-# Change 'yolov8n-pose.pt' to 's'/'m'/'l' for better accuracy at cost of speed.
-# The model is auto-downloaded on first run (~6 MB for nano).
-_yolo = YOLO('yolov8n-pose.pt')
+# Change 'yolo26n-pose.pt' to 's'/'m'/'l' for better accuracy at cost of speed.
+# The model is auto-downloaded on first run.
+# Revert to 'yolov8n-pose.pt' if tracking becomes unstable.
+_yolo = YOLO('yolo26n-pose.pt')
 _yolo_lock = threading.Lock()
 _multi_target: bool = False
 
@@ -542,13 +543,17 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
         log.info("RTSP reader stopped")
 
 
-async def switch_rtsp_reader(rtsp_url: str):
-    """Restart the RTSP reader if the URL or stream resolution changed."""
+async def switch_rtsp_reader(rtsp_url: str, force: bool = False):
+    """Restart the RTSP reader if the URL or stream resolution changed.
+
+    Pass force=True to reconnect even when the URL and size are unchanged
+    (used by the keepfresh watchdog to flush camera-side encode buffers).
+    """
     global _rtsp_stop_event, _rtsp_thread, _current_rtsp_url, _current_stream_size
     async with _rtsp_lock:
         same_url = rtsp_url == _current_rtsp_url
         same_size = _stream_size == _current_stream_size
-        if same_url and same_size and _rtsp_thread and _rtsp_thread.is_alive():
+        if not force and same_url and same_size and _rtsp_thread and _rtsp_thread.is_alive():
             return
         old_thread = _rtsp_thread
         stop_rtsp_reader()
@@ -790,6 +795,24 @@ def make_http_app() -> web.Application:
 # Entry point — run WebSocket (9091) and HTTP (8081) servers concurrently
 # ---------------------------------------------------------------------------
 
+async def _rtsp_keepfresh_loop(interval_s: int = 45):
+    """Periodically force-reconnect to the RTSP camera.
+
+    Hikvision cameras (and many H.264 IP cameras) accumulate latency over
+    time because H.264 GOP buffering causes the encode pipeline to drift
+    further and further from real-time.  Reconnecting forces the camera to
+    start a fresh stream from the current frame, resetting the delay.
+    The browser WebSocket stays open; clients see only a brief (~1 s) gap.
+    """
+    while True:
+        await asyncio.sleep(interval_s)
+        url = _current_rtsp_url
+        if not url:
+            continue
+        log.info("RTSP keepfresh: reconnecting to flush camera buffer")
+        await switch_rtsp_reader(url, force=True)
+
+
 async def main():
     global _loop, _rtsp_lock, clients_lock
     _loop = asyncio.get_running_loop()
@@ -797,6 +820,8 @@ async def main():
     clients_lock = asyncio.Lock()  # must be created inside the running loop
 
     log.info("Photobooth backend starting...")
+
+    asyncio.create_task(_rtsp_keepfresh_loop())
 
     ws_server = await websockets.serve(handler, "0.0.0.0", 9091)
     log.info("WebSocket server ready on port 9091")

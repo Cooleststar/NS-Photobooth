@@ -78,6 +78,7 @@ function createReceivingCtx(
   imgRef: RefObject<HTMLImageElement | HTMLVideoElement>,
   dataRef: MutableRefObject<Analysis>,
   size?: { width: number; height: number },
+  bitmapRef?: { current: ImageBitmap | null },
 ) {
   const { width = 640, height = 480 } = size ?? {}
   const canvas = document.createElement('canvas')
@@ -106,26 +107,29 @@ function createReceivingCtx(
     (data: Analysis, poseIndex: number) => {
       const img = imgRef.current
       if (!img) return
-      const imgWidth =
-        img instanceof HTMLImageElement ? img.naturalWidth : img.videoWidth
-      const imgHeight =
-        img instanceof HTMLImageElement ? img.naturalHeight : img.videoHeight
+      const bitmap = bitmapRef?.current
+      const imgWidth = bitmap
+        ? bitmap.width
+        : img instanceof HTMLImageElement ? img.naturalWidth : img.videoWidth
+      const imgHeight = bitmap
+        ? bitmap.height
+        : img instanceof HTMLImageElement ? img.naturalHeight : img.videoHeight
+
+      if (imgWidth === 0 || imgHeight === 0) return
 
       const fps = measureFPS()
       ctx.save()
       ctx.translate(width, 0)
       ctx.scale(-1, 1)
-      //ctx.drawImage(img, 0, 0, width, height)
 
       // calculate positionings and stuff
       const xMargin = MARGIN_X * width
       const btmMargin = MARGIN_B * height
-      // const yMargin = MARGIN_T * height
       const widthTarget = width - 2 * xMargin
       const heightTarget = (widthTarget / imgWidth) * imgHeight
       const yMargin = height - heightTarget - btmMargin
 
-      ctx.drawImage(img, xMargin, yMargin, widthTarget, heightTarget)
+      ctx.drawImage(bitmap ?? img, xMargin, yMargin, widthTarget, heightTarget)
       ctx.restore()
 
       // recalculate pose coordinates
@@ -316,26 +320,39 @@ export default function Display({
     videoRef.current.srcObject = null
   }, [deviceId])
 
-  // Receive RTSP frames over WebSocket and feed them to the <img> via blob URLs
+  // Receive RTSP frames over WebSocket; decode each JPEG off-thread via
+  // createImageBitmap so the PixiJS tick always draws from a fully-decoded bitmap.
+  const rtspBitmapRef = useRef<ImageBitmap | null>(null)
   useEffect(() => {
     if (!isRtspMode || !wsStreamUrl) return
-    const img = imgRef.current
-    if (!img) return
 
     let ws: WebSocket | null = null
     let active = true
-    let prevBlobUrl = ''
 
     function connect() {
       if (!active) return
       try {
         ws = new WebSocket(wsStreamUrl)
         ws.binaryType = 'blob'
+
+        // One decode in flight at a time — always decode the latest blob,
+        // dropping frames that arrive while the previous decode runs.
+        let latestBlob: Blob | null = null
+        let decoding = false
+        const decode = () => {
+          if (!latestBlob) { decoding = false; return }
+          const blob = latestBlob
+          latestBlob = null
+          createImageBitmap(blob).then((bm) => {
+            if (!active) { bm.close(); return }
+            rtspBitmapRef.current?.close()
+            rtspBitmapRef.current = bm
+          }).catch(() => {}).finally(decode)
+        }
+
         ws.onmessage = (e) => {
-          const blobUrl = URL.createObjectURL(e.data as Blob)
-          if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl)
-          prevBlobUrl = blobUrl
-          img.src = blobUrl
+          latestBlob = e.data as Blob
+          if (!decoding) { decoding = true; decode() }
         }
         ws.onclose = () => {
           if (active) setTimeout(connect, 2000)
@@ -351,7 +368,8 @@ export default function Display({
     return () => {
       active = false
       ws?.close()
-      if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl)
+      rtspBitmapRef.current?.close()
+      rtspBitmapRef.current = null
     }
   }, [isRtspMode, wsStreamUrl])
 
@@ -377,7 +395,7 @@ export default function Display({
     let [canvas, update] = createReceivingCtx(activeRef, dataRef, {
       width,
       height,
-    })
+    }, isRtspMode ? rtspBitmapRef : undefined)
 
     attachStream2Pixi(app, canvas)
 
@@ -389,6 +407,7 @@ export default function Display({
     feedMask.position.set(MARGIN_X * width, MARGIN_T * height)
     feedMask.width = width * (1 - 2 * MARGIN_X)
     feedMask.height = height * (1 - MARGIN_T - MARGIN_B)
+    feedMask.renderable = false
     app.stage.addChild(animLayer)
     animLayer.addChild(feedMask)
     animLayer.mask = feedMask

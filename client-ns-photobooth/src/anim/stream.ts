@@ -9,7 +9,7 @@ export function drawDebug(
   ctx: CanvasRenderingContext2D,
   pose: NormalizedLandmarkList,
   propDets: PropDetection[],
-  fps: number,
+  _fps: number,
 ) {
   const { height, width } = ctx.canvas
   const arm = calculateArmFromPose(pose, height, width)[0]
@@ -39,13 +39,6 @@ export function drawDebug(
   ctx.fillRect(0, 0, 150, 50)
   ctx.fill()
 
-  // fps debug
-  ctx.fillStyle = 'white'
-  ctx.textBaseline = 'hanging'
-  ctx.font = '48px serif'
-  ctx.fillText(`${fps.toFixed(1)}hz`, 0, 0)
-  ctx.strokeText(`${fps.toFixed(1)}hz`, 0, 0)
-
   // pose debug
   ctx.translate(width, 0)
   ctx.scale(-1, 1)
@@ -65,5 +58,7 @@ export function attachStream2Pixi(
   bgTexture.width = width
   bgTexture.position.set(0, 0)
   app.stage.addChild(bgTexture)
-  app.ticker.add(() => bgTexture.texture.update())
+  // Priority -25 (LOW) runs after all NORMAL (0) callbacks such as drawImage,
+  // so the GPU always gets the freshest canvas content each tick.
+  app.ticker.add(() => bgTexture.texture.update(), null, -25)
 }
