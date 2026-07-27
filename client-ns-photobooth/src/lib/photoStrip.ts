@@ -40,11 +40,11 @@ export const STRIP_BG_OPTIONS = [
 
 const PADDING = 24
 const GAP = 10
-const FOOTER_HEIGHT = 180
+const FOOTER_HEIGHT = 230
 const BRAND_TEXT = 'NS Photobooth'
 const QR_SIZE = 120
 const QR_MARGIN = 20
-const LOGO_SIZE = 90
+const LOGO_SIZE = 180
 const LOGO_GAP = 12
 
 function formatDateTime(timestamp: number): string {
@@ -75,10 +75,14 @@ async function drawFooter(
   const rowY = canvasHeight - FOOTER_HEIGHT / 2
 
   ctx.fillStyle = '#3f3a35'
-  ctx.font = 'italic 20px Georgia, serif'
-  ctx.textBaseline = 'middle'
+  ctx.font = 'italic 50px Georgia, serif'
+  ctx.textBaseline = 'bottom'
   ctx.textAlign = 'left'
-  ctx.fillText(`${BRAND_TEXT}   ${formatDateTime(timestamp)}`, PADDING, rowY)
+  ctx.fillText(
+    `${BRAND_TEXT}   ${formatDateTime(timestamp)}`,
+    PADDING,
+    canvasHeight - PADDING,
+  )
 
   // Both logos sit beside the QR box, vertically centered on the same row
   // as the brand text/timestamp above.

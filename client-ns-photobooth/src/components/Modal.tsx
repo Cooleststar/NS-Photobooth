@@ -46,7 +46,7 @@ export function Modal({
         css={[
           modalStyle,
           wide && tw`max-w-7xl`,
-          fullscreen && tw`max-w-none w-full h-full rounded-none border-0`,
+          fullscreen && tw`max-w-none w-full h-full rounded-none border-0 bg-gray-200`,
         ]}
         {...props}
         onClick={(e) => {
