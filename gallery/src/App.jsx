@@ -1,13 +1,60 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
+import QRCode from 'qrcode'
 
 const PORT = 8081
 const POLL_MS = 5000
 const STORAGE_KEY = 'photobooth_server_ip'
+const FRAME_COLORS = ['#e5e7eb', '#ef4444', '#3b82f6', '#22c55e', '#eab308']
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function photoUrl(ip, filename) {
   return `http://${ip}:${PORT}/photos/${encodeURIComponent(filename)}`
+}
+
+// ── QR code box ────────────────────────────────────────────────────────────
+
+function QrBox({ url }) {
+  const canvasRef = useRef(null)
+
+  useEffect(() => {
+    if (!url || !canvasRef.current) return
+    QRCode.toCanvas(canvasRef.current, url, { width: 160, margin: 1 })
+  }, [url])
+
+  if (!url) {
+    return (
+      <div class="qr-box offline">
+        <span class="qr-offline-dot" />
+        <span>Saved offline — no QR</span>
+      </div>
+    )
+  }
+
+  return (
+    <div class="qr-box">
+      <canvas ref={canvasRef} />
+      <p class="qr-label">Scan to download</p>
+    </div>
+  )
+}
+
+// ── Color swatches ─────────────────────────────────────────────────────────
+
+function ColorSwatches({ active, onChange }) {
+  return (
+    <div class="color-swatches">
+      {FRAME_COLORS.map((c) => (
+        <button
+          key={c}
+          class={`swatch${c === active ? ' active' : ''}`}
+          style={{ backgroundColor: c }}
+          aria-label={`Set frame colour ${c}`}
+          onClick={() => onChange(c)}
+        />
+      ))}
+    </div>
+  )
 }
 
 // ── Connect screen ─────────────────────────────────────────────────────────
@@ -63,11 +110,10 @@ function Thumbs({ photos, selected, ip, onSelect }) {
 
 // ── Gallery screen ─────────────────────────────────────────────────────────
 
-function GalleryScreen({ photos, selected, ip, liveStatus, onSelect, onDisconnect, onDelete, deleting }) {
+function GalleryScreen({ photos, selected, ip, liveStatus, frameColor, onSelect, onDisconnect, onDelete, onColorChange, deleting }) {
   const photo = photos[selected]
   const previewRef = useRef(null)
 
-  // Re-trigger fade animation when the selected photo changes
   useEffect(() => {
     if (!previewRef.current) return
     previewRef.current.style.animation = 'none'
@@ -96,13 +142,20 @@ function GalleryScreen({ photos, selected, ip, liveStatus, onSelect, onDisconnec
           <Thumbs photos={photos} selected={selected} ip={ip} onSelect={onSelect} />
 
           <div class="preview-col">
-            <div class="photo-frame">
-              <img
-                ref={previewRef}
-                class="preview-img"
-                src={photoUrl(ip, photo.filename)}
-                alt={photo.filename}
-              />
+            <div class="preview-row">
+              <div class="photo-frame" style={{ backgroundColor: frameColor }}>
+                <img
+                  ref={previewRef}
+                  class="preview-img"
+                  src={photoUrl(ip, photo.filename)}
+                  alt={photo.filename}
+                />
+              </div>
+
+              <div class="side-col">
+                <QrBox url={photo.url} />
+                <ColorSwatches active={frameColor} onChange={onColorChange} />
+              </div>
             </div>
 
             <div class="info-box">
@@ -142,6 +195,7 @@ export function App() {
   const [connectError, setConnectError] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [frameColor, setFrameColor] = useState(FRAME_COLORS[0])
   const pollRef = useRef(null)
   const ipRef = useRef(serverIp)
 
@@ -179,7 +233,6 @@ export function App() {
       setSelected(0)
       setConnected(true)
       setLiveStatus('live')
-      // Start polling
       if (pollRef.current) clearInterval(pollRef.current)
       pollRef.current = setInterval(() => fetchPhotos(ip), POLL_MS)
     } catch {
@@ -234,9 +287,11 @@ export function App() {
       selected={selected}
       ip={serverIp}
       liveStatus={liveStatus}
+      frameColor={frameColor}
       onSelect={setSelected}
       onDisconnect={disconnect}
       onDelete={deleteSelected}
+      onColorChange={setFrameColor}
       deleting={deleting}
     />
   )

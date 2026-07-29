@@ -64,7 +64,7 @@ export default function QRPage() {
         fetch(`${backendUrl}/save`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: p.data }),
+          body: JSON.stringify({ image: p.data, url: p.url, timestamp: p.timestamp }),
         })
           .then(() => {
             synced.add(p.timestamp)

@@ -198,6 +198,70 @@ body {
 .btn-delete:hover:not(:disabled) { background: #7f1d1d; }
 
 /* ── State messages ─────────────────────────────────────────────────────── */
+/* ── Preview row (photo + side column) ─────────────────────────────────── */
+.preview-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+/* ── Side column (QR + swatches) ──────────────────────────────────────── */
+.side-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ── QR box ─────────────────────────────────────────────────────────────── */
+.qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: #f9fafb;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  border: 1px solid #e5e7eb;
+}
+.qr-box.offline {
+  flex-direction: row;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #6b7280;
+  padding: 12px 16px;
+}
+.qr-label { font-size: 0.8rem; color: #6b7280; }
+.qr-offline-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex-shrink: 0;
+}
+
+/* ── Color swatches ─────────────────────────────────────────────────────── */
+.color-swatches {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.swatch {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 0 0 1px #d1d5db;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.swatch:hover { transform: scale(1.1); }
+.swatch.active { box-shadow: 0 0 0 2px #6b7280, 0 0 0 4px white; }
+
+/* ── State messages ─────────────────────────────────────────────────────── */
 .state-msg {
   display: flex;
   flex-direction: column;

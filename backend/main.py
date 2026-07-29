@@ -677,6 +677,8 @@ async def save_photo_handler(request: web.Request) -> web.Response:
         data = await request.json()
         b64img: str = data.get('image', '')
         directory: str = data.get('directory', './photos').strip()
+        share_url: str = data.get('url', '')
+        pic_timestamp: int = data.get('timestamp', 0)
 
         if not b64img:
             return web.Response(status=400, text='Missing image', headers=_CORS)
@@ -695,6 +697,11 @@ async def save_photo_handler(request: web.Request) -> web.Response:
 
         with open(filepath, 'wb') as f:
             f.write(base64.b64decode(b64data))
+
+        # Save sidecar metadata (Cloudinary URL, original timestamp)
+        meta_path = filepath + '.json'
+        with open(meta_path, 'w') as f:
+            json.dump({'url': share_url, 'timestamp': pic_timestamp}, f)
 
         log.info(f"Photo saved: {filepath}")
         return web.Response(text=filepath, headers=_CORS)
@@ -801,8 +808,23 @@ async def list_photos_handler(request: web.Request) -> web.Response:
     photos_dir = pathlib.Path('./photos')
     if not photos_dir.exists():
         return web.json_response([], headers=_CORS)
-    files = sorted(photos_dir.glob('*'), key=lambda f: f.stat().st_mtime, reverse=True)
-    result = [{'filename': f.name, 'mtime': f.stat().st_mtime} for f in files if f.is_file()]
+    files = sorted(
+        (f for f in photos_dir.iterdir() if f.is_file() and f.suffix != '.json'),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    result = []
+    for f in files:
+        meta_path = pathlib.Path(str(f) + '.json')
+        url, pic_ts = '', 0
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                url = meta.get('url', '')
+                pic_ts = meta.get('timestamp', 0)
+            except Exception:
+                pass
+        result.append({'filename': f.name, 'mtime': f.stat().st_mtime, 'url': url, 'timestamp': pic_ts})
     return web.json_response(result, headers=_CORS)
 
 
@@ -820,6 +842,9 @@ async def delete_photo_handler(request: web.Request) -> web.Response:
     if not filepath.exists() or not filepath.is_file():
         return web.Response(status=404, headers=_CORS)
     filepath.unlink()
+    meta_path = pathlib.Path(str(filepath) + '.json')
+    if meta_path.exists():
+        meta_path.unlink()
     return web.Response(text='deleted', headers=_CORS)
 
 

@@ -167,11 +167,10 @@ export default function HUD({ photographerRef }: HUDProps) {
             const img = images[i]
             const resp = await uploadImage(img)
             const url = cloudinaryUrlToShareUrl(resp.secure_url)
-            // bake a QR to the share link into the card's reserved footer,
-            // now that the link is known (only possible after upload)
             const data = await addQrToStrip(img, url)
+            const timestamp = Date.now()
             addPicture({
-              timestamp: Date.now(),
+              timestamp,
               data,
               url,
               isStrip: true,
@@ -181,7 +180,7 @@ export default function HUD({ photographerRef }: HUDProps) {
             fetch(`${getBackendHttpUrl()}/save`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: data }),
+              body: JSON.stringify({ image: data, url, timestamp }),
             }).catch(() => {})
           }
           setState('ready')
@@ -193,8 +192,9 @@ export default function HUD({ photographerRef }: HUDProps) {
     } else {
       for (let i = 0; i < images.length; i++) {
         const data = images[i]
+        const timestamp = Date.now()
         addPicture({
-          timestamp: Date.now(),
+          timestamp,
           data,
           url: '',
           isStrip: true,
@@ -204,7 +204,7 @@ export default function HUD({ photographerRef }: HUDProps) {
         fetch(`${getBackendHttpUrl()}/save`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: data }),
+          body: JSON.stringify({ image: data, url: '', timestamp }),
         }).catch(() => {})
       }
       setState('ready')
