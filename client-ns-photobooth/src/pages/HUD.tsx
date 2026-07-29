@@ -15,6 +15,7 @@ import {
   burstIntervalSec,
   burstModeEnabled,
   freezePosition,
+  getBackendHttpUrl,
   offlineOnly,
   pointerEnabled,
   poseInd,
@@ -177,6 +178,11 @@ export default function HUD({ photographerRef }: HUDProps) {
               stripPhotos: stripGroups[i],
               bgColor: DEFAULT_STRIP_BG,
             })
+            fetch(`${getBackendHttpUrl()}/save`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: data }),
+            }).catch(() => {})
           }
           setState('ready')
         } catch (e: any) {
@@ -185,17 +191,21 @@ export default function HUD({ photographerRef }: HUDProps) {
         }
       })()
     } else {
-      // Offline photos aren't auto-saved to disk here — the user saves them
-      // explicitly via the "Save to PC" button in the gallery instead.
       for (let i = 0; i < images.length; i++) {
+        const data = images[i]
         addPicture({
           timestamp: Date.now(),
-          data: images[i],
+          data,
           url: '',
           isStrip: true,
           stripPhotos: stripGroups[i],
           bgColor: DEFAULT_STRIP_BG,
         })
+        fetch(`${getBackendHttpUrl()}/save`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: data }),
+        }).catch(() => {})
       }
       setState('ready')
     }

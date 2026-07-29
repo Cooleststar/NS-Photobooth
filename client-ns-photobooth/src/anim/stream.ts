@@ -50,7 +50,7 @@ export function drawDebug(
 
 export function attachStream2Pixi(
   app: PIXI.Application,
-  bg: PIXI.SpriteSource,
+  bg: HTMLCanvasElement,
 ) {
   const { height, width } = app.renderer
   const bgTexture = PIXI.Sprite.from(bg)
@@ -58,7 +58,5 @@ export function attachStream2Pixi(
   bgTexture.width = width
   bgTexture.position.set(0, 0)
   app.stage.addChild(bgTexture)
-  // Priority -25 (LOW) runs after all NORMAL (0) callbacks such as drawImage,
-  // so the GPU always gets the freshest canvas content each tick.
-  app.ticker.add(() => bgTexture.texture.update(), null, -25)
+  app.ticker.add(() => bgTexture.texture.update())
 }

@@ -8,7 +8,7 @@ import fusionLogo from '../assets/icons/fusionlogo.png'
 import { Btn, Modal } from '../components'
 import { saveToDirHandle } from '../lib/dirHandle'
 import { addQrToStrip, createPhotoStrip, STRIP_BG_OPTIONS } from '../lib/photoStrip'
-import { deletePicture, pictures, router, saveDirHandle, updatePicture } from '../store'
+import { deletePicture, getBackendHttpUrl, Picture, pictures, router, saveDirHandle, updatePicture } from '../store'
 
 const fadeIn = css`
   animation: qrpage-fade-in 250ms ease;
@@ -50,6 +50,29 @@ export default function QRPage() {
     setSavePcError('')
     setSavingToPC(false)
   }, [index])
+
+  // Sync any photos not yet on the backend. Uses sessionStorage to avoid
+  // re-uploading the same photo across re-renders.
+  useEffect(() => {
+    if (pics.length === 0) return
+    const backendUrl = getBackendHttpUrl()
+    const KEY = 'synced_timestamps'
+    const synced = new Set<number>(JSON.parse(sessionStorage.getItem(KEY) ?? '[]'))
+    pics
+      .filter((p: Picture) => !synced.has(p.timestamp))
+      .forEach((p: Picture) => {
+        fetch(`${backendUrl}/save`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: p.data }),
+        })
+          .then(() => {
+            synced.add(p.timestamp)
+            sessionStorage.setItem(KEY, JSON.stringify([...synced]))
+          })
+          .catch(() => {})
+      })
+  }, [pics])
 
   if (pics.length === 0) {
     return (

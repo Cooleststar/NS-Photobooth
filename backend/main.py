@@ -583,8 +583,19 @@ def stop_rtsp_reader():
 
 _CORS = {
     'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
     'Cache-Control': 'no-cache',
 }
+
+
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    if request.method == 'OPTIONS':
+        return web.Response(headers=_CORS)
+    response = await handler(request)
+    response.headers.update(_CORS)
+    return response
 
 
 async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
@@ -781,14 +792,49 @@ async def configure_camera_handler(request: web.Request) -> web.Response:
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
+async def gallery_client_handler(request: web.Request) -> web.Response:
+    html_path = pathlib.Path(__file__).parent / 'gallery.html'
+    return web.FileResponse(html_path)
+
+
+async def list_photos_handler(request: web.Request) -> web.Response:
+    photos_dir = pathlib.Path('./photos')
+    if not photos_dir.exists():
+        return web.json_response([], headers=_CORS)
+    files = sorted(photos_dir.glob('*'), key=lambda f: f.stat().st_mtime, reverse=True)
+    result = [{'filename': f.name, 'mtime': f.stat().st_mtime} for f in files if f.is_file()]
+    return web.json_response(result, headers=_CORS)
+
+
+async def serve_photo_handler(request: web.Request) -> web.Response:
+    filename = request.match_info['filename']
+    filepath = pathlib.Path('./photos') / filename
+    if not filepath.exists() or not filepath.is_file():
+        return web.Response(status=404, headers=_CORS)
+    return web.FileResponse(filepath, headers={**_CORS, 'Content-Disposition': f'inline; filename="{filename}"'})
+
+
+async def delete_photo_handler(request: web.Request) -> web.Response:
+    filename = request.match_info['filename']
+    filepath = pathlib.Path('./photos') / filename
+    if not filepath.exists() or not filepath.is_file():
+        return web.Response(status=404, headers=_CORS)
+    filepath.unlink()
+    return web.Response(text='deleted', headers=_CORS)
+
+
 def make_http_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app.router.add_get('/ws_stream', ws_stream_handler)
     app.router.add_get('/stream', stream_handler)
     app.router.add_post('/stream/stop', stop_stream_handler)
     app.router.add_post('/save', save_photo_handler)
     app.router.add_get('/browse', browse_handler)
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
+    app.router.add_get('/photos', list_photos_handler)
+    app.router.add_get('/photos/{filename}', serve_photo_handler)
+    app.router.add_delete('/photos/{filename}', delete_photo_handler)
+    app.router.add_get('/gallery', gallery_client_handler)
     return app
 
 # ---------------------------------------------------------------------------

@@ -74,6 +74,10 @@ export const nicepipeURL = persistentAtom<string>(
   'ws://localhost:9091',
 )
 
+export function getBackendHttpUrl(): string {
+  return `http://${window.location.hostname}:8081`
+}
+
 export const burstModeEnabled = persistentAtom('burstModeEnabled', false, opts)
 export const burstCount = persistentAtom('burstCount', 3, opts)
 export const burstIntervalSec = persistentAtom<number>('burstIntervalSec', 1, opts)

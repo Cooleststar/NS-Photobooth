@@ -9,6 +9,7 @@ import {
   cameraInitialized,
   cameraSource,
   customRtspURL,
+  getBackendHttpUrl,
   router,
   selectedDevice,
 } from '../store'
@@ -40,7 +41,7 @@ export default function CameraSelect() {
 
     if (isHikvision) {
       try {
-        await fetch('http://localhost:8081/camera/configure', {
+        await fetch(`${getBackendHttpUrl()}/camera/configure`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

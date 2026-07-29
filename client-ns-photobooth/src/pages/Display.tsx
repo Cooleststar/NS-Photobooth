@@ -228,7 +228,7 @@ export default function Display({
     : camSource === 'custom' ? customUrl : ''
   const isRtspMode = !!rtspUrlValue
   const wsStreamUrl = isRtspMode
-    ? `ws://localhost:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}&multi=${isMulti ? '1' : '0'}`
+    ? `ws://${window.location.hostname}:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}&multi=${isMulti ? '1' : '0'}`
     : ''
 
   // Auto-select the first available webcam if in webcam mode and none is selected

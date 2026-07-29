@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Photobooth Gallery</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #e5e7eb; /* gray-200 — matches QRPage fullscreen modal */
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+
+    /* ── Outer card — mirrors Modal fullscreen ───────────────────────────── */
+    #app {
+      background: white;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      padding: 20px;
+      overflow-y: auto;
+    }
+
+    h2 {
+      font-size: 1.875rem; /* text-3xl */
+      font-weight: 700;
+      text-align: center;
+      width: 100%;
+      color: #000;
+    }
+
+    /* ── Live pulse badge ─────────────────────────────────────────────────── */
+    #live-badge {
+      position: fixed;
+      top: 12px;
+      right: 16px;
+      font-size: 0.75rem;
+      color: #6b7280;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #live-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+    #live-dot.offline { background: #9ca3af; animation: none; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    /* ── Main row (thumbs + preview) ─────────────────────────────────────── */
+    #gallery-row {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    /* ── Thumbnail strip ─────────────────────────────────────────────────── */
+    #thumbs {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      max-height: 70vh;
+      padding: 4px;
+    }
+    #thumbs img {
+      width: 96px;      /* w-24 */
+      height: auto;
+      max-height: 160px; /* max-h-40 */
+      flex-shrink: 0;
+      object-fit: contain;
+      background: #f3f4f6; /* gray-100 */
+      border-radius: 2px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      opacity: 0.7;
+      transition: opacity 0.15s, border-color 0.15s;
+    }
+    #thumbs img:hover { opacity: 1; }
+    #thumbs img.active { border-color: #dc2626; opacity: 1; } /* red-600 */
+
+    /* ── Preview column ──────────────────────────────────────────────────── */
+    #preview-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* Frame that wraps the large photo — matches QRPage's frameColor div */
+    #photo-frame {
+      background-color: #e5e7eb;
+      padding: 12px;
+      border-radius: 2px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    #preview-img {
+      display: block;
+      max-width: min(560px, 70vw); /* max-w-xl */
+      max-height: 70vh;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      animation: fadein 250ms ease;
+    }
+    @keyframes fadein { from{opacity:0;transform:scale(.98)} to{opacity:1;transform:scale(1)} }
+
+    /* ── Info box — mirrors the "Saved offline" box in QRPage ───────────── */
+    #info-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      background: #f9fafb;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      border: 1px solid #e5e7eb;
+      min-width: 180px;
+    }
+    #capture-time {
+      font-size: 0.875rem;
+      color: #6b7280;
+      text-align: center;
+    }
+
+    /* ── Action buttons ──────────────────────────────────────────────────── */
+    #actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .btn {
+      padding: 8px 20px;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; pointer-events: none; }
+    .btn-download { background: #2563eb; color: #fff; }
+    .btn-download:hover { background: #1d4ed8; }
+    .btn-delete  { background: #b91c1c; color: #fff; font-size: 1.2rem; padding: 8px 14px; }
+    .btn-delete:hover  { background: #7f1d1d; }
+
+    /* ── Empty / error / loading states ─────────────────────────────────── */
+    .center-msg {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: #6b7280;
+      font-size: 1rem;
+      text-align: center;
+      padding: 40px;
+    }
+    .center-msg.error { color: #ef4444; }
+    .retry-btn {
+      margin-top: 8px;
+      padding: 8px 20px;
+      background: #374151;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .retry-btn:hover { background: #4b5563; }
+  </style>
+</head>
+<body>
+  <div id="live-badge">
+    <span id="live-dot" class="offline"></span>
+    <span id="live-label">Connecting…</span>
+  </div>
+
+  <div id="app">
+    <h2>Get your picture here!</h2>
+    <div id="content" class="center-msg"><p>Loading…</p></div>
+  </div>
+
+  <script>
+    const API = window.location.origin   // same host:port as this page
+
+    let photos = []
+    let selected = 0
+
+    // ── Fetch & poll ──────────────────────────────────────────────────────
+    async function fetchPhotos() {
+      try {
+        const res = await fetch(`${API}/photos`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        setLive(true)
+        const prevLen = photos.length
+        photos = data
+        if (photos.length === 0) {
+          renderEmpty()
+        } else {
+          if (photos.length > prevLen) selected = 0   // jump to newest
+          renderGallery()
+        }
+      } catch (e) {
+        setLive(false)
+        renderError(e.message)
+      }
+    }
+
+    function setLive(live) {
+      document.getElementById('live-dot').className = live ? '' : 'offline'
+      document.getElementById('live-label').textContent = live ? 'Live' : 'Offline'
+    }
+
+    setInterval(fetchPhotos, 5000)
+    fetchPhotos()
+
+    // ── Render states ─────────────────────────────────────────────────────
+    function renderEmpty() {
+      document.getElementById('content').innerHTML =
+        '<p>No photos yet.</p><p style="font-size:0.8rem">Photos will appear here after they are taken.</p>'
+      document.getElementById('content').className = 'center-msg'
+    }
+
+    function renderError(msg) {
+      document.getElementById('content').innerHTML =
+        `<p>Cannot reach gallery server</p><p style="font-size:0.8rem">${msg}</p><button class="retry-btn" onclick="fetchPhotos()">Retry</button>`
+      document.getElementById('content').className = 'center-msg error'
+    }
+
+    function renderGallery() {
+      const content = document.getElementById('content')
+      if (!document.getElementById('gallery-row')) {
+        content.className = ''
+        content.innerHTML = `
+          <div id="gallery-row">
+            <div id="thumbs"></div>
+            <div id="preview-col">
+              <div id="photo-frame">
+                <img id="preview-img" src="" alt="photo" />
+              </div>
+              <div id="info-box">
+                <p id="capture-time"></p>
+                <div id="actions">
+                  <a class="btn btn-download" id="dl-btn" href="" download="">Download</a>
+                  <button class="btn btn-delete" id="del-btn" onclick="deleteSelected()">Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>`
+      }
+      syncThumbs()
+      syncPreview()
+    }
+
+    function syncThumbs() {
+      const container = document.getElementById('thumbs')
+      // Reconcile: add/remove thumbs without full re-render to avoid flicker
+      const existing = Array.from(container.children)
+      photos.forEach((p, i) => {
+        let img = existing[i]
+        if (!img) {
+          img = document.createElement('img')
+          img.onclick = (function(idx){ return () => { selected = idx; syncPreview(); syncThumbActive() } })(i)
+          container.appendChild(img)
+        }
+        const url = `${API}/photos/${encodeURIComponent(p.filename)}`
+        if (img.dataset.filename !== p.filename) {
+          img.src = url
+          img.dataset.filename = p.filename
+        }
+        img.className = i === selected ? 'active' : ''
+      })
+      // Remove extra thumbs if photos were deleted
+      while (container.children.length > photos.length) {
+        container.removeChild(container.lastChild)
+      }
+    }
+
+    function syncThumbActive() {
+      Array.from(document.getElementById('thumbs').children).forEach((img, i) => {
+        img.className = i === selected ? 'active' : ''
+      })
+    }
+
+    function syncPreview() {
+      const p = photos[selected]
+      if (!p) return
+      const url = `${API}/photos/${encodeURIComponent(p.filename)}`
+      const prev = document.getElementById('preview-img')
+      if (prev.dataset.src !== url) {
+        prev.src = url
+        prev.dataset.src = url
+        // Re-trigger fade animation
+        prev.style.animation = 'none'
+        void prev.offsetWidth
+        prev.style.animation = ''
+      }
+      document.getElementById('capture-time').textContent =
+        new Date(p.mtime * 1000).toLocaleString()
+      const dlBtn = document.getElementById('dl-btn')
+      dlBtn.href = url
+      dlBtn.download = p.filename
+    }
+
+    // ── Delete ────────────────────────────────────────────────────────────
+    async function deleteSelected() {
+      const p = photos[selected]
+      if (!p) return
+      const btn = document.getElementById('del-btn')
+      btn.disabled = true
+      btn.textContent = '…'
+      try {
+        const res = await fetch(`${API}/photos/${encodeURIComponent(p.filename)}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        photos.splice(selected, 1)
+        if (selected >= photos.length) selected = Math.max(0, photos.length - 1)
+        if (photos.length === 0) {
+          document.getElementById('content').innerHTML = ''
+          document.getElementById('content').className = ''
+          renderEmpty()
+        } else {
+          syncThumbs()
+          syncPreview()
+        }
+      } catch(e) {
+        alert('Delete failed: ' + e.message)
+      } finally {
+        btn.disabled = false
+        btn.textContent = 'Delete'
+      }
+    }
+  </script>
+</body>
+</html>
