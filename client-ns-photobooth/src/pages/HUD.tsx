@@ -180,7 +180,7 @@ export default function HUD({ photographerRef }: HUDProps) {
             fetch(`${getBackendHttpUrl()}/save`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: data, url, timestamp }),
+              body: JSON.stringify({ image: data, url, timestamp, stripPhotos: stripGroups[i] }),
             }).catch(() => {})
           }
           setState('ready')
@@ -204,7 +204,7 @@ export default function HUD({ photographerRef }: HUDProps) {
         fetch(`${getBackendHttpUrl()}/save`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: data, url: '', timestamp }),
+          body: JSON.stringify({ image: data, url: '', timestamp, stripPhotos: stripGroups[i] }),
         }).catch(() => {})
       }
       setState('ready')

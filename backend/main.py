@@ -583,7 +583,7 @@ def stop_rtsp_reader():
 
 _CORS = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Cache-Control': 'no-cache',
 }
@@ -702,6 +702,13 @@ async def save_photo_handler(request: web.Request) -> web.Response:
         meta_path = filepath + '.json'
         with open(meta_path, 'w') as f:
             json.dump({'url': share_url, 'timestamp': pic_timestamp}, f)
+
+        # Save raw strip photos separately (large; only needed for recoloring)
+        strip_photos = data.get('stripPhotos', [])
+        if strip_photos:
+            strips_path = filepath + '.strips.json'
+            with open(strips_path, 'w') as f:
+                json.dump({'stripPhotos': strip_photos}, f)
 
         log.info(f"Photo saved: {filepath}")
         return web.Response(text=filepath, headers=_CORS)
@@ -845,7 +852,44 @@ async def delete_photo_handler(request: web.Request) -> web.Response:
     meta_path = pathlib.Path(str(filepath) + '.json')
     if meta_path.exists():
         meta_path.unlink()
+    strips_path = pathlib.Path(str(filepath) + '.strips.json')
+    if strips_path.exists():
+        strips_path.unlink()
     return web.Response(text='deleted', headers=_CORS)
+
+
+async def fetch_strips_handler(request: web.Request) -> web.Response:
+    filename = request.match_info['filename']
+    filepath = pathlib.Path('./photos') / filename
+    strips_path = pathlib.Path(str(filepath) + '.strips.json')
+    if not strips_path.exists():
+        return web.json_response({'stripPhotos': []}, headers=_CORS)
+    try:
+        return web.json_response(json.loads(strips_path.read_text()), headers=_CORS)
+    except Exception as e:
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
+async def replace_photo_handler(request: web.Request) -> web.Response:
+    filename = request.match_info['filename']
+    filepath = pathlib.Path('./photos') / filename
+    if not filepath.exists() or not filepath.is_file():
+        return web.Response(status=404, headers=_CORS)
+    try:
+        data = await request.json()
+        b64img: str = data.get('image', '')
+        if not b64img:
+            return web.Response(status=400, text='Missing image', headers=_CORS)
+        if ',' in b64img:
+            _, b64data = b64img.split(',', 1)
+        else:
+            b64data = b64img
+        filepath.write_bytes(base64.b64decode(b64data))
+        log.info(f"Photo replaced: {filepath}")
+        return web.json_response({'ok': True}, headers=_CORS)
+    except Exception as e:
+        log.error(f"Replace photo error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
 
 
 def make_http_app() -> web.Application:
@@ -858,7 +902,9 @@ def make_http_app() -> web.Application:
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
+    app.router.add_put('/photos/{filename}', replace_photo_handler)
     app.router.add_delete('/photos/{filename}', delete_photo_handler)
+    app.router.add_get('/photos/{filename}/strips', fetch_strips_handler)
     app.router.add_get('/gallery', gallery_client_handler)
     return app
 

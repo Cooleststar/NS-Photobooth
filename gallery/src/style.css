@@ -148,10 +148,25 @@ body {
 }
 
 .photo-frame {
+  position: relative;
   background: #e5e7eb;
   padding: 12px;
   border-radius: 2px;
   box-shadow: 0 4px 16px rgba(0,0,0,.15);
+}
+
+.recoloring-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  color: #374151;
+  font-weight: 500;
+  z-index: 2;
+  border-radius: 2px;
 }
 .preview-img {
   display: block;
@@ -258,7 +273,8 @@ body {
   cursor: pointer;
   transition: transform 0.1s, box-shadow 0.1s;
 }
-.swatch:hover { transform: scale(1.1); }
+.swatch:hover:not(:disabled) { transform: scale(1.1); }
+.swatch:disabled { opacity: 0.4; pointer-events: none; }
 .swatch.active { box-shadow: 0 0 0 2px #6b7280, 0 0 0 4px white; }
 
 /* ── State messages ─────────────────────────────────────────────────────── */
