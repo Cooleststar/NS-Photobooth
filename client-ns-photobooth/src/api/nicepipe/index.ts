@@ -22,6 +22,8 @@ export type Analysis = {
     mask?: string
     pose?: NormalizedLandmarkList
   }
+  /** Real 33-point MediaPipe pose used for debug skeleton overlay */
+  mp_debug_pose?: NormalizedLandmarkList
   kp?: PropDetection[]
   mmpose?: {
     [id: number]: PoseKeypoint[]

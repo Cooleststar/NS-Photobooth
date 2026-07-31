@@ -16,7 +16,7 @@ const KF_PARAMS = { R: 0.02, Q: 1.5 }
 const DRONE_SIZE_FACTOR = 0.22
 const BOB_SPEED = 2.5
 const BOB_AMPLITUDE_FACTOR = 0.014
-const PALM_HOLD_TIME = 0.6
+const PALM_HOLD_TIME = 0.08
 
 interface FeedBounds { left: number; right: number; top: number; bottom: number }
 
@@ -28,29 +28,38 @@ function clampPos(x: number, y: number, size: number, b: FeedBounds) {
   }
 }
 
-// Returns the wrist pixel position of the nth palm-up hand (sorted left-to-right
-// in screen space after mirroring).  handIndex 0 = leftmost, 1 = rightmost.
-function getPalmUpWrist(
+// Assign palm-up hand screen positions to drone slots by proximity.
+// Each slot claims the nearest unclaimed hand, so drones stick to the
+// hand they are already near rather than swapping when sort order jitters.
+function assignHandsToDrones(
   hands: HandData[],
-  handIndex: number,
+  trackedPositions: Array<{ x: number; y: number }>,
   height: number,
   width: number,
-): { x: number; y: number } | undefined {
-  const palmUpHands = hands.filter(h => h.palmUp)
-  if (palmUpHands.length === 0) return undefined
-  // Sort by mirrored x so index 0 is always the leftmost on screen
-  palmUpHands.sort((a, b) => a.x[0] - b.x[0])
-  const hand = palmUpHands[handIndex]
-  if (!hand) return undefined
-  return {
-    x: (1 - hand.x[0]) * width,  // mirror x to match flipped canvas
-    y: hand.y[0] * height,
+): Array<{ x: number; y: number } | undefined> {
+  const available = hands
+    .filter(h => h.palmUp)
+    .map(h => ({ x: (1 - h.x[0]) * width, y: h.y[0] * height }))
+
+  const result: Array<{ x: number; y: number } | undefined> = trackedPositions.map(() => undefined)
+  const claimed = new Set<number>()
+
+  for (let i = 0; i < trackedPositions.length; i++) {
+    const pos = trackedPositions[i]
+    let bestDist = Infinity
+    let bestIdx = -1
+    for (let j = 0; j < available.length; j++) {
+      if (claimed.has(j)) continue
+      const d = Math.hypot(available[j].x - pos.x, available[j].y - pos.y)
+      if (d < bestDist) { bestDist = d; bestIdx = j }
+    }
+    if (bestIdx >= 0) { result[i] = available[bestIdx]; claimed.add(bestIdx) }
   }
+  return result
 }
 
 async function createHandDrone(
   app: PIXI.Application,
-  handIndex: number,
   droneSize: number,
   hoverOffset: number,
   bobAmplitude: number,
@@ -84,9 +93,10 @@ async function createHandDrone(
   let palmHoldTimer = 0
   const animManager = new AnimStateManager()
 
-  const update = (hands: HandData[]) => {
-    const rawWrist = getPalmUpWrist(hands, handIndex, height, width)
+  // Expose tracked position so the parent can use it for proximity-based assignment
+  const getTrackedPos = () => ({ x: wristX, y: wristY })
 
+  const update = (rawWrist: { x: number; y: number } | undefined) => {
     if (rawWrist) {
       palmHoldTimer = PALM_HOLD_TIME
       wristX = kf.x.filter(rawWrist.x)
@@ -132,11 +142,8 @@ async function createHandDrone(
       }
 
       case 'lost': {
-        bobTime += ticker.deltaMS / 1000
-        const bob = Math.sin(bobTime * BOB_SPEED) * bobAmplitude
-        const tp = clampPos(wristX, targetY + bob, droneSize, bounds)
-        container.position.set(tp.x, tp.y)
-        if (time >= ANIM.RETRACK) animManager.transition()
+        // Transition out immediately — no re-track grace period for the drone
+        animManager.transition()
         break
       }
 
@@ -152,7 +159,7 @@ async function createHandDrone(
     animManager.update(ticker.deltaMS / 1000)
   }
 
-  return [container, update] as const
+  return [container, update, getTrackedPos] as const
 }
 
 export async function createDroneAnim(
@@ -172,17 +179,17 @@ export async function createDroneAnim(
   const hoverOffset = droneSize
   const bobAmplitude = height * BOB_AMPLITUDE_FACTOR
 
-  // Two drone slots: index 0 = first detected palm-up hand, index 1 = second
-  const [container0, update0] = await createHandDrone(app, 0, droneSize, hoverOffset, bobAmplitude, bounds)
-  const [container1, update1] = await createHandDrone(app, 1, droneSize, hoverOffset, bobAmplitude, bounds)
+  const [container0, update0, getPos0] = await createHandDrone(app, droneSize, hoverOffset, bobAmplitude, bounds)
+  const [container1, update1, getPos1] = await createHandDrone(app, droneSize, hoverOffset, bobAmplitude, bounds)
 
   const parentContainer = new PIXI.Container()
   parentContainer.addChild(container0)
   parentContainer.addChild(container1)
 
   const update = (hands: HandData[]) => {
-    update0(hands)
-    update1(hands)
+    const [wrist0, wrist1] = assignHandsToDrones(hands, [getPos0(), getPos1()], height, width)
+    update0(wrist0)
+    update1(wrist1)
   }
 
   return [parentContainer, update] as const

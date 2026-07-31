@@ -118,6 +118,7 @@ function createReceivingCtx(
       if (imgWidth === 0 || imgHeight === 0) return
 
       const fps = measureFPS()
+      ctx.clearRect(0, 0, width, height)
       ctx.save()
       ctx.translate(width, 0)
       ctx.scale(-1, 1)
@@ -181,7 +182,15 @@ function createReceivingCtx(
       })
       dataRef.current.kp = propDets
 
-      if (debugEnabled.get()) drawDebug(ctx, pose, propDets, fps)
+      // For debug, prefer real 33-pt MediaPipe pose (better head) over YOLO
+      const rawDebugPose = dataRef.current.mp_debug_pose
+      const debugPose = rawDebugPose
+        ? rawDebugPose.map((p) => {
+            const [dx, dy] = remapPoint(p.x, p.y, width / height, imgWidth / imgHeight)
+            return { ...p, x: dx, y: dy }
+          })
+        : pose
+      if (debugEnabled.get()) drawDebug(ctx, debugPose, propDets, fps)
     },
   ] as const
 }

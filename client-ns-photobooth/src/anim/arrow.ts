@@ -32,7 +32,8 @@ export async function createArrowPointer(app: PIXI.Application) {
     ;({ x, y, size } = kfilter({
       x: nose.x,
       y: nose.y,
-      size: Math.abs(pose[8].x - pose[7].x),
+      // shoulder width (indices 11 & 12 in MP-33) is far more stable than ear distance
+      size: Math.abs(pose[12].x - pose[11].x),
     }))
 
     arrowSprite.width = arrowSprite.height = size * width

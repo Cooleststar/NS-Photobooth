@@ -5,6 +5,7 @@
 import { useNiceROSState } from 'nice-ros-react'
 import { AnyTopicMap, MSG } from 'nice-ros-sdk'
 import { MutableRefObject, useEffect } from 'react'
+import { NormalizedLandmark } from '@mediapipe/drawing_utils'
 import { Analysis, HandData, PoseKeypoint } from './nicepipe'
 import { Point } from './nicepipe/propDetection'
 
@@ -29,9 +30,10 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
 
   useEffect(() => {
     const unsub1 = niceROS.subscribeTopic('/pose_out', (msg: any) => {
-      const { poses, hands } = msg as {
+      const { poses, hands, mp_pose } = msg as {
         poses: { x: number[]; y: number[]; z: number[]; scores: number[]; track: { id: number } }[]
         hands?: { x: number[]; y: number[]; z: number[]; label: string; palm_up: boolean }[]
+        mp_pose?: { x: number[]; y: number[]; z: number[]; scores: number[] } | null
       }
       dataRef.current.mmpose = Object.fromEntries(
         poses.map(({ x, y, z, scores, track }) => [
@@ -44,6 +46,11 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
           ]),
         ]),
       )
+      dataRef.current.mp_debug_pose = mp_pose
+        ? mp_pose.scores.map<NormalizedLandmark>((s, i) => ({
+            x: mp_pose.x[i], y: mp_pose.y[i], z: mp_pose.z[i], visibility: s,
+          }))
+        : undefined
       dataRef.current.hands = (hands ?? []).map<HandData>(h => ({
         x: h.x,
         y: h.y,

@@ -20,11 +20,19 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import unquote
+import torch
 import cv2
 import numpy as np
 import websockets
 from aiohttp import web
 from ultralytics import YOLO
+from PIL import Image as PILImage
+
+try:
+    from transformers import AutoProcessor, VitPoseForPoseEstimation
+    _transformers_available = True
+except ImportError:
+    _transformers_available = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -69,6 +77,75 @@ except Exception as _e:
     log.warning("MediaPipe Hands unavailable — drone palm-up detection disabled: %s", _e)
 
 
+# ---------------------------------------------------------------------------
+# MediaPipe Pose — full 33-keypoint body + face landmarks (for debug overlay)
+# Runs in a background worker (same pattern as ViTPose++) so it never adds
+# latency to the main pose-detection pipeline.
+# ---------------------------------------------------------------------------
+_mp_pose_available  = False
+_mp_pose_lock       = threading.Lock()
+_pose_landmarker    = None
+_mp_pose_queue: queue.Queue = queue.Queue(maxsize=1)
+_mp_pose_cache: 'dict | None' = None   # latest result, updated by worker
+
+try:
+    _POSE_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'pose_landmarker.task')
+    _POSE_MODEL_URL  = (
+        'https://storage.googleapis.com/mediapipe-models/'
+        'pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
+    )
+    if not os.path.exists(_POSE_MODEL_PATH):
+        log.info("Downloading pose_landmarker.task (~29 MB) …")
+        urllib.request.urlretrieve(_POSE_MODEL_URL, _POSE_MODEL_PATH)
+        log.info("Pose landmarker model saved to %s", _POSE_MODEL_PATH)
+
+    _pose_landmarker = _mp_vision.PoseLandmarker.create_from_options(
+        _mp_vision.PoseLandmarkerOptions(
+            base_options=_mp_python.BaseOptions(model_asset_path=_POSE_MODEL_PATH),
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            running_mode=_mp_vision.RunningMode.IMAGE,
+        )
+    )
+    _mp_pose_available = True
+    log.info("MediaPipe PoseLandmarker initialised")
+
+except Exception as _e:
+    log.warning("MediaPipe Pose unavailable — debug skeleton head disabled: %s", _e)
+
+
+def _mp_pose_worker():
+    global _mp_pose_cache
+    while True:
+        try:
+            frame = _mp_pose_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=rgb)
+            with _mp_pose_lock:
+                result = _pose_landmarker.detect(mp_image)
+            if result.pose_landmarks:
+                lms = result.pose_landmarks[0]
+                _mp_pose_cache = {
+                    "x":      [lm.x          for lm in lms],
+                    "y":      [lm.y          for lm in lms],
+                    "z":      [lm.z          for lm in lms],
+                    "scores": [lm.visibility for lm in lms],
+                }
+            else:
+                _mp_pose_cache = None
+        except Exception as _e:
+            log.debug("MP pose worker error: %s", _e)
+
+
+if _mp_pose_available:
+    threading.Thread(target=_mp_pose_worker, daemon=True).start()
+
+
 def run_hand_detection(frame: np.ndarray) -> list:
     """Run MediaPipe HandLandmarker on a BGR frame. Returns a list of hand dicts."""
     if not _mp_hands_available or _hand_landmarker is None:
@@ -83,9 +160,29 @@ def run_hand_detection(frame: np.ndarray) -> list:
         y = [float(lm.y) for lm in hand_lms]
         z = [float(lm.z) for lm in hand_lms]
         label = result.handedness[i][0].category_name  # "Left" or "Right"
-        # Palm-up: MCP knuckles avg-y (5,9,13,17) above wrist (0) in image space
+
+        # Palm-up = palm facing ceiling (like a drone landing pad).
+        # Two conditions must both be true:
+        #
+        # 1. Hand is upright: avg MCP knuckle y must be above wrist y in image space
+        #    (y increases downward, so "above" = smaller value).
         mcp_y = (hand_lms[5].y + hand_lms[9].y + hand_lms[13].y + hand_lms[17].y) / 4
-        palm_up = bool(mcp_y < hand_lms[0].y)
+        hand_upright = mcp_y < hand_lms[0].y
+
+        # 2. Palm faces ceiling: the thumb (landmark 2, MCP) must be on the radial side.
+        #    The backend receives a raw non-mirrored RTSP frame, so MediaPipe's handedness
+        #    labels are anatomically reversed ("Left" = person's right, "Right" = person's left).
+        #    For person's right hand (label "Left") palm-up: thumb is further right (higher x).
+        #    For person's left  hand (label "Right") palm-up: thumb is further left  (lower x).
+        #    If the drone fires on the wrong orientation, swap the > and < below.
+        thumb_x = hand_lms[2].x
+        pinky_x = hand_lms[17].x
+        if label == 'Left':   # person's anatomical right hand in non-mirrored RTSP
+            palm_facing_up = thumb_x < pinky_x
+        else:                 # 'Right' = person's anatomical left hand
+            palm_facing_up = thumb_x > pinky_x
+
+        palm_up = bool(hand_upright and palm_facing_up)
         hands.append({
             "x":       x,
             "y":       y,
@@ -105,6 +202,86 @@ def run_hand_detection(frame: np.ndarray) -> list:
 _yolo = YOLO('yolo26n-pose.pt')
 _yolo_lock = threading.Lock()
 _multi_target: bool = False
+
+# ---------------------------------------------------------------------------
+# ViTPose++-Huge — async keypoint refinement running in a background thread
+#
+# Architecture: YOLO detection stays on the fast path (returns immediately).
+# A size-1 queue feeds the ViTPose++ worker; results are cached per track ID
+# with a 2 s TTL. Each YOLO result merges the cached ViTPose++ keypoints when
+# available, falling back to YOLO's own keypoints — so latency is unchanged
+# whether ViTPose++ is loaded or not.
+# ---------------------------------------------------------------------------
+_vitpose_model = None
+_vitpose_processor = None
+_vitpose_lock = threading.Lock()
+_vitpose_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# queue(1): drops frames when worker is busy so we always process the latest
+_vitpose_queue: queue.Queue = queue.Queue(maxsize=1)
+# {track_id: (timestamp, kps_xyn (17,2), kps_scores (17,))}
+_vitpose_cache: dict = {}
+_VITPOSE_CACHE_TTL = 2.0   # seconds before a cached result is considered stale
+
+if _transformers_available:
+    try:
+        log.info("Loading ViTPose++-Huge (downloads ~600 MB on first run)…")
+        _vitpose_processor = AutoProcessor.from_pretrained("usyd-community/vitpose-plus-huge")
+        _vitpose_model = VitPoseForPoseEstimation.from_pretrained(
+            "usyd-community/vitpose-plus-huge",
+            torch_dtype=torch.float16 if _vitpose_device == 'cuda' else torch.float32,
+        ).to(_vitpose_device).eval()
+        log.info("ViTPose++-Huge loaded on %s", _vitpose_device)
+    except Exception as _e:
+        log.warning("ViTPose++ unavailable — falling back to YOLO keypoints: %s", _e)
+else:
+    log.warning("transformers not installed — pip install transformers to enable ViTPose++")
+
+
+def _vitpose_worker():
+    """Background thread: dequeues frames, runs ViTPose++, updates cache."""
+    while True:
+        try:
+            frame, boxes_xyxy, ids = _vitpose_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        try:
+            rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img  = PILImage.fromarray(rgb)
+            boxes_list = boxes_xyxy.tolist()
+
+            inputs = _vitpose_processor(
+                images=pil_img, boxes=[boxes_list], return_tensors="pt",
+            )
+            pixel_values = inputs["pixel_values"].to(_vitpose_device)
+            if _vitpose_device == "cuda":
+                pixel_values = pixel_values.half()
+            dataset_index = torch.zeros(
+                len(boxes_list), dtype=torch.long, device=_vitpose_device,
+            )
+
+            with torch.no_grad(), _vitpose_lock:
+                outputs = _vitpose_model(
+                    pixel_values=pixel_values, dataset_index=dataset_index,
+                )
+
+            h, w = frame.shape[:2]
+            now = time.time()
+            for i, person in enumerate(_vitpose_processor.post_process_pose_estimation(
+                outputs, boxes=[boxes_list],
+            )[0]):
+                track_id = ids[i] if i < len(ids) else i
+                kps_xy  = person["keypoints"].cpu().float().numpy()   # (17, 2) pixels
+                kps_sc  = person["scores"].cpu().float().numpy()      # (17,)
+                kps_xyn = kps_xy / np.array([w, h], dtype=np.float32)
+                _vitpose_cache[track_id] = (now, kps_xyn, kps_sc)
+        except Exception as _e:
+            log.warning("ViTPose++ worker error: %s", _e)
+
+
+if _vitpose_model is not None:
+    threading.Thread(target=_vitpose_worker, daemon=True).start()
+    log.info("ViTPose++ background worker started")
 
 # Maps COCO-17 keypoint index → MediaPipe-33 landmark index.
 # Landmarks that have no COCO equivalent are left at x=y=0, score=0 (not visible).
@@ -142,15 +319,21 @@ def _to_mp33(xyn, conf):
 
 
 def run_pose_detection(frame: np.ndarray) -> dict:
-    """Run YOLOv8-Pose on a BGR frame. Always returns a pose msg dict."""
+    """Detect poses on a BGR frame with zero added latency from ViTPose++.
+
+    YOLO26-Pose runs synchronously for fast tracking + bounding boxes.
+    ViTPose++ runs in a background worker thread; its cached keypoints are
+    merged in when fresh (< 2 s old) — otherwise YOLO keypoints are used.
+    The function always returns at YOLO speed regardless of ViTPose++ load.
+    """
     with _yolo_lock:
         results = _yolo.track(
             frame,
-            persist=True,   # maintains stable track IDs across frames
+            persist=True,
             verbose=False,
             conf=0.4,
-            iou=0.45,       # tighter NMS to prevent double-detecting one person
-            imgsz=640,      # lower to 320 for faster inference on weak hardware
+            iou=0.45,
+            imgsz=640,
         )
 
     if not results:
@@ -160,35 +343,58 @@ def run_pose_detection(frame: np.ndarray) -> dict:
     if r.keypoints is None or len(r.keypoints) == 0:
         return {"poses": []}
 
-    kps_xyn  = r.keypoints.xyn.cpu().numpy()                          # (N, 17, 2)
-    kps_conf = (r.keypoints.conf.cpu().numpy()                        # (N, 17)
+    kps_xyn  = r.keypoints.xyn.cpu().numpy()     # (N, 17, 2) normalised
+    kps_conf = (r.keypoints.conf.cpu().numpy()
                 if r.keypoints.conf is not None else None)
     ids = (r.boxes.id.cpu().numpy().astype(int).tolist()
            if r.boxes.id is not None else list(range(len(kps_xyn))))
 
-    # In single-target mode keep only the highest-confidence detection
+    # Single-target: keep only highest-confidence detection
     if not _multi_target and len(kps_xyn) > 1:
         box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
                     else np.ones(len(kps_xyn)))
-        best = int(np.argmax(box_conf))
+        best     = int(np.argmax(box_conf))
         kps_xyn  = kps_xyn[best:best + 1]
         kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
         ids      = [ids[best]]
 
+    # Submit frame to ViTPose++ worker (non-blocking: drops if busy)
+    if _vitpose_model is not None:
+        boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+        if not _multi_target and len(boxes_xyxy) > 1:
+            boxes_xyxy = boxes_xyxy[best:best + 1]
+        try:
+            _vitpose_queue.put_nowait((frame.copy(), boxes_xyxy, ids[:]))
+        except queue.Full:
+            pass  # worker still processing previous frame — skip, no latency added
+
+    # Build pose list — merge ViTPose++ cached keypoints when fresh
+    now = time.time()
     poses = []
     for i in range(len(kps_xyn)):
-        conf_row = kps_conf[i] if kps_conf is not None else None
-        x, y, scores = _to_mp33(kps_xyn[i], conf_row)
+        track_id = int(ids[i])
+        cached   = _vitpose_cache.get(track_id)
+        if cached and (now - cached[0]) < _VITPOSE_CACHE_TTL:
+            x, y, scores = _to_mp33(cached[1], cached[2])   # ViTPose++ keypoints
+        else:
+            conf_row = kps_conf[i] if kps_conf is not None else None
+            x, y, scores = _to_mp33(kps_xyn[i], conf_row)  # YOLO keypoints
         poses.append({
-            "x":      x,
-            "y":      y,
-            "z":      [0.0] * 33,
+            "x": x, "y": y, "z": [0.0] * 33,
             "scores": scores,
-            "track":  {"id": int(ids[i])},
+            "track": {"id": track_id},
         })
 
     hands = run_hand_detection(frame)
-    return {"poses": poses, "hands": hands}
+
+    # Submit frame to MP Pose worker (non-blocking: drops if busy, no latency)
+    if _mp_pose_available:
+        try:
+            _mp_pose_queue.put_nowait(frame.copy())
+        except queue.Full:
+            pass
+
+    return {"poses": poses, "hands": hands, "mp_pose": _mp_pose_cache}
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
