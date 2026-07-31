@@ -43,6 +43,8 @@ log = logging.getLogger(__name__)
 _mp_hands_available = False
 _mp_hands_lock = threading.Lock()
 _hand_landmarker = None
+_mp_hands_queue: queue.Queue = queue.Queue(maxsize=1)
+_mp_hands_cache: list = []   # latest result, updated by worker
 
 try:
     import mediapipe as _mp
@@ -75,6 +77,43 @@ try:
 
 except Exception as _e:
     log.warning("MediaPipe Hands unavailable — drone palm-up detection disabled: %s", _e)
+
+
+def _mp_hands_worker():
+    global _mp_hands_cache
+    while True:
+        try:
+            frame = _mp_hands_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=rgb)
+            with _mp_hands_lock:
+                result = _hand_landmarker.detect(mp_image)
+            hands = []
+            for i, hand_lms in enumerate(result.hand_landmarks):
+                x = [float(lm.x) for lm in hand_lms]
+                y = [float(lm.y) for lm in hand_lms]
+                z = [float(lm.z) for lm in hand_lms]
+                label = result.handedness[i][0].category_name
+                mcp_y = (hand_lms[5].y + hand_lms[9].y + hand_lms[13].y + hand_lms[17].y) / 4
+                hand_upright = mcp_y < hand_lms[0].y
+                thumb_x = hand_lms[2].x
+                pinky_x = hand_lms[17].x
+                if label == 'Left':
+                    palm_facing_up = thumb_x < pinky_x
+                else:
+                    palm_facing_up = thumb_x > pinky_x
+                palm_up = bool(hand_upright and palm_facing_up)
+                hands.append({"x": x, "y": y, "z": z, "label": label, "palm_up": palm_up})
+            _mp_hands_cache = hands
+        except Exception as _e:
+            log.debug("MP hands worker error: %s", _e)
+
+
+if _mp_hands_available:
+    threading.Thread(target=_mp_hands_worker, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -146,51 +185,14 @@ if _mp_pose_available:
     threading.Thread(target=_mp_pose_worker, daemon=True).start()
 
 
-def run_hand_detection(frame: np.ndarray) -> list:
-    """Run MediaPipe HandLandmarker on a BGR frame. Returns a list of hand dicts."""
-    if not _mp_hands_available or _hand_landmarker is None:
-        return []
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=rgb)
-    with _mp_hands_lock:
-        result = _hand_landmarker.detect(mp_image)
-    hands = []
-    for i, hand_lms in enumerate(result.hand_landmarks):
-        x = [float(lm.x) for lm in hand_lms]
-        y = [float(lm.y) for lm in hand_lms]
-        z = [float(lm.z) for lm in hand_lms]
-        label = result.handedness[i][0].category_name  # "Left" or "Right"
-
-        # Palm-up = palm facing ceiling (like a drone landing pad).
-        # Two conditions must both be true:
-        #
-        # 1. Hand is upright: avg MCP knuckle y must be above wrist y in image space
-        #    (y increases downward, so "above" = smaller value).
-        mcp_y = (hand_lms[5].y + hand_lms[9].y + hand_lms[13].y + hand_lms[17].y) / 4
-        hand_upright = mcp_y < hand_lms[0].y
-
-        # 2. Palm faces ceiling: the thumb (landmark 2, MCP) must be on the radial side.
-        #    The backend receives a raw non-mirrored RTSP frame, so MediaPipe's handedness
-        #    labels are anatomically reversed ("Left" = person's right, "Right" = person's left).
-        #    For person's right hand (label "Left") palm-up: thumb is further right (higher x).
-        #    For person's left  hand (label "Right") palm-up: thumb is further left  (lower x).
-        #    If the drone fires on the wrong orientation, swap the > and < below.
-        thumb_x = hand_lms[2].x
-        pinky_x = hand_lms[17].x
-        if label == 'Left':   # person's anatomical right hand in non-mirrored RTSP
-            palm_facing_up = thumb_x < pinky_x
-        else:                 # 'Right' = person's anatomical left hand
-            palm_facing_up = thumb_x > pinky_x
-
-        palm_up = bool(hand_upright and palm_facing_up)
-        hands.append({
-            "x":       x,
-            "y":       y,
-            "z":       z,
-            "label":   label,
-            "palm_up": palm_up,
-        })
-    return hands
+def run_hand_detection(frame: np.ndarray):
+    """Submit frame to hand-detection worker (non-blocking) and return cached result."""
+    if _mp_hands_available:
+        try:
+            _mp_hands_queue.put_nowait(frame.copy())
+        except queue.Full:
+            pass
+    return _mp_hands_cache
 
 
 # ---------------------------------------------------------------------------
