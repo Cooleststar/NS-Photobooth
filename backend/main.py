@@ -116,75 +116,6 @@ if _mp_hands_available:
     threading.Thread(target=_mp_hands_worker, daemon=True).start()
 
 
-# ---------------------------------------------------------------------------
-# MediaPipe Pose — full 33-keypoint body + face landmarks (for debug overlay)
-# Runs in a background worker (same pattern as ViTPose++) so it never adds
-# latency to the main pose-detection pipeline.
-# ---------------------------------------------------------------------------
-_mp_pose_available  = False
-_mp_pose_lock       = threading.Lock()
-_pose_landmarker    = None
-_mp_pose_queue: queue.Queue = queue.Queue(maxsize=1)
-_mp_pose_cache: 'dict | None' = None   # latest result, updated by worker
-
-try:
-    _POSE_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'pose_landmarker.task')
-    _POSE_MODEL_URL  = (
-        'https://storage.googleapis.com/mediapipe-models/'
-        'pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
-    )
-    if not os.path.exists(_POSE_MODEL_PATH):
-        log.info("Downloading pose_landmarker.task (~29 MB) …")
-        urllib.request.urlretrieve(_POSE_MODEL_URL, _POSE_MODEL_PATH)
-        log.info("Pose landmarker model saved to %s", _POSE_MODEL_PATH)
-
-    _pose_landmarker = _mp_vision.PoseLandmarker.create_from_options(
-        _mp_vision.PoseLandmarkerOptions(
-            base_options=_mp_python.BaseOptions(model_asset_path=_POSE_MODEL_PATH),
-            num_poses=1,
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
-            running_mode=_mp_vision.RunningMode.IMAGE,
-        )
-    )
-    _mp_pose_available = True
-    log.info("MediaPipe PoseLandmarker initialised")
-
-except Exception as _e:
-    log.warning("MediaPipe Pose unavailable — debug skeleton head disabled: %s", _e)
-
-
-def _mp_pose_worker():
-    global _mp_pose_cache
-    while True:
-        try:
-            frame = _mp_pose_queue.get(timeout=1.0)
-        except queue.Empty:
-            continue
-        try:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=rgb)
-            with _mp_pose_lock:
-                result = _pose_landmarker.detect(mp_image)
-            if result.pose_landmarks:
-                lms = result.pose_landmarks[0]
-                _mp_pose_cache = {
-                    "x":      [lm.x          for lm in lms],
-                    "y":      [lm.y          for lm in lms],
-                    "z":      [lm.z          for lm in lms],
-                    "scores": [lm.visibility for lm in lms],
-                }
-            else:
-                _mp_pose_cache = None
-        except Exception as _e:
-            log.debug("MP pose worker error: %s", _e)
-
-
-if _mp_pose_available:
-    threading.Thread(target=_mp_pose_worker, daemon=True).start()
-
-
 def run_hand_detection(frame: np.ndarray):
     """Submit frame to hand-detection worker (non-blocking) and return cached result."""
     if _mp_hands_available:
@@ -211,9 +142,19 @@ _multi_target: bool = False
 # Architecture: YOLO detection stays on the fast path (returns immediately).
 # A size-1 queue feeds the ViTPose++ worker; results are cached per track ID
 # with a 2 s TTL. Each YOLO result merges the cached ViTPose++ keypoints when
-# available, falling back to YOLO's own keypoints — so latency is unchanged
-# whether ViTPose++ is loaded or not.
+# available, falling back to YOLO's own keypoints — this is what improves
+# arm/shoulder/wrist tracking precision over YOLO26n's nano-scale keypoints.
+#
+# CAUTION: "doesn't block the return value" is NOT the same as "free". This
+# is a ~630M-param transformer; without a CUDA GPU it runs on CPU and its
+# background thread competes for the same CPU cores as the main YOLO loop
+# every frame, which shows up as real added latency across the whole app.
+# So: auto-enabled when a CUDA GPU is available, auto-disabled otherwise.
+# Override either way with ENABLE_VITPOSE=1 or ENABLE_VITPOSE=0.
 # ---------------------------------------------------------------------------
+_ENABLE_VITPOSE = os.environ.get(
+    'ENABLE_VITPOSE', '1' if torch.cuda.is_available() else '0',
+) == '1'
 _vitpose_model = None
 _vitpose_processor = None
 _vitpose_lock = threading.Lock()
@@ -225,13 +166,21 @@ _vitpose_queue: queue.Queue = queue.Queue(maxsize=1)
 _vitpose_cache: dict = {}
 _VITPOSE_CACHE_TTL = 2.0   # seconds before a cached result is considered stale
 
-if _transformers_available:
+if not _ENABLE_VITPOSE:
+    log.info("ViTPose++ disabled — set ENABLE_VITPOSE=1 to re-enable (GPU recommended)")
+elif _transformers_available:
     try:
         log.info("Loading ViTPose++-Huge (downloads ~600 MB on first run)…")
         _vitpose_processor = AutoProcessor.from_pretrained("usyd-community/vitpose-plus-huge")
+        # NOTE: must stay float32 even on CUDA — transformers' own
+        # post_process_pose_estimation() runs scipy.ndimage.gaussian_filter
+        # on the raw heatmaps, which doesn't support float16 at all and
+        # crashes every call ("array type dtype('float16') not supported").
+        # The A5000 has plenty of VRAM (~2.5 GB for this model in fp32), so
+        # there's no real reason to fight for the fp16 memory/speed gain.
         _vitpose_model = VitPoseForPoseEstimation.from_pretrained(
             "usyd-community/vitpose-plus-huge",
-            torch_dtype=torch.float16 if _vitpose_device == 'cuda' else torch.float32,
+            torch_dtype=torch.float32,
         ).to(_vitpose_device).eval()
         log.info("ViTPose++-Huge loaded on %s", _vitpose_device)
     except Exception as _e:
@@ -256,8 +205,6 @@ def _vitpose_worker():
                 images=pil_img, boxes=[boxes_list], return_tensors="pt",
             )
             pixel_values = inputs["pixel_values"].to(_vitpose_device)
-            if _vitpose_device == "cuda":
-                pixel_values = pixel_values.half()
             dataset_index = torch.zeros(
                 len(boxes_list), dtype=torch.long, device=_vitpose_device,
             )
@@ -389,14 +336,7 @@ def run_pose_detection(frame: np.ndarray) -> dict:
 
     hands = run_hand_detection(frame)
 
-    # Submit frame to MP Pose worker (non-blocking: drops if busy, no latency)
-    if _mp_pose_available:
-        try:
-            _mp_pose_queue.put_nowait(frame.copy())
-        except queue.Full:
-            pass
-
-    return {"poses": poses, "hands": hands, "mp_pose": _mp_pose_cache}
+    return {"poses": poses, "hands": hands}
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
@@ -880,6 +820,39 @@ async def stop_stream_handler(request: web.Request) -> web.Response:
     return web.Response(text='RTSP reader stopped', headers=_CORS)
 
 
+def _write_photo_files(
+    b64img: str, directory: str, share_url: str, pic_timestamp: int, strip_photos: list,
+) -> str:
+    """Blocking disk I/O for save_photo_handler, run off the event loop thread
+    so a photo save doesn't stall every other in-flight request/WS message."""
+    if ',' in b64img:
+        header, b64data = b64img.split(',', 1)
+        ext = header.split('/')[1].split(';')[0]  # e.g. png, webp, jpeg
+    else:
+        b64data = b64img
+        ext = 'jpg'
+
+    pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    filepath = os.path.join(directory, f'photo_{timestamp}.{ext}')
+
+    with open(filepath, 'wb') as f:
+        f.write(base64.b64decode(b64data))
+
+    # Save sidecar metadata (Cloudinary URL, original timestamp)
+    meta_path = filepath + '.json'
+    with open(meta_path, 'w') as f:
+        json.dump({'url': share_url, 'timestamp': pic_timestamp}, f)
+
+    # Save raw strip photos separately (large; only needed for recoloring)
+    if strip_photos:
+        strips_path = filepath + '.strips.json'
+        with open(strips_path, 'w') as f:
+            json.dump({'stripPhotos': strip_photos}, f)
+
+    return filepath
+
+
 async def save_photo_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -887,36 +860,14 @@ async def save_photo_handler(request: web.Request) -> web.Response:
         directory: str = data.get('directory', './photos').strip()
         share_url: str = data.get('url', '')
         pic_timestamp: int = data.get('timestamp', 0)
+        strip_photos: list = data.get('stripPhotos', [])
 
         if not b64img:
             return web.Response(status=400, text='Missing image', headers=_CORS)
 
-        # Parse data URL: data:image/png;base64,<data>
-        if ',' in b64img:
-            header, b64data = b64img.split(',', 1)
-            ext = header.split('/')[1].split(';')[0]  # e.g. png, webp, jpeg
-        else:
-            b64data = b64img
-            ext = 'jpg'
-
-        pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        filepath = os.path.join(directory, f'photo_{timestamp}.{ext}')
-
-        with open(filepath, 'wb') as f:
-            f.write(base64.b64decode(b64data))
-
-        # Save sidecar metadata (Cloudinary URL, original timestamp)
-        meta_path = filepath + '.json'
-        with open(meta_path, 'w') as f:
-            json.dump({'url': share_url, 'timestamp': pic_timestamp}, f)
-
-        # Save raw strip photos separately (large; only needed for recoloring)
-        strip_photos = data.get('stripPhotos', [])
-        if strip_photos:
-            strips_path = filepath + '.strips.json'
-            with open(strips_path, 'w') as f:
-                json.dump({'stripPhotos': strip_photos}, f)
+        filepath = await asyncio.to_thread(
+            _write_photo_files, b64img, directory, share_url, pic_timestamp, strip_photos,
+        )
 
         log.info(f"Photo saved: {filepath}")
         return web.Response(text=filepath, headers=_CORS)
