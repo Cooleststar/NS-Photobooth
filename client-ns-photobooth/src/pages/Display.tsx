@@ -41,7 +41,7 @@ import {
   selectedGif,
 } from '../store'
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
@@ -52,6 +52,7 @@ const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 's
 // the backend via POST /detection_mode so it skips idle models per-frame
 // instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
+  none: 'none',
   owl: 'pose',
   bat: 'pose',
   globe: 'pose',
@@ -545,7 +546,7 @@ export default function Display({
             animSlots.push({ container, update })
           }
         }
-      } else {
+      } else if (gifOption !== 'none') {
         const animUrl = GIF_URLS[gifOption]
         const corners = await Promise.all(
           CORNER_POSITIONS.map((pos) =>
@@ -563,6 +564,7 @@ export default function Display({
         )
         cornerAnims.push(...corners)
       }
+      // gifOption === 'none': no animSlots, no cornerAnims — raw video feed only
 
       const arrowCount = isMulti ? MAX_PEOPLE : 1
       const [arrows, banner] = await Promise.all([

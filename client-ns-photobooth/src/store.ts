@@ -20,6 +20,7 @@ export const owlEnabled = persistentAtom('owlEnabled', true, opts)
 export const bannerEnabled = persistentAtom('bannerEnabled', true, opts)
 
 export const GIF_OPTIONS = {
+  none: 'No animation',
   owl: 'Owl',
   bat: 'Bat',
   globe: 'Globe',
