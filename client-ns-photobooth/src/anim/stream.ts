@@ -63,7 +63,7 @@ export function drawDebug(
   ctx: CanvasRenderingContext2D,
   pose: NormalizedLandmarkList,
   propDets: PropDetection[],
-  _fps: number,
+  fps: number,
 ) {
   const { height, width } = ctx.canvas
 
@@ -91,6 +91,23 @@ export function drawDebug(
   drawSkeleton(ctx, pose, width, height)
 
   ctx.restore()
+  ctx.save()
+
+  // FPS counter — drawn last, unflipped, so it always reads left-to-right
+  // regardless of the mirrored video underneath. Not gated on pose/props
+  // being present, since hand-only characters (e.g. drone) have no pose
+  // data at all and should still show FPS.
+  const fpsText = `${Math.round(fps)} FPS`
+  ctx.font = 'bold 28px monospace'
+  ctx.textBaseline = 'top'
+  const pad = 10
+  const metrics = ctx.measureText(fpsText)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
+  ctx.fillRect(pad - 6, pad - 4, metrics.width + 12, 36)
+  ctx.fillStyle = fps < 15 ? '#ff5555' : fps < 24 ? '#ffcc00' : '#55ff55'
+  ctx.fillText(fpsText, pad, pad)
+
+  ctx.restore()
 }
 /** adds bg as background to app & add ticker to update it */
 
@@ -103,6 +120,10 @@ export function attachStream2Pixi(
   bgTexture.height = height
   bgTexture.width = width
   bgTexture.position.set(0, 0)
+  // Mipmapping is on globally (pixi.ts), but this sprite is always rendered
+  // 1:1 against the canvas size — no real downscaling ever happens, so
+  // mipmaps give no benefit here, just wasted regeneration work every update().
+  bgTexture.texture.baseTexture.mipmap = PIXI.MIPMAP_MODES.OFF
   app.stage.addChild(bgTexture)
   app.ticker.add(() => bgTexture.texture.update())
 }

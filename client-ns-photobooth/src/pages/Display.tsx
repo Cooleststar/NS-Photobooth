@@ -27,6 +27,7 @@ import {
   bannerEnabled,
   camSize,
   debugEnabled,
+  getBackendHttpUrl,
   multiTarget,
   nicepipeURL,
   pointerEnabled,
@@ -41,6 +42,19 @@ import {
 
 const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone'>, string> = {
   laptop: laptopGif,
+}
+
+// Which backend model(s) each character actually needs — owl/bat/globe read
+// body pose only, drone reads hand landmarks only (ignores pose entirely),
+// laptop is a fixed-position fade prop that reads neither. Told to the
+// backend via POST /detection_mode so it skips idle models per-frame
+// instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
+const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none'> = {
+  owl: 'pose',
+  bat: 'pose',
+  globe: 'pose',
+  drone: 'hands',
+  laptop: 'none',
 }
 
 const MARGIN_X = 30 / 1920
@@ -249,6 +263,45 @@ export default function Display({
       if (cam) selectedDevice.set(cam.deviceId)
     })
   }, [camSource])
+
+  // Tell the backend which model(s) the current character needs, so it can
+  // skip idle ones (e.g. no YOLO/ViTPose while drone — hand-only — is active).
+  //
+  // Retries on failure: this effect fires as soon as Display mounts, but
+  // app.py starts the backend and frontend as concurrent processes with no
+  // readiness check, and backend model loading (YOLO/MediaPipe/ViTPose)
+  // takes several seconds. If this page loads first, the very first call
+  // here can hit a backend that isn't listening yet — without a retry, that
+  // silently leaves the backend stuck running the expensive default 'both'
+  // mode (full YOLO+ViTPose) until the user happens to switch characters,
+  // which is exactly what caused real, measurable GPU contention and lag
+  // during drone testing even though drone only ever needs MediaPipe Hands.
+  useEffect(() => {
+    let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    const mode = DETECTION_MODE_BY_GIF[gifOption] ?? 'both'
+
+    const send = () => {
+      fetch(`${getBackendHttpUrl()}/detection_mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        })
+        .catch((e) => {
+          console.warn('Failed to set detection mode, retrying in 2s:', e)
+          if (active) retryTimer = setTimeout(send, 2000)
+        })
+    }
+    send()
+
+    return () => {
+      active = false
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [gifOption])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return

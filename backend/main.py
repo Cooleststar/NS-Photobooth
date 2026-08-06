@@ -23,6 +23,7 @@ from urllib.parse import unquote
 import torch
 import cv2
 import numpy as np
+import requests
 import websockets
 from aiohttp import web
 from ultralytics import YOLO
@@ -36,6 +37,57 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Gesture diagnostic mode — opt-in (GESTURE_DEBUG=1), off by default so it
+# costs nothing in normal/production runs. When on, logs the raw geometric
+# values behind every palm-up classification (not just the final true/false)
+# plus a matching saved frame, so we can look at what the camera actually
+# saw next to what the heuristic concluded — this is how we get real
+# evidence instead of guessing why gesture detection misfires.
+#
+# Runs entirely inside the MediaPipe Hands background worker thread, which
+# already doesn't block the main detection loop, so this adds zero latency
+# to the live pipeline. Throttled to at most one write per _GESTURE_DEBUG_
+# _MIN_INTERVAL seconds, except state transitions (palm_up flipping), which
+# always get logged since those are the moments most worth reviewing.
+# ---------------------------------------------------------------------------
+_GESTURE_DEBUG = os.environ.get('GESTURE_DEBUG', '0') == '1'
+_GESTURE_DEBUG_DIR = pathlib.Path(__file__).parent / 'gesture_debug'
+_GESTURE_DEBUG_MIN_INTERVAL = 0.5  # seconds between routine (non-transition) samples
+_gesture_debug_last_write: float = 0.0
+_gesture_debug_last_palm_up: dict = {}  # label -> last logged palm_up bool, to detect flips
+
+if _GESTURE_DEBUG:
+    _GESTURE_DEBUG_DIR.mkdir(exist_ok=True)
+    log.info(f"Gesture debug mode ON — writing to {_GESTURE_DEBUG_DIR}")
+
+
+def _log_gesture_debug(records: list, frame: np.ndarray) -> None:
+    """Append one JSONL line per detected hand + save the frame, throttled.
+    `records` are raw geometric measurements, not just the final boolean,
+    so we can see *how close* a borderline case was, not just pass/fail."""
+    global _gesture_debug_last_write
+    now = time.time()
+    any_transition = any(
+        _gesture_debug_last_palm_up.get(r['label']) != r['palm_up'] for r in records
+    )
+    if not any_transition and (now - _gesture_debug_last_write) < _GESTURE_DEBUG_MIN_INTERVAL:
+        return
+    _gesture_debug_last_write = now
+    for r in records:
+        _gesture_debug_last_palm_up[r['label']] = r['palm_up']
+
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    try:
+        frame_name = f'{ts}.jpg'
+        cv2.imwrite(str(_GESTURE_DEBUG_DIR / frame_name), frame)
+        with open(_GESTURE_DEBUG_DIR / 'log.jsonl', 'a') as f:
+            for r in records:
+                f.write(json.dumps({'ts': ts, 'frame': frame_name, **r}) + '\n')
+    except Exception as _e:
+        log.debug("Gesture debug write error: %s", _e)
+
 
 # ---------------------------------------------------------------------------
 # MediaPipe Hands — palm orientation detection (mediapipe >= 0.10 tasks API)
@@ -65,7 +117,11 @@ try:
     _hand_landmarker = _mp_vision.HandLandmarker.create_from_options(
         _mp_vision.HandLandmarkerOptions(
             base_options=_mp_python.BaseOptions(model_asset_path=_HAND_MODEL_PATH),
-            num_hands=2,
+            # 4 -> matches MAX_PEOPLE in Display.tsx / DRONE_SLOTS in drone.ts:
+            # up to 4 simultaneous drones (e.g. 4 people showing one palm each,
+            # or 2 people showing both). Was 2 — that was the actual ceiling on
+            # simultaneous drones, not anything in the frontend.
+            num_hands=4,
             min_hand_detection_confidence=0.5,
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
@@ -92,13 +148,16 @@ def _mp_hands_worker():
             with _mp_hands_lock:
                 result = _hand_landmarker.detect(mp_image)
             hands = []
+            debug_records = []
             for i, hand_lms in enumerate(result.hand_landmarks):
                 x = [float(lm.x) for lm in hand_lms]
                 y = [float(lm.y) for lm in hand_lms]
                 z = [float(lm.z) for lm in hand_lms]
                 label = result.handedness[i][0].category_name
+                handedness_score = float(result.handedness[i][0].score)
                 mcp_y = (hand_lms[5].y + hand_lms[9].y + hand_lms[13].y + hand_lms[17].y) / 4
-                hand_upright = mcp_y < hand_lms[0].y
+                wrist_y = hand_lms[0].y
+                hand_upright = mcp_y < wrist_y
                 thumb_x = hand_lms[2].x
                 pinky_x = hand_lms[17].x
                 if label == 'Left':
@@ -107,7 +166,17 @@ def _mp_hands_worker():
                     palm_facing_up = thumb_x > pinky_x
                 palm_up = bool(hand_upright and palm_facing_up)
                 hands.append({"x": x, "y": y, "z": z, "label": label, "palm_up": palm_up})
+                if _GESTURE_DEBUG:
+                    debug_records.append({
+                        'label': label,
+                        'handedness_score': handedness_score,
+                        'mcp_y': mcp_y, 'wrist_y': wrist_y, 'hand_upright': hand_upright,
+                        'thumb_x': thumb_x, 'pinky_x': pinky_x, 'palm_facing_up': palm_facing_up,
+                        'palm_up': palm_up,
+                    })
             _mp_hands_cache = hands
+            if _GESTURE_DEBUG and debug_records:
+                _log_gesture_debug(debug_records, frame)
         except Exception as _e:
             log.debug("MP hands worker error: %s", _e)
 
@@ -267,74 +336,87 @@ def _to_mp33(xyn, conf):
     return x, y, scores
 
 
+# ---------------------------------------------------------------------------
+# Per-character detection mode — lets the frontend tell the backend which
+# models the currently selected GIF character actually needs, so idle
+# models don't burn GPU/CPU computing data nobody's reading.
+#   'pose'  -> owl/bat/globe (YOLO + ViTPose only; they never read hands)
+#   'hands' -> drone (MediaPipe Hands only; drone's update() ignores pose)
+#   'none'  -> laptop (a fixed-position fade prop; reads neither)
+#   'both'  -> default until the frontend checks in, or an unrecognised mode
+# Set via POST /detection_mode {"mode": "..."} — see detection_mode_handler.
+# ---------------------------------------------------------------------------
+_detection_mode: str = 'both'
+
+
 def run_pose_detection(frame: np.ndarray) -> dict:
-    """Detect poses on a BGR frame with zero added latency from ViTPose++.
+    """Detect poses/hands on a BGR frame, gated by _detection_mode.
 
     YOLO26-Pose runs synchronously for fast tracking + bounding boxes.
     ViTPose++ runs in a background worker thread; its cached keypoints are
     merged in when fresh (< 2 s old) — otherwise YOLO keypoints are used.
     The function always returns at YOLO speed regardless of ViTPose++ load.
     """
-    with _yolo_lock:
-        results = _yolo.track(
-            frame,
-            persist=True,
-            verbose=False,
-            conf=0.4,
-            iou=0.45,
-            imgsz=640,
-        )
+    mode = _detection_mode
+    poses: list = []
 
-    if not results:
-        return {"poses": []}
+    if mode in ('pose', 'both'):
+        with _yolo_lock:
+            results = _yolo.track(
+                frame,
+                persist=True,
+                verbose=False,
+                conf=0.4,
+                iou=0.45,
+                imgsz=640,
+            )
 
-    r = results[0]
-    if r.keypoints is None or len(r.keypoints) == 0:
-        return {"poses": []}
+        r = results[0] if results else None
+        if r is not None and r.keypoints is not None and len(r.keypoints) > 0:
+            kps_xyn  = r.keypoints.xyn.cpu().numpy()     # (N, 17, 2) normalised
+            kps_conf = (r.keypoints.conf.cpu().numpy()
+                        if r.keypoints.conf is not None else None)
+            ids = (r.boxes.id.cpu().numpy().astype(int).tolist()
+                   if r.boxes.id is not None else list(range(len(kps_xyn))))
 
-    kps_xyn  = r.keypoints.xyn.cpu().numpy()     # (N, 17, 2) normalised
-    kps_conf = (r.keypoints.conf.cpu().numpy()
-                if r.keypoints.conf is not None else None)
-    ids = (r.boxes.id.cpu().numpy().astype(int).tolist()
-           if r.boxes.id is not None else list(range(len(kps_xyn))))
+            # Single-target: keep only highest-confidence detection
+            if not _multi_target and len(kps_xyn) > 1:
+                box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
+                            else np.ones(len(kps_xyn)))
+                best     = int(np.argmax(box_conf))
+                kps_xyn  = kps_xyn[best:best + 1]
+                kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
+                ids      = [ids[best]]
 
-    # Single-target: keep only highest-confidence detection
-    if not _multi_target and len(kps_xyn) > 1:
-        box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
-                    else np.ones(len(kps_xyn)))
-        best     = int(np.argmax(box_conf))
-        kps_xyn  = kps_xyn[best:best + 1]
-        kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
-        ids      = [ids[best]]
+            # Submit frame to ViTPose++ worker (non-blocking: drops if busy)
+            if _vitpose_model is not None:
+                boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+                if not _multi_target and len(boxes_xyxy) > 1:
+                    boxes_xyxy = boxes_xyxy[best:best + 1]
+                try:
+                    _vitpose_queue.put_nowait((frame.copy(), boxes_xyxy, ids[:]))
+                except queue.Full:
+                    pass  # worker still processing previous frame — skip, no latency added
 
-    # Submit frame to ViTPose++ worker (non-blocking: drops if busy)
-    if _vitpose_model is not None:
-        boxes_xyxy = r.boxes.xyxy.cpu().numpy()
-        if not _multi_target and len(boxes_xyxy) > 1:
-            boxes_xyxy = boxes_xyxy[best:best + 1]
-        try:
-            _vitpose_queue.put_nowait((frame.copy(), boxes_xyxy, ids[:]))
-        except queue.Full:
-            pass  # worker still processing previous frame — skip, no latency added
+            # Build pose list — merge ViTPose++ cached keypoints when fresh
+            now = time.time()
+            for i in range(len(kps_xyn)):
+                track_id = int(ids[i])
+                cached   = _vitpose_cache.get(track_id)
+                if cached and (now - cached[0]) < _VITPOSE_CACHE_TTL:
+                    x, y, scores = _to_mp33(cached[1], cached[2])   # ViTPose++ keypoints
+                else:
+                    conf_row = kps_conf[i] if kps_conf is not None else None
+                    x, y, scores = _to_mp33(kps_xyn[i], conf_row)  # YOLO keypoints
+                poses.append({
+                    "x": x, "y": y, "z": [0.0] * 33,
+                    "scores": scores,
+                    "track": {"id": track_id},
+                })
 
-    # Build pose list — merge ViTPose++ cached keypoints when fresh
-    now = time.time()
-    poses = []
-    for i in range(len(kps_xyn)):
-        track_id = int(ids[i])
-        cached   = _vitpose_cache.get(track_id)
-        if cached and (now - cached[0]) < _VITPOSE_CACHE_TTL:
-            x, y, scores = _to_mp33(cached[1], cached[2])   # ViTPose++ keypoints
-        else:
-            conf_row = kps_conf[i] if kps_conf is not None else None
-            x, y, scores = _to_mp33(kps_xyn[i], conf_row)  # YOLO keypoints
-        poses.append({
-            "x": x, "y": y, "z": [0.0] * 33,
-            "scores": scores,
-            "track": {"id": track_id},
-        })
-
-    hands = run_hand_detection(frame)
+    hands: list = []
+    if mode in ('hands', 'both'):
+        hands = run_hand_detection(frame)
 
     return {"poses": poses, "hands": hands}
 
@@ -557,6 +639,14 @@ def _ffmpeg_read_loop(
         '-reorder_queue_size', '0',
         '-i', rtsp_url,
         '-vf', f'scale={width}:{height}',
+        # Without an explicit output rate, skipping proper stream analysis
+        # (-analyzeduration 0 -probesize 32, needed for low latency) makes
+        # ffmpeg misjudge source frame timing and emit frames at ~2x the
+        # camera's actual rate (measured: 25fps source -> 50fps output).
+        # That doubles the frontend's JPEG-decode/render load for no reason
+        # and was a real, measured contributor to stuttering. Pin output to
+        # the camera's configured rate so ffmpeg can't over-emit.
+        '-r', '25',
         '-f', 'image2pipe',
         '-c:v', 'mjpeg',
         '-q:v', '3',
@@ -670,7 +760,16 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
 
             _loop.call_soon_threadsafe(_distribute_frame, jpg)
 
-            if frame_count % 3 == 0 and frame is not None:
+            # Sampling rate is mode-aware: YOLO+ViTPose (~31ms/call) needs the
+            # every-3rd-frame throttle to stay cheap, but MediaPipe Hands
+            # alone (~8ms/call) can easily keep up with every frame — running
+            # it at the same slow rate as the expensive pipeline was adding
+            # unnecessary detection latency for hand-only characters (drone).
+            mode = _detection_mode
+            should_infer = frame is not None and (
+                mode == 'hands' or (mode in ('pose', 'both') and frame_count % 3 == 0)
+            )
+            if should_infer:
                 global _rtsp_pose_busy
                 small = cv2.resize(frame, (320, 240))
                 if not _rtsp_pose_busy:
@@ -898,23 +997,45 @@ async def browse_handler(request: web.Request) -> web.Response:
 # Hikvision ISAPI camera configuration
 # ---------------------------------------------------------------------------
 
+# GOP of 1 (every frame a keyframe) minimises latency but is extremely
+# bitrate-hungry — on cameras with a hard bitrate ceiling (many Hikvision
+# models cap at 8192 kbps regardless of settings) it starves every frame's
+# compression budget and produces visibly grainy/blocky video. GOP=10 (a
+# keyframe every 0.4s at 25fps) leans on cheap delta frames instead, freeing
+# up bitrate for real quality, while still refreshing far more often than
+# the camera's ~1s factory default — a deliberate latency/quality balance,
+# not the previous all-keyframe extreme.
+_GOP_LENGTH = '10'
+
+
 def _configure_camera_sync(
     ip: str, user: str, password: str, stream: int, use_mjpeg: bool,
 ):
     """Set a Hikvision camera channel to low-latency encoding via ISAPI.
 
     stream=1 → channel 101 (main), stream=2 → channel 102 (sub).
+
+    Uses `requests`' digest auth rather than urllib's HTTPDigestAuthHandler —
+    urllib's implementation fails outright (401 on the very first GET)
+    against this camera's digest challenge, while `requests` and
+    `curl --digest` handle the exact same credentials fine.
+
+    Also registers the camera's XML namespace with an empty prefix before
+    re-serializing — ElementTree defaults to an auto-generated `ns0:` prefix
+    on every tag, which Hikvision's ISAPI parser silently ignores (naive tag
+    matching, not real namespace-aware parsing), so the PUT would return 200
+    OK while quietly not changing anything unless the output matches the
+    camera's own unprefixed style.
     """
     channel_id = f'10{stream}'
     base_url = f'http://{ip}'
     api_url = f'{base_url}/ISAPI/Streaming/channels/{channel_id}'
+    auth = requests.auth.HTTPDigestAuth(user, password)
 
-    auth = urllib.request.HTTPDigestAuthHandler()
-    auth.add_password(realm=None, uri=base_url, user=user, passwd=password)
-    opener = urllib.request.build_opener(auth)
-
-    current = opener.open(api_url, timeout=10).read()
-    root = ET.fromstring(current)
+    resp = requests.get(api_url, auth=auth, timeout=10)
+    resp.raise_for_status()
+    ET.register_namespace('', 'http://www.hikvision.com/ver20/XMLSchema')
+    root = ET.fromstring(resp.content)
 
     def set_text(tag: str, value: str):
         for elem in root.iter():
@@ -927,12 +1048,14 @@ def _configure_camera_sync(
     else:
         set_text('videoCodecType', 'H.264')
         set_text('H264Profile', 'Baseline')
-        set_text('GovLength', '1')
+        set_text('GovLength', _GOP_LENGTH)
 
     xml_bytes = ET.tostring(root, encoding='unicode').encode('utf-8')
-    req = urllib.request.Request(api_url, data=xml_bytes, method='PUT')
-    req.add_header('Content-Type', 'application/xml')
-    opener.open(req, timeout=10)
+    put_resp = requests.put(
+        api_url, data=xml_bytes, auth=auth, timeout=10,
+        headers={'Content-Type': 'application/xml'},
+    )
+    put_resp.raise_for_status()
 
 
 async def configure_camera_handler(request: web.Request) -> web.Response:
@@ -956,12 +1079,32 @@ async def configure_camera_handler(request: web.Request) -> web.Response:
         await asyncio.to_thread(
             _configure_camera_sync, ip, user, password, stream, use_mjpeg,
         )
-        mode = 'MJPEG' if use_mjpeg else 'H.264 Baseline (GOP=1)'
+        mode = 'MJPEG' if use_mjpeg else f'H.264 Baseline (GOP={_GOP_LENGTH})'
         msg = f'Camera {ip} channel 10{stream} set to {mode}'
         log.info(msg)
         return web.Response(text=msg, headers=_CORS)
     except Exception as e:
         log.error(f"Camera configure error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
+async def detection_mode_handler(request: web.Request) -> web.Response:
+    """POST: frontend calls this whenever the selected GIF character changes,
+    so the backend only runs the model(s) that character actually needs.
+    GET: diagnostic — check what mode is currently active without guessing."""
+    global _detection_mode
+    if request.method == 'GET':
+        return web.json_response({'mode': _detection_mode}, headers=_CORS)
+    try:
+        data = await request.json()
+        mode = data.get('mode', 'both')
+        if mode not in ('pose', 'hands', 'none', 'both'):
+            return web.Response(status=400, text='Invalid mode', headers=_CORS)
+        _detection_mode = mode
+        log.info(f"Detection mode set to: {mode}")
+        return web.Response(text='ok', headers=_CORS)
+    except Exception as e:
+        log.error(f"Detection mode error: {e}")
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
@@ -1059,6 +1202,7 @@ def make_http_app() -> web.Application:
     app.router.add_post('/save', save_photo_handler)
     app.router.add_get('/browse', browse_handler)
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
+    app.router.add_route('*', '/detection_mode', detection_mode_handler)
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)
@@ -1071,7 +1215,7 @@ def make_http_app() -> web.Application:
 # Entry point — run WebSocket (9091) and HTTP (8081) servers concurrently
 # ---------------------------------------------------------------------------
 
-async def _rtsp_keepfresh_loop(interval_s: int = 45):
+async def _rtsp_keepfresh_loop(interval_s: int = 300):
     """Periodically force-reconnect to the RTSP camera.
 
     Hikvision cameras (and many H.264 IP cameras) accumulate latency over
@@ -1079,6 +1223,15 @@ async def _rtsp_keepfresh_loop(interval_s: int = 45):
     further and further from real-time.  Reconnecting forces the camera to
     start a fresh stream from the current frame, resetting the delay.
     The browser WebSocket stays open; clients see only a brief (~1 s) gap.
+
+    Was 45s originally, written when the camera ran a long GOP (infrequent
+    keyframes) — that gave drift a lot of room to accumulate between
+    resets. Since the camera is now configured for a much shorter GOP
+    (keyframe every ~0.4s, see _configure_camera_sync), there's far less
+    drift to accumulate in the first place, so the periodic ~1s visible
+    stutter this causes no longer needs to happen anywhere near as often.
+    5 minutes keeps it as a safety net for long event sessions without the
+    hiccup being noticeable every 30-60s.
     """
     while True:
         await asyncio.sleep(interval_s)

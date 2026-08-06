@@ -41,7 +41,7 @@ export default function CameraSelect() {
 
     if (isHikvision) {
       try {
-        await fetch(`${getBackendHttpUrl()}/camera/configure`, {
+        const res = await fetch(`${getBackendHttpUrl()}/camera/configure`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -53,8 +53,15 @@ export default function CameraSelect() {
             mjpeg: false,
           }),
         })
-      } catch {
-        // Camera config is best-effort; proceed even if it fails
+        // Camera config is best-effort; proceed even if it fails — but log
+        // it, since fetch() only throws on network errors, not HTTP error
+        // statuses, so a silent 4xx/5xx here previously left the camera
+        // stuck in its slow default encoding with zero visible indication.
+        if (!res.ok) {
+          console.warn(`Camera configure failed (${res.status}): ${await res.text()}`)
+        }
+      } catch (e) {
+        console.warn('Camera configure request failed:', e)
       }
     }
 

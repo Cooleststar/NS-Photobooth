@@ -44,7 +44,13 @@ settings.RENDER_OPTIONS = {
   autoDensity: false,
   backgroundAlpha: 1,
   backgroundColor: 0,
-  clearBeforeRender: false,
+  // Must clear each frame: the video background canvas has a transparent
+  // margin border (see MARGIN_X/MARGIN_T/MARGIN_B in Display.tsx — the video
+  // image is only drawn into an inset rect, never the full canvas). Without
+  // clearing, transparent pixels there are no-op blends, so any opaque
+  // content ever drawn in that margin (e.g. the debug FPS counter) persists
+  // in the framebuffer indefinitely, surviving until a hard refresh.
+  clearBeforeRender: true,
   height: 720,
   legacy: false,
   // needed for toDataURL on canvas to get picture

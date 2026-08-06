@@ -16,7 +16,17 @@ const KF_PARAMS = { R: 0.02, Q: 1.5 }
 const DRONE_SIZE_FACTOR = 0.22
 const BOB_SPEED = 2.5
 const BOB_AMPLITUDE_FACTOR = 0.014
-const PALM_HOLD_TIME = 0.08
+// Grace period once already tracking, to tolerate brief single-frame gaps
+// from detection jitter without instantly vanishing. Was 0.08s (~1-2
+// frames at 25fps) — far too short to survive normal detection flicker.
+const PALM_HOLD_TIME = 0.4
+// How long palm-up must be continuously detected before the drone first
+// triggers. Without this, a single misclassified frame during ordinary
+// hand movement (adjusting hair, gesturing) could summon the drone with
+// no intentional gesture at all. Trades a bit of trigger latency for not
+// firing on noise — tune down if it feels sluggish, up if still trigger-
+// happy.
+const PALM_CONFIRM_TIME = 0.15
 
 interface FeedBounds { left: number; right: number; top: number; bottom: number }
 
@@ -91,6 +101,7 @@ async function createHandDrone(
   let wristY = 0
   let bobTime = 0
   let palmHoldTimer = 0
+  let palmConfirmTimer = 0
   const animManager = new AnimStateManager()
 
   // Expose tracked position so the parent can use it for proximity-based assignment
@@ -99,13 +110,22 @@ async function createHandDrone(
   const update = (rawWrist: { x: number; y: number } | undefined) => {
     if (rawWrist) {
       palmHoldTimer = PALM_HOLD_TIME
+      palmConfirmTimer = Math.min(PALM_CONFIRM_TIME, palmConfirmTimer + ticker.deltaMS / 1000)
       wristX = kf.x.filter(rawWrist.x)
       wristY = kf.y.filter(rawWrist.y)
     } else {
       palmHoldTimer = Math.max(0, palmHoldTimer - ticker.deltaMS / 1000)
+      // Reset on any gap — confirmation must be one continuous detection,
+      // not accumulated flickers, otherwise this stops filtering noise.
+      palmConfirmTimer = 0
     }
 
-    const hasPerson = rawWrist !== undefined || palmHoldTimer > 0
+    // Already-tracking: tolerate brief gaps via the hold timer, no need to
+    // re-confirm every tiny flicker. Not yet tracking: require the full
+    // confirm duration first, so a single stray frame can't trigger it.
+    const hasPerson = animManager.tracking
+      ? rawWrist !== undefined || palmHoldTimer > 0
+      : palmConfirmTimer >= PALM_CONFIRM_TIME
 
     animManager.tracking = hasPerson
     const { time, state } = animManager
@@ -179,17 +199,24 @@ export async function createDroneAnim(
   const hoverOffset = droneSize
   const bobAmplitude = height * BOB_AMPLITUDE_FACTOR
 
-  const [container0, update0, getPos0] = await createHandDrone(app, droneSize, hoverOffset, bobAmplitude, bounds)
-  const [container1, update1, getPos1] = await createHandDrone(app, droneSize, hoverOffset, bobAmplitude, bounds)
+  // DRONE_SLOTS matches the backend's MediaPipe num_hands=4 — that's the
+  // actual ceiling on simultaneous drones (e.g. up to 4 people showing one
+  // palm each, or 2 people showing both). Raising this without also raising
+  // num_hands in backend/main.py would just starve the extra slots of data.
+  const DRONE_SLOTS = 4
+  const drones = await Promise.all(
+    Array.from({ length: DRONE_SLOTS }, () =>
+      createHandDrone(app, droneSize, hoverOffset, bobAmplitude, bounds),
+    ),
+  )
 
   const parentContainer = new PIXI.Container()
-  parentContainer.addChild(container0)
-  parentContainer.addChild(container1)
+  for (const [container] of drones) parentContainer.addChild(container)
 
   const update = (hands: HandData[]) => {
-    const [wrist0, wrist1] = assignHandsToDrones(hands, [getPos0(), getPos1()], height, width)
-    update0(wrist0)
-    update1(wrist1)
+    const trackedPositions = drones.map(([, , getPos]) => getPos())
+    const assigned = assignHandsToDrones(hands, trackedPositions, height, width)
+    drones.forEach(([, updateSlot], i) => updateSlot(assigned[i]))
   }
 
   return [parentContainer, update] as const
