@@ -1195,7 +1195,7 @@ async def replace_photo_handler(request: web.Request) -> web.Response:
 
 
 def make_http_app() -> web.Application:
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application(middlewares=[cors_middleware], client_max_size=50 * 1024 * 1024)
     app.router.add_get('/ws_stream', ws_stream_handler)
     app.router.add_get('/stream', stream_handler)
     app.router.add_post('/stream/stop', stop_stream_handler)

@@ -66,11 +66,14 @@ export default function QRPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ image: p.data, url: p.url, timestamp: p.timestamp, stripPhotos: p.stripPhotos ?? [] }),
         })
-          .then(() => {
+          .then((res) => {
+            if (!res.ok) throw new Error(`save failed: ${res.status}`)
             synced.add(p.timestamp)
             sessionStorage.setItem(KEY, JSON.stringify([...synced]))
           })
-          .catch(() => {})
+          .catch((err) => {
+            console.error(`Failed to sync photo ${p.timestamp} to backend:`, err)
+          })
       })
   }, [pics])
 
