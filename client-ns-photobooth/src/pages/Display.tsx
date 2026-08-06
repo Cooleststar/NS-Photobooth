@@ -15,6 +15,7 @@ import { createBanner } from '../anim/banner'
 import { createDroneAnim } from '../anim/drone'
 import { createGlobeAnim } from '../anim/globe'
 import { createOwlAnim } from '../anim/owl'
+import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
@@ -40,21 +41,23 @@ import {
   selectedGif,
 } from '../store'
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba'>, string> = {
   laptop: laptopGif,
 }
 
 // Which backend model(s) each character actually needs — owl/bat/globe read
 // body pose only, drone reads hand landmarks only (ignores pose entirely),
-// laptop is a fixed-position fade prop that reads neither. Told to the
-// backend via POST /detection_mode so it skips idle models per-frame
+// laptop is a fixed-position fade prop that reads neither, scuba needs both
+// (pose for the nose position, hands for the pinch/wave gesture). Told to
+// the backend via POST /detection_mode so it skips idle models per-frame
 // instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
-const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none'> = {
+const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
   owl: 'pose',
   bat: 'pose',
   globe: 'pose',
   drone: 'hands',
   laptop: 'none',
+  scuba: 'both',
 }
 
 const MARGIN_X = 30 / 1920
@@ -507,6 +510,14 @@ export default function Display({
         // Drone uses MediaPipe hand landmarks, not body pose — ignore pose arg
         const wrappedUpdate = (_pose: any) => updateDrone(rawRef.current.hands ?? [])
         return [container, wrappedUpdate] as const
+      } else if (option === 'scuba') {
+        const [container, updateScuba] = await createScubaAnim(app, marginOpts)
+        // Scuba needs all tracked people's poses (to find whoever is closest
+        // to the camera) plus raw hand landmarks — neither is the single
+        // `pose` arg this slot system passes, so read both directly.
+        const wrappedUpdate = (_pose: any) =>
+          updateScuba(dataRef.current.allPoses ?? {}, rawRef.current.hands ?? [])
+        return [container, wrappedUpdate] as const
       }
       return null
     }
@@ -518,8 +529,12 @@ export default function Display({
       const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
 
-      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone') {
-        const count = isMulti ? MAX_PEOPLE : 1
+      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba') {
+        // Scuba always runs a single instance regardless of multi-target mode —
+        // it already does its own "closest person" selection internally across
+        // all tracked people, so multiple instances would just render duplicate,
+        // overlapping gifs on the same target.
+        const count = isMulti && gifOption !== 'scuba' ? MAX_PEOPLE : 1
         const results = await Promise.all(
           Array.from({ length: count }, () => createAnimForGif(gifOption))
         )

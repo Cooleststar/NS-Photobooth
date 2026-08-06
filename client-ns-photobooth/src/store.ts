@@ -25,6 +25,7 @@ export const GIF_OPTIONS = {
   globe: 'Globe',
   laptop: 'Laptop',
   drone: 'Drone',
+  scuba: 'Scuba',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
