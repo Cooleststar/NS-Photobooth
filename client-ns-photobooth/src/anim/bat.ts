@@ -22,6 +22,8 @@ const ANIM = {
 const KF_PARAMS = { R: 0.03, Q: 2 }
 
 const BAT_MARGIN_B = 0.27
+// Resting pose rendered a bit smaller than the shared batSize, on request.
+const REST_SIZE_FACTOR = 0.75
 
 /** target coords for the bat to land assuming bottom-middle anchor
  * (same projection the owl uses to perch on the forearm) */
@@ -77,6 +79,10 @@ export async function createBatAnim(app: PIXI.Application) {
   const restSprite = PIXI.Sprite.from(restTexture)
   restSprite.anchor.set(0.5, 1)
   batContainer.addChild(restSprite)
+  // Bat_rest.png is a wide, non-square image (648x396) — forcing it into the
+  // same square batSize as the other sprites squashed it visibly. Scale its
+  // width off its own natural aspect ratio instead, so it renders undistorted.
+  const restAspect = restTexture.width / restTexture.height
 
   flySprite.anchor.set(0.5, 1)
   batContainer.addChild(flySprite)
@@ -130,9 +136,10 @@ export async function createBatAnim(app: PIXI.Application) {
     let { x, y } = coords ? calculateTarget(coords, arm!) : { x: 0, y: 0 }
     y += batSize * BAT_MARGIN_B
 
-    restSprite.height =
-      restSprite.width =
-      flySprite.height =
+    restSprite.height = batSize * REST_SIZE_FACTOR
+    restSprite.width = batSize * REST_SIZE_FACTOR * restAspect
+
+    flySprite.height =
       flySprite.width =
       landSprite.height =
       landSprite.width =

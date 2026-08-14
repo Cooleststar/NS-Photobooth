@@ -14,6 +14,7 @@ import { createBatAnim } from '../anim/bat'
 import { createBanner } from '../anim/banner'
 import { createDroneAnim } from '../anim/drone'
 import { createGlobeAnim } from '../anim/globe'
+import { createOCFusionAnim } from '../anim/ocfusion'
 import { createOwlAnim } from '../anim/owl'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
@@ -41,16 +42,16 @@ import {
   selectedGif,
 } from '../store'
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
 // Which backend model(s) each character actually needs — owl/bat/globe read
-// body pose only, drone reads hand landmarks only (ignores pose entirely),
-// laptop is a fixed-position fade prop that reads neither, scuba needs both
-// (pose for the nose position, hands for the pinch/wave gesture). Told to
-// the backend via POST /detection_mode so it skips idle models per-frame
-// instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
+// body pose only, drone and ocfusion read hand landmarks only (ignores pose
+// entirely), laptop is a fixed-position fade prop that reads neither, scuba
+// needs both (pose for the nose position, hands for the pinch/wave gesture).
+// Told to the backend via POST /detection_mode so it skips idle models
+// per-frame instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
   none: 'none',
   owl: 'pose',
@@ -59,6 +60,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   drone: 'hands',
   laptop: 'none',
   scuba: 'both',
+  ocfusion: 'hands',
 }
 
 const MARGIN_X = 30 / 1920
@@ -519,6 +521,11 @@ export default function Display({
         const wrappedUpdate = (_pose: any) =>
           updateScuba(dataRef.current.allPoses ?? {}, rawRef.current.hands ?? [])
         return [container, wrappedUpdate] as const
+      } else if (option === 'ocfusion') {
+        const [container, updateOCFusion] = await createOCFusionAnim(app, marginOpts)
+        // Same as drone — driven by MediaPipe hand landmarks, not body pose
+        const wrappedUpdate = (_pose: any) => updateOCFusion(rawRef.current.hands ?? [])
+        return [container, wrappedUpdate] as const
       }
       return null
     }
@@ -530,7 +537,7 @@ export default function Display({
       const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
 
-      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba') {
+      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba' || gifOption === 'ocfusion') {
         // Scuba always runs a single instance regardless of multi-target mode —
         // it already does its own "closest person" selection internally across
         // all tracked people, so multiple instances would just render duplicate,

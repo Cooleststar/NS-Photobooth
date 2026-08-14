@@ -2,7 +2,7 @@ import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
 import { cloudinaryUrlToShareUrl, uploadImage } from '../api/cloudinary'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
-import { Countdown, KeybindBtn, Modal, useKeybind } from '../components'
+import { AnimPicker, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
 import {
   addQrToStrip,
   chunkArray,
@@ -221,13 +221,16 @@ export default function HUD({ photographerRef }: HUDProps) {
   switch (state) {
     case 'ready':
       return (
-        <KeybindBtn
-          keyCode='PageUp'
-          onClick={takePicture}
-          tw='fixed bottom-2 inset-x-0 m-auto rounded-full h-20 w-20 bg-white opacity-0 hover:(bg-gray-400 opacity-100)'
-        >
-          <img tw='h-full w-full' src={cameraURI} />
-        </KeybindBtn>
+        <>
+          <KeybindBtn
+            keyCode='PageUp'
+            onClick={takePicture}
+            tw='fixed bottom-2 inset-x-0 m-auto rounded-full h-20 w-20 bg-white opacity-0 hover:(bg-gray-400 opacity-100)'
+          >
+            <img tw='h-full w-full' src={cameraURI} />
+          </KeybindBtn>
+          <AnimPicker />
+        </>
       )
     case 'timing':
       return (
