@@ -3,7 +3,7 @@ import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
-import { calculateArmFromPose, convertPoint } from '../api/nicepipe/mpPose'
+import { convertPoint } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
 
 import batFlyGif from '../assets/Bat_anim/Bat.gif'
@@ -24,26 +24,62 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 const BAT_MARGIN_B = 0.27
 // Resting pose rendered a bit smaller than the shared batSize, on request.
 const REST_SIZE_FACTOR = 0.75
+// MP-33 has no hand/finger landmarks, only the wrist joint (15/16) — so the
+// palm center is approximated by continuing a bit past the wrist along the
+// same elbow->wrist direction, rather than landing right on the joint.
+const PALM_EXTEND_RATIO = 0.3
+// Max allowed angle (degrees) between the upper arm (shoulder->elbow) and
+// forearm (elbow->wrist) before the arm no longer counts as "straight" —
+// the bat only lands/stays on a fully extended arm; bending the elbow past
+// this makes getPalmTarget return undefined, which reads as tracking lost
+// and sends the bat flying off (see the 'lost'/'exiting' states below).
+const ARM_STRAIGHT_MAX_DEVIATION_DEG = 25
 
-/** target coords for the bat to land assuming bottom-middle anchor
- * (same projection the owl uses to perch on the forearm) */
-function calculateTarget(
-  {
-    x,
-    y,
-    angle,
-    length,
-  }: {
-    x: number
-    y: number
-    angle: number
-    length: number
-  },
-  arm: 'left' | 'right',
+/** target coords for the bat to land on, assuming a bottom-middle anchor —
+ * approximates the palm from the wrist landmark (MP-33 indices 15/16),
+ * picking whichever arm is tracked with higher confidence, and only if that
+ * arm is straight (see ARM_STRAIGHT_MAX_DEVIATION_DEG). Deliberately not
+ * using calculateArmFromPose's elbow+angle+length reconstruction: that angle
+ * is computed with Math.atan (not atan2), which can't recover which side of
+ * the elbow the wrist is actually on, so it only ever looked right for the
+ * owl's halfway-point perch — reaching further toward the wrist/palm
+ * regularly landed on the wrong side entirely. This uses plain vector
+ * subtraction instead, which has no such sign ambiguity. */
+function getPalmTarget(
+  pose: NormalizedLandmarkList,
+  height: number,
+  width: number,
 ) {
+  if (pose.length === 0) return undefined
+  const ls = pose[11]
+  const rs = pose[12]
+  const le = pose[13]
+  const re = pose[14]
+  const lw = pose[15]
+  const rw = pose[16]
+  const leftVis = Math.min(ls?.visibility ?? 0, le?.visibility ?? 0, lw?.visibility ?? 0)
+  const rightVis = Math.min(rs?.visibility ?? 0, re?.visibility ?? 0, rw?.visibility ?? 0)
+  if (leftVis < 0.5 && rightVis < 0.5) return undefined
+
+  const useLeft = leftVis >= rightVis
+  const shoulder = convertPoint(useLeft ? ls : rs, height, width)
+  const elbow = convertPoint(useLeft ? le : re, height, width)
+  const wrist = convertPoint(useLeft ? lw : rw, height, width)
+
+  const upperArm = { x: elbow.x - shoulder.x, y: elbow.y - shoulder.y }
+  const forearm = { x: wrist.x - elbow.x, y: wrist.y - elbow.y }
+  const upperArmLen = Math.hypot(upperArm.x, upperArm.y)
+  const forearmLen = Math.hypot(forearm.x, forearm.y)
+  if (upperArmLen < 1 || forearmLen < 1) return undefined
+
+  const cosDeviation =
+    (upperArm.x * forearm.x + upperArm.y * forearm.y) / (upperArmLen * forearmLen)
+  const maxCos = Math.cos((ARM_STRAIGHT_MAX_DEVIATION_DEG * Math.PI) / 180)
+  if (cosDeviation < maxCos) return undefined
+
   return {
-    x: x - ((arm == 'right' ? 1 : -1) * (length * Math.cos(angle))) / 2,
-    y: y + (length * Math.sin(angle)) / 2,
+    x: wrist.x + (wrist.x - elbow.x) * PALM_EXTEND_RATIO,
+    y: wrist.y + (wrist.y - elbow.y) * PALM_EXTEND_RATIO,
   }
 }
 
@@ -107,8 +143,6 @@ export async function createBatAnim(app: PIXI.Application) {
   const kf = {
     x: new KalmanFilter(KF_PARAMS),
     y: new KalmanFilter(KF_PARAMS),
-    length: new KalmanFilter(KF_PARAMS),
-    angle: new KalmanFilter(KF_PARAMS),
     batSize: new KalmanFilter(KF_PARAMS),
   }
 
@@ -122,18 +156,15 @@ export async function createBatAnim(app: PIXI.Application) {
   const animManager = new AnimStateManager()
 
   const update = (pose: NormalizedLandmarkList) => {
-    let [arm, coords] = calculateArmFromPose(pose, height, width)
-    if (coords) {
-      coords = {
-        x: kf.x.filter(coords.x),
-        y: kf.y.filter(coords.y),
-        angle: kf.angle.filter(coords.angle),
-        length: kf.length.filter(coords.length),
-      }
+    const palm = getPalmTarget(pose, height, width)
+    let x = 0
+    let y = 0
+    if (palm) {
+      x = kf.x.filter(palm.x)
+      y = kf.y.filter(palm.y)
       batSize = kf.batSize.filter(calculateBatSize(pose, height, width))
     }
 
-    let { x, y } = coords ? calculateTarget(coords, arm!) : { x: 0, y: 0 }
     y += batSize * BAT_MARGIN_B
 
     restSprite.height = batSize * REST_SIZE_FACTOR
@@ -147,7 +178,7 @@ export async function createBatAnim(app: PIXI.Application) {
       vanishSprite.width =
         batSize
 
-    animManager.tracking = !!coords
+    animManager.tracking = !!palm
     const { time, state } = animManager
 
     switch (state) {

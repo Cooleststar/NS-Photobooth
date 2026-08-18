@@ -6,7 +6,7 @@ Backend:
 - Investigate where images are hosted and if there are limits (double check cloudinary plan, whose account?)
 
 Visual:
-- remove black border from camera output
+- remove black border from camera output (Done)
 - shrink the bottom margin by shrinking fusion logo to match bats logo
 - no arrows displayed by default
 
