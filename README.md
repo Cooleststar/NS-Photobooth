@@ -35,10 +35,29 @@ That's it. Docker handles Python, Node, and all dependencies inside containers.
 | **fnm** | Latest | Node version manager — installs and switches Node versions |
 | **Node.js** | 18.x | Installed via fnm — newer versions will break the project |
 | **Yarn** | 3.2.3+ | Comes with Node 18 via fnm |
-| **Python** | 3.10.x | Required by the backend |
+| **Python** | 3.10.x | Required by the backend — see note below |
 | **pip** | Latest | Comes bundled with Python 3.10+ |
+| **FFmpeg** | Latest | System binary (not a pip package) — required for RTSP camera streaming. `winget install Gyan.FFmpeg`, then reopen your terminal so `ffmpeg` is on `PATH` |
 
-Python packages (installed via `pip`): `mediapipe==0.10.8`, `opencv-python-headless==4.8.1.78`, `numpy==1.24.4`, `websockets==11.0.3`
+> **Why Python 3.10 specifically:** `numpy==1.24.4` (pinned in `backend/requirements.txt`) has no prebuilt wheel for Python 3.12, and building it from source fails outright — Python 3.12 removed an API (`pkgutil.ImpImporter`) that the old `setuptools`/`pkg_resources` shim bundled in numpy's build process depends on. There's no workaround short of using Python 3.10.
+
+Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt` (see step 6 below). A couple of things worth knowing if you're setting this up for the first time:
+- `mediapipe` (used for hand-gesture/drone detection) is a runtime dependency of `backend/main.py` — make sure your `requirements.txt` includes it; if you're working from an older checkout that predates this note, add `mediapipe==0.10.8` manually.
+- Installing `requirements.txt` pulls in **three different OpenCV packages** side-by-side (`opencv-python-headless`, pinned directly, plus `opencv-python` and `opencv-contrib-python`, pulled in transitively by `mediapipe`/`ultralytics`) — they all provide the same `cv2` module. This works in practice (whichever installs last wins in `site-packages`), but if `cv2` ever behaves unexpectedly, this is why.
+- **If you have an NVIDIA GPU, `pip install -r backend/requirements.txt` alone will NOT use it.** `ultralytics` pulls in `torch` with no pinned index, so on Windows `pip` installs the CPU-only build (`torch.cuda.is_available()` returns `False` even with a GPU present) — pose detection (and ViTPose++, see `ENABLE_VITPOSE` in `main.py`) then silently runs on CPU, which is dramatically slower and directly hurts live-feed latency. After the normal install, reinstall `torch`/`torchvision` from the CUDA build explicitly:
+  ```powershell
+  pip uninstall torch torchvision -y
+  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+  ```
+  Verify it worked with `python -c "import torch; print(torch.cuda.is_available())"` — this should print `True`.
+
+  Docker users aren't automatically better off here: on Linux, PyPI's plain `torch` wheel *is* the CUDA-enabled build (unlike Windows), so the backend image's `torch` is already CUDA-capable — but `docker-compose.yml` has no GPU device reservation configured (no `deploy.resources.reservations.devices`), so the container has no access to the host GPU regardless. `torch.cuda.is_available()` returns `False` inside the container too unless you add a GPU reservation to the `backend` service and have Docker Desktop's GPU support enabled.
+- **Once CUDA is working, the very first startup can hang for a very long time (10+ minutes) with the camera showing nothing.** `main.py` auto-enables ViTPose++ (a ~900MB Hugging Face model) whenever a GPU is detected (`ENABLE_VITPOSE` defaults to on when `torch.cuda.is_available()`). Loading it calls `from_pretrained()`, which re-validates every file over the network against Hugging Face **on every single startup**, even once the model is fully cached locally — and without an `HF_TOKEN`, those requests are rate-limited and can take many minutes. This blocks the entire backend from binding its ports (RTSP/camera included) until it finishes, which looks exactly like a dead camera feed. Once the model has fully downloaded and cached once, skip the revalidation on every future run:
+  ```powershell
+  $env:HF_HUB_OFFLINE = "1"
+  python app.py
+  ```
+  Don't set this on the very first run — offline mode requires the model to already be fully cached, or `VitPoseForPoseEstimation.from_pretrained()` fails outright and falls back to YOLO-only keypoints (not fatal, just less precise arm/shoulder/wrist tracking). Let the first run finish completely and uninterrupted, then use `HF_HUB_OFFLINE=1` for every run after that.
 
 ---
 
@@ -121,9 +140,23 @@ npm install -g yarn
 python --version
 ```
 
-> Python 3.10 specifically is required — other versions (3.11, 3.12) may cause compatibility issues with MediaPipe.
+> Python 3.10 specifically is required — other versions (3.11, 3.12) may cause compatibility issues with MediaPipe (and will hard-fail installing `numpy==1.24.4` — see note above).
 
-### 4. Verify pip
+### 4. Install FFmpeg
+
+```powershell
+winget install Gyan.FFmpeg
+```
+
+Close and reopen PowerShell, then verify:
+
+```powershell
+ffmpeg -version
+```
+
+> Required for RTSP IP camera streaming (`backend/main.py` shells out to it directly). Not needed if you're only using a local/USB webcam, but install it anyway — it's cheap and you'll hit a confusing runtime failure later if you skip it and switch to an RTSP camera.
+
+### 5. Verify pip
 
 ```powershell
 python -m pip --version
@@ -136,7 +169,7 @@ python -m ensurepip --upgrade
 python -m pip install --upgrade pip
 ```
 
-### 5. Run the App
+### 6. Run the App
 
 ```powershell
 cd photobooth

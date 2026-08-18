@@ -238,22 +238,41 @@ _VITPOSE_CACHE_TTL = 2.0   # seconds before a cached result is considered stale
 if not _ENABLE_VITPOSE:
     log.info("ViTPose++ disabled — set ENABLE_VITPOSE=1 to re-enable (GPU recommended)")
 elif _transformers_available:
+    # NOTE: must stay float32 even on CUDA — transformers' own
+    # post_process_pose_estimation() runs scipy.ndimage.gaussian_filter
+    # on the raw heatmaps, which doesn't support float16 at all and
+    # crashes every call ("array type dtype('float16') not supported").
+    # The A5000 has plenty of VRAM (~2.5 GB for this model in fp32), so
+    # there's no real reason to fight for the fp16 memory/speed gain.
+    #
+    # Try the local cache first (local_files_only=True makes zero network
+    # calls). Without this, from_pretrained() re-validates every file against
+    # the HF Hub on *every* startup, even when fully cached — unauthenticated
+    # requests get rate-limited, turning every boot into a multi-minute stall
+    # while the whole backend (RTSP feed included) waits on it. Only fall
+    # back to a real network fetch if nothing usable is cached yet (first
+    # run, or a previous download got interrupted).
     try:
-        log.info("Loading ViTPose++-Huge (downloads ~600 MB on first run)…")
-        _vitpose_processor = AutoProcessor.from_pretrained("usyd-community/vitpose-plus-huge")
-        # NOTE: must stay float32 even on CUDA — transformers' own
-        # post_process_pose_estimation() runs scipy.ndimage.gaussian_filter
-        # on the raw heatmaps, which doesn't support float16 at all and
-        # crashes every call ("array type dtype('float16') not supported").
-        # The A5000 has plenty of VRAM (~2.5 GB for this model in fp32), so
-        # there's no real reason to fight for the fp16 memory/speed gain.
+        _vitpose_processor = AutoProcessor.from_pretrained(
+            "usyd-community/vitpose-plus-huge", local_files_only=True,
+        )
         _vitpose_model = VitPoseForPoseEstimation.from_pretrained(
             "usyd-community/vitpose-plus-huge",
             torch_dtype=torch.float32,
+            local_files_only=True,
         ).to(_vitpose_device).eval()
-        log.info("ViTPose++-Huge loaded on %s", _vitpose_device)
-    except Exception as _e:
-        log.warning("ViTPose++ unavailable — falling back to YOLO keypoints: %s", _e)
+        log.info("ViTPose++-Huge loaded from local cache on %s", _vitpose_device)
+    except Exception:
+        try:
+            log.info("ViTPose++-Huge not cached locally — downloading (~900 MB, first run only)…")
+            _vitpose_processor = AutoProcessor.from_pretrained("usyd-community/vitpose-plus-huge")
+            _vitpose_model = VitPoseForPoseEstimation.from_pretrained(
+                "usyd-community/vitpose-plus-huge",
+                torch_dtype=torch.float32,
+            ).to(_vitpose_device).eval()
+            log.info("ViTPose++-Huge loaded on %s", _vitpose_device)
+        except Exception as _e:
+            log.warning("ViTPose++ unavailable — falling back to YOLO keypoints: %s", _e)
 else:
     log.warning("transformers not installed — pip install transformers to enable ViTPose++")
 
@@ -659,15 +678,16 @@ def _ffmpeg_read_loop(
 
     while not stop_event.is_set():
         log.info(f"FFmpeg launching: {rtsp_url} ({width}×{height})")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
-
+        proc = None
         buf = bytearray()
         try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+
             while not stop_event.is_set():
                 chunk = proc.stdout.read(CHUNK)
                 if not chunk:
@@ -708,11 +728,12 @@ def _ffmpeg_read_loop(
         except Exception as e:
             log.error(f"FFmpeg read error: {e}")
         finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if proc is not None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
         if not stop_event.is_set():
             log.warning("FFmpeg exited, restarting in 3 s...")

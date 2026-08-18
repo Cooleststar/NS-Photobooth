@@ -7,3 +7,5 @@ transformers
 accelerate
 scipy
 Pillow
+mediapipe==0.10.8
+lap>=0.5.12
