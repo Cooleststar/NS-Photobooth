@@ -1,18 +1,20 @@
 # TODO
 
-System:
-- Ensure low latency AT ALL TIMES
+Backend:
+- Ensure low latency AT ALL TIMES (pretty much done)
 - Restarting application cannot delete images or download links. These must be persisted. (DONE)
-- Investigate where images are hosted and if there are limits 
+- Investigate where images are hosted and if there are limits (double check cloudinary plan, whose account?)
 
 Visual:
-- Add bats logo + fusion logo at the bottom of photo strip (DONE)
-- put an enlarged QR code on the gallery view (DONE)
+- remove black border from camera output
+- shrink the bottom margin by shrinking fusion logo to match bats logo
+- no arrows displayed by default
 
 Props:
-- bats prop maybe shrink abit and only use flying bat image (in Caleb's opinion)
-- 
+- switch to just palm gestures (instead of shoulder/arm) cos this would be less obstructive for group photos
+- exact textures tbd... SM may be interested in designing something nicer
 
-Deployment:
-- test using separate computer for gallery (personal laptop?)
-- decide monitor layout and stuff (user experience)
+Deployment/Testing:
+- Make sure IOS download works (*IMPORTANT*)
+- Decide monitor layout and stuff (user experience)
+- LOAD TESTING!!! run this for an extended period, take hundreds/thousands of photos, make sure download and server still handles fine.

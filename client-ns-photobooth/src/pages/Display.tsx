@@ -77,6 +77,21 @@ function postprocessPicture(pic: HTMLCanvasElement) {
   // photo matches the on-screen (mirrored) preview
   const ctx = tmpCanvas.getContext('2d')!
   ctx.drawImage(pic, 0, 0)
+
+  // The live view intentionally shows a black margin border around the video
+  // (see the fillRect in createReceivingCtx), but that border shouldn't end
+  // up in the actual saved/uploaded photo — paint white over the same four
+  // margin bands here, on the captured copy only, so the live preview stays
+  // black while exported photos stay clean.
+  const xMargin = MARGIN_X * width
+  const yMarginT = MARGIN_T * height
+  const yMarginB = MARGIN_B * height
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, xMargin, height) // left
+  ctx.fillRect(width - xMargin, 0, xMargin, height) // right
+  ctx.fillRect(xMargin, 0, width - 2 * xMargin, yMarginT) // top
+  ctx.fillRect(xMargin, height - yMarginB, width - 2 * xMargin, yMarginB) // bottom
+
   return tmpCanvas
 }
 
@@ -139,6 +154,15 @@ function createReceivingCtx(
 
       const fps = measureFPS()
       ctx.clearRect(0, 0, width, height)
+      // The video image is only drawn into an inset rect (see xMargin/yMargin
+      // below), leaving a margin border around it — filled black explicitly
+      // (rather than relying on it happening to end up that color via
+      // pixi.ts's clearBeforeRender + backgroundColor) so the live preview
+      // always shows a solid black border regardless of renderer settings.
+      // postprocessPicture() paints this back to white on the captured copy,
+      // so exported/uploaded photos don't carry the border.
+      ctx.fillStyle = '#000000'
+      ctx.fillRect(0, 0, width, height)
       ctx.save()
       ctx.translate(width, 0)
       ctx.scale(-1, 1)
