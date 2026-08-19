@@ -42,10 +42,29 @@ const PADDING = 24
 const GAP = 10
 const FOOTER_HEIGHT = 230
 const BRAND_TEXT = 'NS Photobooth'
-const QR_SIZE = 120
+// QR code and both logos are all the same visual size in the footer.
+const FOOTER_ICON_SIZE = 150
 const QR_MARGIN = 20
-const LOGO_SIZE = 180
 const LOGO_GAP = 12
+const FONT_SIZE = 50
+// A single photo makes a much shorter strip overall, so the same
+// fixed-height footer sized for a 3-photo strip looks oversized/
+// disproportionate — scale the whole footer band down for single images.
+const SINGLE_IMAGE_FOOTER_SCALE = 0.5
+
+/** Footer dimensions, scaled down for a single-photo strip so the bottom
+ * border doesn't dominate a much shorter image. */
+function footerMetrics(imageCount: number) {
+  const scale = imageCount === 1 ? SINGLE_IMAGE_FOOTER_SCALE : 1
+  return {
+    height: FOOTER_HEIGHT * scale,
+    qrSize: FOOTER_ICON_SIZE * scale,
+    qrMargin: QR_MARGIN * scale,
+    logoSize: FOOTER_ICON_SIZE * scale,
+    logoGap: LOGO_GAP * scale,
+    fontSize: FONT_SIZE * scale,
+  }
+}
 
 function formatDateTime(timestamp: number): string {
   const d = new Date(timestamp)
@@ -59,11 +78,14 @@ function formatDateTime(timestamp: number): string {
   return `${date}  ${hours}:${minutes} ${ampm}`
 }
 
-/** Shared layout so createPhotoStrip and addQrToStrip agree on QR placement. */
-function footerQrBox(canvasWidth: number, canvasHeight: number) {
-  const x = canvasWidth - QR_MARGIN - QR_SIZE
-  const y = canvasHeight - FOOTER_HEIGHT / 2 - QR_SIZE / 2
-  return { x, y, size: QR_SIZE }
+/** Shared layout so createPhotoStrip and addQrToStrip agree on QR placement.
+ * imageCount must match what the strip was originally built with (1 vs
+ * more), since that's what determines the footer's scale. */
+function footerQrBox(canvasWidth: number, canvasHeight: number, imageCount: number) {
+  const { height, qrSize, qrMargin } = footerMetrics(imageCount)
+  const x = canvasWidth - qrMargin - qrSize
+  const y = canvasHeight - height / 2 - qrSize / 2
+  return { x, y, size: qrSize }
 }
 
 async function drawFooter(
@@ -71,11 +93,13 @@ async function drawFooter(
   canvasWidth: number,
   canvasHeight: number,
   timestamp: number,
+  imageCount: number,
 ) {
-  const rowY = canvasHeight - FOOTER_HEIGHT / 2
+  const { height, qrMargin, logoSize, logoGap, fontSize } = footerMetrics(imageCount)
+  const rowY = canvasHeight - height / 2
 
   ctx.fillStyle = '#3f3a35'
-  ctx.font = 'italic 50px Georgia, serif'
+  ctx.font = `italic ${fontSize}px Georgia, serif`
   ctx.textBaseline = 'bottom'
   ctx.textAlign = 'left'
   ctx.fillText(
@@ -86,14 +110,14 @@ async function drawFooter(
 
   // Both logos sit beside the QR box, vertically centered on the same row
   // as the brand text/timestamp above.
-  const { x: qrX } = footerQrBox(canvasWidth, canvasHeight)
-  const logoY = rowY - LOGO_SIZE / 2
-  const fusionX = qrX - QR_MARGIN - LOGO_SIZE
-  const logo11X = fusionX - LOGO_GAP - LOGO_SIZE
+  const { x: qrX } = footerQrBox(canvasWidth, canvasHeight, imageCount)
+  const logoY = rowY - logoSize / 2
+  const fusionX = qrX - qrMargin - logoSize
+  const logo11X = fusionX - logoGap - logoSize
 
   const [logo11Img, fusionLogoImg] = await loadBrandLogos()
-  ctx.drawImage(logo11Img, logo11X, logoY, LOGO_SIZE, LOGO_SIZE)
-  ctx.drawImage(fusionLogoImg, fusionX, logoY, LOGO_SIZE, LOGO_SIZE)
+  ctx.drawImage(logo11Img, logo11X, logoY, logoSize, logoSize)
+  ctx.drawImage(fusionLogoImg, fusionX, logoY, logoSize, logoSize)
 }
 
 /** Stack photos vertically into a single strip image (data URL), on a
@@ -113,7 +137,8 @@ export async function createPhotoStrip(
   const canvas = document.createElement('canvas')
   canvas.width = photoWidth + PADDING * 2
   canvas.height =
-    totalPhotoHeight + GAP * (loaded.length - 1) + PADDING * 2 + FOOTER_HEIGHT
+    totalPhotoHeight + GAP * (loaded.length - 1) + PADDING * 2 +
+    footerMetrics(loaded.length).height
 
   const ctx = canvas.getContext('2d')!
   ctx.fillStyle = bgColor
@@ -126,7 +151,7 @@ export async function createPhotoStrip(
     y += img.height + GAP
   }
 
-  await drawFooter(ctx, canvas.width, canvas.height, timestamp)
+  await drawFooter(ctx, canvas.width, canvas.height, timestamp, loaded.length)
 
   return canvas.toDataURL(
     import.meta.env.VITE_IMG_UPLOAD_FORMAT,
@@ -136,10 +161,13 @@ export async function createPhotoStrip(
 
 /** Redraw an already-composited (QR-free) strip with a scannable QR code
  * baked into the reserved footer — called once the photo's share URL is
- * known, i.e. after upload. */
+ * known, i.e. after upload. `imageCount` must match what the strip was
+ * originally built with (createPhotoStrip's `images.length`), since that's
+ * what determines the footer's scale and therefore the QR's position. */
 export async function addQrToStrip(
   stripDataUrl: string,
   qrValue: string,
+  imageCount: number = 2,
 ): Promise<string> {
   const strip = await loadImage(stripDataUrl)
 
@@ -149,7 +177,7 @@ export async function addQrToStrip(
   const ctx = canvas.getContext('2d')!
   ctx.drawImage(strip, 0, 0)
 
-  const { x, y, size } = footerQrBox(canvas.width, canvas.height)
+  const { x, y, size } = footerQrBox(canvas.width, canvas.height, imageCount)
   const qrPadding = 8
   ctx.fillStyle = 'white'
   ctx.fillRect(

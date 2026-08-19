@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pathlib
+import socket
 import subprocess
 import threading
 import time
@@ -942,6 +943,7 @@ async def stop_stream_handler(request: web.Request) -> web.Response:
 
 def _write_photo_files(
     b64img: str, directory: str, share_url: str, pic_timestamp: int, strip_photos: list,
+    filename: str = None,
 ) -> str:
     """Blocking disk I/O for save_photo_handler, run off the event loop thread
     so a photo save doesn't stall every other in-flight request/WS message."""
@@ -953,8 +955,17 @@ def _write_photo_files(
         ext = 'jpg'
 
     pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    filepath = os.path.join(directory, f'photo_{timestamp}.{ext}')
+
+    # Frontend picks the exact filename when it needs to know the final
+    # /photos/<name> URL in advance (e.g. to bake a QR code pointing at it
+    # before saving) — see useLocalHosting in Display's HUD.tsx. basename()
+    # strips any path components so this can't be used to write outside
+    # `directory`.
+    safe_name = os.path.basename(filename) if filename else ''
+    if not safe_name or safe_name in ('.', '..'):
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        safe_name = f'photo_{timestamp}.{ext}'
+    filepath = os.path.join(directory, safe_name)
 
     with open(filepath, 'wb') as f:
         f.write(base64.b64decode(b64data))
@@ -981,12 +992,13 @@ async def save_photo_handler(request: web.Request) -> web.Response:
         share_url: str = data.get('url', '')
         pic_timestamp: int = data.get('timestamp', 0)
         strip_photos: list = data.get('stripPhotos', [])
+        filename: str = data.get('filename') or None
 
         if not b64img:
             return web.Response(status=400, text='Missing image', headers=_CORS)
 
         filepath = await asyncio.to_thread(
-            _write_photo_files, b64img, directory, share_url, pic_timestamp, strip_photos,
+            _write_photo_files, b64img, directory, share_url, pic_timestamp, strip_photos, filename,
         )
 
         log.info(f"Photo saved: {filepath}")
@@ -1134,6 +1146,30 @@ async def gallery_client_handler(request: web.Request) -> web.Response:
     return web.FileResponse(html_path)
 
 
+def _detect_lan_ip() -> str:
+    """Best-effort LAN-facing IP of this machine, for building URLs a phone
+    on the same network can actually reach — window.location.hostname alone
+    isn't enough, since it's "localhost" whenever the booth is opened as
+    http://localhost:3000, which resolves to the phone itself, not this PC.
+    Doesn't actually send any packets (UDP connect() is just a route lookup),
+    so this works even with no real internet access, and picks whichever
+    interface the OS would use to reach the outside world — on a machine
+    with multiple NICs (e.g. a dedicated camera Ethernet + a WiFi adapter),
+    that's the one guests' phones are actually likely to be able to join."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))
+        return s.getsockname()[0]
+    except Exception:
+        return '127.0.0.1'
+    finally:
+        s.close()
+
+
+async def local_ip_handler(request: web.Request) -> web.Response:
+    return web.json_response({'ip': _detect_lan_ip()}, headers=_CORS)
+
+
 async def list_photos_handler(request: web.Request) -> web.Response:
     photos_dir = pathlib.Path('./photos')
     if not photos_dir.exists():
@@ -1163,7 +1199,16 @@ async def serve_photo_handler(request: web.Request) -> web.Response:
     filepath = pathlib.Path('./photos') / filename
     if not filepath.exists() or not filepath.is_file():
         return web.Response(status=404, headers=_CORS)
-    return web.FileResponse(filepath, headers={**_CORS, 'Content-Disposition': f'inline; filename="{filename}"'})
+    # ?download=1 (used by the local-hosting QR share link, see
+    # useLocalHosting in the frontend) forces a real download instead of the
+    # browser just displaying the image. 'inline' alone doesn't reliably
+    # trigger a save on mobile — 'attachment' does, and since this is a
+    # direct same-origin link (not routed through a separate landing page
+    # domain like the Cloudinary flow), there's no cross-origin restriction
+    # blocking it on iOS Safari the way there can be with a plain <a download>
+    # link to a different origin.
+    disposition = 'attachment' if request.rel_url.query.get('download') else 'inline'
+    return web.FileResponse(filepath, headers={**_CORS, 'Content-Disposition': f'{disposition}; filename="{filename}"'})
 
 
 async def delete_photo_handler(request: web.Request) -> web.Response:
@@ -1224,6 +1269,7 @@ def make_http_app() -> web.Application:
     app.router.add_get('/browse', browse_handler)
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
     app.router.add_route('*', '/detection_mode', detection_mode_handler)
+    app.router.add_get('/local_ip', local_ip_handler)
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)

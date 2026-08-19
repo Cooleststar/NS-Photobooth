@@ -48,6 +48,12 @@ export const customRtspURL = persistentAtom<string>('customRtspURL', '')
 
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
+// When true (and offlineOnly is false), the QR share link points at this
+// backend's own /photos/<file> endpoint over the local network instead of
+// uploading to ImgBB — works as long as the guest's phone is on the
+// same WiFi as the booth PC. Default off so existing setups are unaffected;
+// this is purely opt-in.
+export const useLocalHosting = persistentAtom('useLocalHosting', false, opts)
 export const cameraInitialized = persistentAtom('cameraInitialized', false, opts)
 export const saveDirHandle = atom<FileSystemDirectoryHandle | null>(null)
 export const saveDirName = persistentAtom<string>('saveDirName', '')

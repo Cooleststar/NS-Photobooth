@@ -2,7 +2,7 @@ import { useStore } from '@nanostores/preact'
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useRef, useState } from 'react'
 import tw, { css } from 'twin.macro'
-import { cloudinaryUrlToShareUrl, uploadImage } from '../api/cloudinary'
+import { uploadImage } from '../api/imgbb'
 import logo11 from '../assets/icons/11logo.png'
 import fusionLogo from '../assets/icons/fusionlogo.png'
 import { Btn, Modal } from '../components'
@@ -104,8 +104,8 @@ export default function QRPage() {
       const base = await createPhotoStrip(stripPhotos, color, pic.timestamp)
       if (hasShareLink) {
         const resp = await uploadImage(base)
-        const newUrl = cloudinaryUrlToShareUrl(resp.secure_url)
-        const withQr = await addQrToStrip(base, newUrl)
+        const newUrl = resp.data.url_viewer
+        const withQr = await addQrToStrip(base, newUrl, stripPhotos.length)
         updatePicture(pic.timestamp, { data: withQr, url: newUrl, bgColor: color })
       } else {
         updatePicture(pic.timestamp, { data: base, bgColor: color })

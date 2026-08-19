@@ -1,6 +1,6 @@
 import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
-import { cloudinaryUrlToShareUrl, uploadImage } from '../api/cloudinary'
+import { uploadImage } from '../api/imgbb'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
 import { AnimPicker, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
 import {
@@ -19,6 +19,7 @@ import {
   offlineOnly,
   pointerEnabled,
   poseInd,
+  useLocalHosting,
 } from '../store'
 import { sleep } from '../utils'
 
@@ -34,6 +35,24 @@ type CamState =
   | 'confirm'
   | 'uploading'
   | 'error'
+
+let localIpPromise: Promise<string> | undefined
+/** LAN-facing IP of the backend, for building share URLs a guest's phone can
+ * actually reach — window.location.hostname alone isn't enough, since it's
+ * "localhost" whenever the booth is opened as http://localhost:3000, which
+ * resolves to the phone itself, not the booth PC. Cached for the page's
+ * lifetime since it won't change mid-session. Falls back to hostname if the
+ * backend call fails, matching the previous (broken-for-localhost) behavior
+ * rather than producing an unusable URL outright. */
+function getLocalHostAddress(): Promise<string> {
+  if (!localIpPromise) {
+    localIpPromise = fetch(`${getBackendHttpUrl()}/local_ip`)
+      .then((r) => r.json())
+      .then((d) => d.ip as string)
+      .catch(() => window.location.hostname)
+  }
+  return localIpPromise
+}
 
 async function flash(imgGetter: () => Promise<string>): Promise<string> {
   document.body.style.cursor = 'none'
@@ -155,6 +174,40 @@ export default function HUD({ photographerRef }: HUDProps) {
     setState('ready')
   }
 
+  // mirrors backend/main.py's _write_photo_files extension derivation
+  // ("data:image/webp;base64,..." -> "webp"), so the filename this picks
+  // matches what the server will actually write to disk.
+  const imageExt = (dataUrl: string): string =>
+    dataUrl.split(',')[0]?.split('/')[1]?.split(';')[0] ?? 'jpg'
+
+  const savePicture = (
+    timestamp: number,
+    data: string,
+    url: string,
+    stripIdx: number,
+    filename?: string,
+  ) => {
+    addPicture({
+      timestamp,
+      data,
+      url,
+      isStrip: true,
+      stripPhotos: stripGroups[stripIdx],
+      bgColor: DEFAULT_STRIP_BG,
+    })
+    fetch(`${getBackendHttpUrl()}/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: data,
+        url,
+        timestamp,
+        stripPhotos: stripGroups[stripIdx],
+        ...(filename ? { filename } : {}),
+      }),
+    }).catch(() => {})
+  }
+
   const confirmUpload = () => {
     if (state !== 'confirm')
       return console.warn('attempted upload in wrong state!', state)
@@ -165,23 +218,30 @@ export default function HUD({ photographerRef }: HUDProps) {
         try {
           for (let i = 0; i < images.length; i++) {
             const img = images[i]
-            const resp = await uploadImage(img)
-            const url = cloudinaryUrlToShareUrl(resp.secure_url)
-            const data = await addQrToStrip(img, url)
             const timestamp = Date.now()
-            addPicture({
-              timestamp,
-              data,
-              url,
-              isStrip: true,
-              stripPhotos: stripGroups[i],
-              bgColor: DEFAULT_STRIP_BG,
-            })
-            fetch(`${getBackendHttpUrl()}/save`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: data, url, timestamp, stripPhotos: stripGroups[i] }),
-            }).catch(() => {})
+            if (useLocalHosting.get()) {
+              // Serve straight from this backend over the local network
+              // instead of uploading to ImgBB. The filename is chosen
+              // here (not server-generated) so the QR code pointing at it
+              // can be baked in before the single /save call below. Uses the
+              // backend's self-reported LAN IP, not getBackendHttpUrl()'s
+              // window.location.hostname — the latter is "localhost" when
+              // the booth itself is opened as localhost:3000, which a phone
+              // can't resolve back to this PC.
+              const filename = `photo_${timestamp}.${imageExt(img)}`
+              const host = await getLocalHostAddress()
+              const url = `http://${host}:8081/photos/${filename}?download=1`
+              const data = await addQrToStrip(img, url, stripGroups[i].length)
+              savePicture(timestamp, data, url, i, filename)
+            } else {
+              // ImgBB's own hosted viewer page — already has a working
+              // download button ImgBB built and tested themselves, so the
+              // QR points straight at it instead of a custom landing page.
+              const resp = await uploadImage(img)
+              const url = resp.data.url_viewer
+              const data = await addQrToStrip(img, url, stripGroups[i].length)
+              savePicture(timestamp, data, url, i)
+            }
           }
           setState('ready')
         } catch (e: any) {
@@ -191,21 +251,7 @@ export default function HUD({ photographerRef }: HUDProps) {
       })()
     } else {
       for (let i = 0; i < images.length; i++) {
-        const data = images[i]
-        const timestamp = Date.now()
-        addPicture({
-          timestamp,
-          data,
-          url: '',
-          isStrip: true,
-          stripPhotos: stripGroups[i],
-          bgColor: DEFAULT_STRIP_BG,
-        })
-        fetch(`${getBackendHttpUrl()}/save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: data, url: '', timestamp, stripPhotos: stripGroups[i] }),
-        }).catch(() => {})
+        savePicture(Date.now(), images[i], '', i)
       }
       setState('ready')
     }
