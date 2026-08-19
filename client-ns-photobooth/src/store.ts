@@ -31,7 +31,7 @@ export const GIF_OPTIONS = {
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
-export const pointerEnabled = atom(true)
+export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
 
 // new backend requires video be sent to backend rather than the other way around

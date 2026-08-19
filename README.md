@@ -41,7 +41,7 @@ That's it. Docker handles Python, Node, and all dependencies inside containers.
 
 > **Why Python 3.10 specifically:** `numpy==1.24.4` (pinned in `backend/requirements.txt`) has no prebuilt wheel for Python 3.12, and building it from source fails outright — Python 3.12 removed an API (`pkgutil.ImpImporter`) that the old `setuptools`/`pkg_resources` shim bundled in numpy's build process depends on. There's no workaround short of using Python 3.10.
 
-Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt` (see step 6 below). A couple of things worth knowing if you're setting this up for the first time:
+Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt` (see step 7 below). A couple of things worth knowing if you're setting this up for the first time:
 - `mediapipe` (used for hand-gesture/drone detection) is a runtime dependency of `backend/main.py` — make sure your `requirements.txt` includes it; if you're working from an older checkout that predates this note, add `mediapipe==0.10.8` manually.
 - Installing `requirements.txt` pulls in **three different OpenCV packages** side-by-side (`opencv-python-headless`, pinned directly, plus `opencv-python` and `opencv-contrib-python`, pulled in transitively by `mediapipe`/`ultralytics`) — they all provide the same `cv2` module. This works in practice (whichever installs last wins in `site-packages`), but if `cv2` ever behaves unexpectedly, this is why.
 - **If you have an NVIDIA GPU, `pip install -r backend/requirements.txt` alone will NOT use it.** `ultralytics` pulls in `torch` with no pinned index, so on Windows `pip` installs the CPU-only build (`torch.cuda.is_available()` returns `False` even with a GPU present) — pose detection (and ViTPose++, see `ENABLE_VITPOSE` in `main.py`) then silently runs on CPU, which is dramatically slower and directly hurts live-feed latency. After the normal install, reinstall `torch`/`torchvision` from the CUDA build explicitly:
@@ -169,7 +169,17 @@ python -m ensurepip --upgrade
 python -m pip install --upgrade pip
 ```
 
-### 6. Run the App
+### 6. Install Frontend Dependencies
+
+```powershell
+cd photobooth/client-ns-photobooth
+yarn install
+cd ../..
+```
+
+> **Required every time `client-ns-photobooth/.yarnrc.yml` or `yarn.lock` changes**, not just on first setup — `app.py` (below) starts the frontend with `yarn dev` directly and never runs `yarn install` itself, so a stale `node_modules`/Yarn state will make `localhost:3000` fail to boot with `Usage Error: Couldn't find the node_modules state file`, even if you'd already run this before. In particular, this project switched from Yarn's PnP linker to the classic `node_modules` linker (`nodeLinker: node-modules` in `.yarnrc.yml`) — if you're pulling into a checkout that predates that change, you must re-run `yarn install` here or the frontend won't start.
+
+### 7. Run the App
 
 ```powershell
 cd photobooth

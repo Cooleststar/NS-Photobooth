@@ -8,10 +8,10 @@ Backend:
 Visual:
 - remove black border from camera output (Done)
 - shrink the bottom margin by shrinking fusion logo to match bats logo
-- no arrows displayed by default
+- no arrows displayed by default(Done)
 
 Props:
-- switch to just palm gestures (instead of shoulder/arm) cos this would be less obstructive for group photos
+- switch to just palm gestures (instead of shoulder/arm) cos this would be less obstructive for group photos(Done)
 - exact textures tbd... SM may be interested in designing something nicer
 
 Deployment/Testing:

@@ -5,7 +5,7 @@ Photobooth code that will be repeatedly reused for fancy purposes in NS.
 ## Decisions
 
 - VSCode-first support
-- [Yarn 2 Zero-Installs](https://yarnpkg.com/features/zero-installs)
+- ~~[Yarn 2 Zero-Installs](https://yarnpkg.com/features/zero-installs)~~ — no longer accurate: `.yarnrc.yml` now sets `nodeLinker: node-modules` (switched from the PnP linker for easier cross-device setup), which means `node_modules` is no longer committed/zero-install and you must run `yarn install` after cloning or pulling any change to `.yarnrc.yml`/`yarn.lock`, or `yarn dev` fails immediately with `Couldn't find the node_modules state file`.
 - [Vite](https://vitejs.dev/) + [Babel](https://babeljs.io/)
 - [Preact](https://preactjs.com/) framework (Typescript)
 - [twin.macro](https://github.com/ben-rogerson/twin.macro) + [Emotion](https://emotion.sh/docs/introduction) CSS-in-JS
