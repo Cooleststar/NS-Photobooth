@@ -43,3 +43,6 @@ backend/photos/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Generated photobooth gallery (QR/photo-save path)
+/photos/
