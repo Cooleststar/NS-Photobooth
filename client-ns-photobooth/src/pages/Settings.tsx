@@ -21,6 +21,8 @@ import {
   cameraInitialized,
   pictures,
   pointerEnabled,
+  qrDroneLocked,
+  qrModeEnabled,
   router,
   saveDirHandle,
   saveDirName,
@@ -300,6 +302,13 @@ export default function Settings() {
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
+            <SwitchRow label='QR Code Mode' boolVar={qrModeEnabled} />
+            <button
+              tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
+              onClick={() => qrDroneLocked.set(false)}
+            >
+              Reset Drone Lock
+            </button>
           </Section>
 
           <Section title='Actions'>

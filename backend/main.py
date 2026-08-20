@@ -374,6 +374,54 @@ def _to_mp33(xyn, conf):
 # ---------------------------------------------------------------------------
 _detection_mode: str = 'both'
 
+# QR code detection, for QR mode (a guest holds a printed/on-screen QR code
+# up to the camera and the frontend shows a matching animation — see
+# QR_GIF_MAP in Display.tsx). Uses OpenCV's built-in decoder: no extra
+# dependency beyond opencv-python, which the project already requires.
+_qr_detector = cv2.QRCodeDetector()
+_QR_DOWNSCALE_WIDTH = 960  # detection doesn't need full resolution; costs more per frame
+
+# Raw per-frame decodes are noisy — a code drops out for a frame or two the
+# moment it tilts, blurs, or is briefly occluded (e.g. by a hand), which
+# without smoothing flickers the overlay on/off on the frontend. Track each
+# payload's last-seen time and keep reporting it as "visible" for a short
+# grace window after its last successful decode, same idea as a track TTL.
+_qr_last_seen: dict = {}
+_QR_TRACK_TTL = 0.8  # seconds a code stays "visible" after its last successful decode
+
+
+def _decode_qr_codes(frame: np.ndarray) -> list:
+    """Every QR payload visible in the frame, or seen within the last
+    _QR_TRACK_TTL seconds — absorbs brief decode dropouts instead of
+    flickering the overlay off every time a single frame fails to decode."""
+    height, width = frame.shape[:2]
+    working = frame
+    if width > _QR_DOWNSCALE_WIDTH:
+        scale = _QR_DOWNSCALE_WIDTH / float(width)
+        working = cv2.resize(
+            frame, (_QR_DOWNSCALE_WIDTH, max(1, int(round(height * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    try:
+        ok, payloads, _points, _ = _qr_detector.detectAndDecodeMulti(working)
+    except cv2.error:
+        # OpenCV's detector occasionally throws on degenerate frames.
+        ok, payloads = False, None
+
+    now = time.time()
+    if ok and payloads is not None:
+        for p in payloads:
+            text = (p or '').strip()
+            if text:
+                _qr_last_seen[text] = now
+
+    stale = [text for text, ts in _qr_last_seen.items() if now - ts >= _QR_TRACK_TTL]
+    for text in stale:
+        del _qr_last_seen[text]
+
+    return list(_qr_last_seen.keys())
+
 
 def run_pose_detection(frame: np.ndarray) -> dict:
     """Detect poses/hands on a BGR frame, gated by _detection_mode.
@@ -386,7 +434,11 @@ def run_pose_detection(frame: np.ndarray) -> dict:
     mode = _detection_mode
     poses: list = []
 
-    if mode in ('pose', 'both'):
+    # QR mode also needs pose (specifically the nose keypoint) for the
+    # sticky drone lock-on — once a guest shows the QR code, the drone
+    # locks onto their face/head and keeps following it, so pose detection
+    # has to keep running even after the code itself is put away.
+    if mode in ('pose', 'both', 'qr'):
         with _yolo_lock:
             results = _yolo.track(
                 frame,
@@ -444,7 +496,9 @@ def run_pose_detection(frame: np.ndarray) -> dict:
     if mode in ('hands', 'both'):
         hands = run_hand_detection(frame)
 
-    return {"poses": poses, "hands": hands}
+    qr_codes = _decode_qr_codes(frame) if mode == 'qr' else []
+
+    return {"poses": poses, "hands": hands, "qr_codes": qr_codes}
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
@@ -795,11 +849,15 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             # unnecessary detection latency for hand-only characters (drone).
             mode = _detection_mode
             should_infer = frame is not None and (
-                mode == 'hands' or (mode in ('pose', 'both') and frame_count % 3 == 0)
+                mode == 'hands' or (mode in ('pose', 'both', 'qr') and frame_count % 3 == 0)
             )
             if should_infer:
                 global _rtsp_pose_busy
-                small = cv2.resize(frame, (320, 240))
+                # QR codes need real pixel density per module to decode —
+                # 320x240 (fine for pose/hand keypoints) is too low-res and
+                # makes anything but a huge, close QR code undecodable, so
+                # QR mode runs detection on the full-resolution frame.
+                small = frame if mode == 'qr' else cv2.resize(frame, (320, 240))
                 if not _rtsp_pose_busy:
                     _rtsp_pose_busy = True
                     def _rtsp_infer(f):
@@ -1126,7 +1184,7 @@ async def detection_mode_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
         mode = data.get('mode', 'both')
-        if mode not in ('pose', 'hands', 'none', 'both'):
+        if mode not in ('pose', 'hands', 'none', 'both', 'qr'):
             return web.Response(status=400, text='Invalid mode', headers=_CORS)
         _detection_mode = mode
         log.info(f"Detection mode set to: {mode}")

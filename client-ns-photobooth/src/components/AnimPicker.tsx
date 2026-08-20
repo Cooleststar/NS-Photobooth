@@ -1,6 +1,6 @@
 import tw from 'twin.macro'
 import { useStore } from '@nanostores/preact'
-import { GIF_OPTIONS, GifOption, selectedGif } from '../store'
+import { GIF_OPTIONS, GifOption, qrModeEnabled, selectedGif } from '../store'
 import owlThumb from '../assets/owl_anim/owl_idle_new.gif'
 import batThumb from '../assets/Bat_anim/Bat_rest.png'
 import globeThumb from '../assets/globe_anim/globe.gif'
@@ -24,6 +24,12 @@ const THUMBS: Partial<Record<GifOption, string>> = {
 /** side strip of thumbnail buttons for switching the active animation without opening settings */
 export function AnimPicker() {
   const current = useStore(selectedGif)
+  const qrMode = useStore(qrModeEnabled)
+
+  // The character picker is meaningless in QR mode — animations there are
+  // triggered by which QR code is shown to the camera (see QR_GIF_MAP in
+  // Display.tsx), not by picking one here.
+  if (qrMode) return null
 
   return (
     <div tw='fixed right-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2'>

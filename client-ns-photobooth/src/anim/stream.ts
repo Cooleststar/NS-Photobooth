@@ -64,6 +64,7 @@ export function drawDebug(
   pose: NormalizedLandmarkList,
   propDets: PropDetection[],
   fps: number,
+  delayMs?: number,
 ) {
   const { height, width } = ctx.canvas
 
@@ -93,19 +94,30 @@ export function drawDebug(
   ctx.restore()
   ctx.save()
 
-  // FPS counter — drawn last, unflipped, so it always reads left-to-right
-  // regardless of the mirrored video underneath. Not gated on pose/props
-  // being present, since hand-only characters (e.g. drone) have no pose
-  // data at all and should still show FPS.
+  // FPS / delay counter — drawn last, unflipped, so it always reads
+  // left-to-right regardless of the mirrored video underneath. Not gated on
+  // pose/props being present, since hand-only characters (e.g. drone) have
+  // no pose data at all and should still show these.
   const fpsText = `${Math.round(fps)} FPS`
+  const delayText = delayMs !== undefined ? `${Math.round(delayMs)}ms delay` : undefined
   ctx.font = 'bold 28px monospace'
   ctx.textBaseline = 'top'
   const pad = 10
-  const metrics = ctx.measureText(fpsText)
+  const lineH = 36
+  const fpsMetrics = ctx.measureText(fpsText)
+  const delayMetrics = delayText ? ctx.measureText(delayText) : undefined
+  const boxWidth = Math.max(fpsMetrics.width, delayMetrics?.width ?? 0) + 12
+  const boxHeight = delayText ? lineH * 2 : lineH
   ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
-  ctx.fillRect(pad - 6, pad - 4, metrics.width + 12, 36)
+  ctx.fillRect(pad - 6, pad - 4, boxWidth, boxHeight)
   ctx.fillStyle = fps < 15 ? '#ff5555' : fps < 24 ? '#ffcc00' : '#55ff55'
   ctx.fillText(fpsText, pad, pad)
+  if (delayText) {
+    // >200ms delay is very noticeable lag between what's happening and what
+    // the overlay shows; >80ms is starting to feel a little behind.
+    ctx.fillStyle = delayMs! > 200 ? '#ff5555' : delayMs! > 80 ? '#ffcc00' : '#55ff55'
+    ctx.fillText(delayText, pad, pad + lineH)
+  }
 
   ctx.restore()
 }

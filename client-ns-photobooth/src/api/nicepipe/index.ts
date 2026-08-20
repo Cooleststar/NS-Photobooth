@@ -30,6 +30,11 @@ export type Analysis = {
   }
   allPoses?: { [id: number]: NormalizedLandmarkList }
   hands?: HandData[]
+  /** Decoded payload text of every QR code currently visible in-frame (QR mode only) */
+  qrCodes?: string[]
+  /** performance.now() timestamp of the last /pose_out message received — used to
+   * show a "delay" metric (how stale the detection data currently in use is) */
+  lastUpdateTs?: number
 }
 
 export type FrameEvent = {

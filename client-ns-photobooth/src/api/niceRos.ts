@@ -30,10 +30,11 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
 
   useEffect(() => {
     const unsub1 = niceROS.subscribeTopic('/pose_out', (msg: any) => {
-      const { poses, hands, mp_pose } = msg as {
+      const { poses, hands, mp_pose, qr_codes } = msg as {
         poses: { x: number[]; y: number[]; z: number[]; scores: number[]; track: { id: number } }[]
         hands?: { x: number[]; y: number[]; z: number[]; label: string; palm_up: boolean }[]
         mp_pose?: { x: number[]; y: number[]; z: number[]; scores: number[] } | null
+        qr_codes?: string[]
       }
       dataRef.current.mmpose = Object.fromEntries(
         poses.map(({ x, y, z, scores, track }) => [
@@ -58,6 +59,8 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
         label: h.label as 'Left' | 'Right',
         palmUp: h.palm_up,
       }))
+      dataRef.current.qrCodes = qr_codes ?? []
+      dataRef.current.lastUpdateTs = performance.now()
     })
     const unsub2 = niceROS.subscribeTopic('/rect_out', ({ markers }) => {
       dataRef.current.kp = markers.map(({ ns, points }) => [

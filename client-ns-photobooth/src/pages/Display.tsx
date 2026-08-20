@@ -24,8 +24,10 @@ import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
+import { convertPoint } from '../api/nicepipe/mpPose'
 import { useNiceROSAnalysis } from '../api/niceRos'
 import laptopGif from '../assets/laptop_anim/laptop.gif'
+import qrDroneGif from '../assets/drone_anim/drone.gif'
 import * as PIXI from '../pixi'
 import {
   GifOption,
@@ -36,6 +38,8 @@ import {
   multiTarget,
   nicepipeURL,
   pointerEnabled,
+  qrDroneLocked,
+  qrModeEnabled,
   HIKVISION_IPS,
   RTSP_BASE,
   cameraSource,
@@ -44,6 +48,13 @@ import {
   selectedDevice,
   selectedGif,
 } from '../store'
+
+// QR mode (Settings → "QR Code Mode"): a guest holds a QR code encoding
+// this exact payload string up to the camera, and the drone gif fades in at
+// a fixed position — see the qrMode branch in the main render effect below.
+// Only one code/gif is wired up (drone) — this project doesn't need the
+// reference implementation's general multi-code mapping config.
+const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
 
 const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'none'>, string> = {
   laptop: laptopGif,
@@ -240,7 +251,15 @@ function createReceivingCtx(
             return { ...p, x: dx, y: dy }
           })
         : pose
-      if (debugEnabled.get()) drawDebug(ctx, debugPose, propDets, fps)
+      if (debugEnabled.get()) {
+        // How stale the detection data currently driving the overlay is —
+        // time since the last /pose_out message, not a frame-accurate
+        // round-trip (RTSP mode never sends frames to the backend at all,
+        // so round-trip timing isn't meaningful there), but a mode-agnostic
+        // proxy for pipeline lag that's directly useful either way.
+        const delayMs = data.lastUpdateTs !== undefined ? performance.now() - data.lastUpdateTs : undefined
+        drawDebug(ctx, debugPose, propDets, fps, delayMs)
+      }
     },
   ] as const
 }
@@ -280,6 +299,7 @@ export default function Display({
   const camRes = useStore(camSize)
   const url = useStore(nicepipeURL)
   const gifOption = useStore(selectedGif)
+  const qrMode = useStore(qrModeEnabled)
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
   const isMulti = useStore(multiTarget)
@@ -316,7 +336,7 @@ export default function Display({
   useEffect(() => {
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
-    const mode = DETECTION_MODE_BY_GIF[gifOption] ?? 'both'
+    const mode = qrMode ? 'qr' : (DETECTION_MODE_BY_GIF[gifOption] ?? 'both')
 
     const send = () => {
       fetch(`${getBackendHttpUrl()}/detection_mode`, {
@@ -338,7 +358,7 @@ export default function Display({
       active = false
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [gifOption])
+  }, [gifOption, qrMode])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
@@ -579,8 +599,29 @@ export default function Display({
       type AnimUpdate = (pose: typeof dataRef.current.mp_pose.pose) => void
       const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
+      // QR mode: a single fade-prop instance (drone gif). Before lock-on, it
+      // just fades in/out at a fixed center position while QR_DRONE_PAYLOAD
+      // is visible. Once a guest has shown that code while a pose was
+      // available, it locks onto their nose position (reusing this
+      // project's existing YOLO pose detection rather than a separate face
+      // model) and keeps following them — even after the code is put away
+      // or a photo is taken — holding its last known position on frames
+      // where pose is briefly lost, until reset via Settings. See the
+      // ticker below for the actual lock/follow logic.
+      let qrDroneUpdate: ((target: { x: number; y: number } | undefined) => void) | undefined
+      let qrDroneLastPos: { x: number; y: number } | undefined
 
-      if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba' || gifOption === 'ocfusion' || gifOption === 'clown' || gifOption === 'pig') {
+      if (qrMode) {
+        const [container, update] = await createSimpleFadePropAnim(app, {
+          animUrl: qrDroneGif,
+          kalman: { R: 0.01, Q: 5 },
+          sizeFactor: 1,
+        })
+        animLayer.addChild(container)
+        qrDroneUpdate = (target) => {
+          update(target ? { x: target.x, y: target.y, size: CORNER_SIZE * 2, angle: 0 } : undefined)
+        }
+      } else if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba' || gifOption === 'ocfusion' || gifOption === 'clown' || gifOption === 'pig') {
         // Scuba always runs a single instance regardless of multi-target mode —
         // it already does its own "closest person" selection internally across
         // all tracked people, so multiple instances would just render duplicate,
@@ -647,6 +688,27 @@ export default function Display({
         const curPose = dataRef.current.mp_pose?.pose
         const hasPerson = !!(curPose && curPose.length > 0)
         for (const updateCorner of cornerAnims) updateCorner(hasPerson)
+
+        if (qrDroneUpdate) {
+          const visibleCodes = rawRef.current.qrCodes ?? []
+          const codeVisible = visibleCodes.includes(QR_DRONE_PAYLOAD)
+          const nosePose = dataRef.current.mp_pose?.pose?.[0]
+
+          if (!qrDroneLocked.get() && codeVisible && nosePose) {
+            qrDroneLocked.set(true)
+          }
+
+          if (qrDroneLocked.get()) {
+            // Locked: follow the nose position, holding the last known spot
+            // on frames where pose is briefly lost rather than disappearing.
+            if (nosePose) qrDroneLastPos = convertPoint(nosePose, height, width)
+            qrDroneUpdate(qrDroneLastPos)
+          } else {
+            // Not locked yet: fixed center position, visible only while the
+            // code itself is shown.
+            qrDroneUpdate(codeVisible ? { x: width / 2, y: height / 2 } : undefined)
+          }
+        }
       })
 
       app.ticker.add(() => {
@@ -728,7 +790,7 @@ export default function Display({
       }
       canvas.remove()
     }
-  }, [height, width, gifOption, isRtspMode, isMulti]) // including the ref currents here triggers an unnecessary rerender
+  }, [height, width, gifOption, isRtspMode, isMulti, qrMode]) // including the ref currents here triggers an unnecessary rerender
   return (
     <>
       <div ref={divRef} {...props}></div>
