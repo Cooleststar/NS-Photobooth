@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
 } from 'react'
 import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
@@ -268,6 +269,7 @@ export default function Display({
   const videoRef = useRef<HTMLVideoElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   const divRef = useRef<HTMLDivElement>(null)
+  const [animLoading, setAnimLoading] = useState(false)
 
   const deviceId = useStore(selectedDevice)
   const camRes = useStore(camSize)
@@ -490,6 +492,11 @@ export default function Display({
     }, isRtspMode ? rtspBitmapRef : undefined)
 
     attachStream2Pixi(app, canvas)
+    // Feed the video into the canvas immediately, independent of animation
+    // asset loading below — previously this was only wired up after the
+    // gif/model finished loading, so the feed stayed black on every gif
+    // switch until the new animation loaded (or forever, if it errored).
+    app.ticker.add(() => update(rawRef.current, poseInd.get()))
 
     // Masked layer for animations — clips GIFs at the video feed boundary.
     // Uses a Sprite (from the built-in white texture) as the mask shape since
@@ -554,8 +561,11 @@ export default function Display({
       return null
     }
 
+    let cancelled = false
+    setAnimLoading(true)
     ;(async () => {
       console.log('Beginning animation load...')
+      try {
 
       type AnimUpdate = (pose: typeof dataRef.current.mp_pose.pose) => void
       const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
@@ -607,8 +617,6 @@ export default function Display({
       bannerContainer = banner
       console.log('Animations added')
 
-      app.ticker.add(() => update(rawRef.current, poseInd.get()))
-
       app.ticker.add(() => {
         if (isMulti && animSlots.length > 1) {
           // Multi-person: assign each detected person to an animation slot
@@ -653,6 +661,16 @@ export default function Display({
       app.ticker.add(() => {
         banner.visible = bannerEnabled.get()
       })
+      } catch (e) {
+        // Asset load failure (network error, ensureLoaded's 60s timeout,
+        // etc.) previously left this IIFE as an unhandled rejection with
+        // the video feed never reattached — now it's just a lost animation,
+        // the feed keeps working since attachStream2Pixi's ticker is wired
+        // up unconditionally above.
+        console.warn('Animation load failed:', e)
+      } finally {
+        if (!cancelled) setAnimLoading(false)
+      }
     })()
 
     photographerRef.current = async () => {
@@ -679,9 +697,22 @@ export default function Display({
     app.loader.load()
 
     return () => {
+      cancelled = true
       try {
         clearInterval(debugPrintAnalysis)
-        app.loader?.reset()
+        // NOTE: do NOT call app.loader.reset() here. With sharedLoader:true,
+        // app.loader is the single global PIXI.Loader.shared instance reused
+        // across every gif switch (that's the point — see the comment above
+        // re: caching). reset() wipes loader.resources and aborts in-flight
+        // loads on that shared instance, but doesn't touch our separate
+        // `textureCache` store in pixi.ts's ensureLoaded — so the two caches
+        // fall out of sync: an aborted load leaves textureCache stuck at
+        // 'queued' forever (ensureLoaded never re-requests it, since it only
+        // calls loader.add() when the cache entry is undefined), and a
+        // completed load leaves textureCache pointing at a resource PIXI has
+        // already discarded. Either way the gif silently never appears again
+        // until a full page reload resets both caches. Just destroy this
+        // app instance; the shared loader/textureCache persist correctly.
         app.destroy()
       } catch (e) {
         console.warn(e)
@@ -692,6 +723,11 @@ export default function Display({
   return (
     <>
       <div ref={divRef} {...props}></div>
+      {animLoading && (
+        <div tw='fixed inset-0 z-40 flex items-center justify-center pointer-events-none'>
+          <div tw='w-16 h-16 border-4 border-white border-t-transparent rounded-full animate-spin' />
+        </div>
+      )}
       <video
         ref={videoRef}
         controls

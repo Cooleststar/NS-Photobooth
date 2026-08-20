@@ -313,6 +313,13 @@ def _vitpose_worker():
                 kps_sc  = person["scores"].cpu().float().numpy()      # (17,)
                 kps_xyn = kps_xy / np.array([w, h], dtype=np.float32)
                 _vitpose_cache[track_id] = (now, kps_xyn, kps_sc)
+
+            # tracked IDs only ever grow over a long-running session, so
+            # entries for people no longer around must be evicted here or
+            # the dict grows unbounded
+            stale_ids = [tid for tid, (ts, *_) in _vitpose_cache.items() if now - ts >= _VITPOSE_CACHE_TTL]
+            for tid in stale_ids:
+                del _vitpose_cache[tid]
         except Exception as _e:
             log.warning("ViTPose++ worker error: %s", _e)
 

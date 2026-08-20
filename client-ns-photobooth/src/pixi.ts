@@ -75,17 +75,26 @@ export function ensureLoaded(
   }
 
   return new Promise<LoaderResource>((cb, err) => {
-    const unsubscribe = textureCache.subscribe((cache, _) => {
+    let timeoutId: ReturnType<typeof setTimeout>
+    let unsubscribe: () => void
+    // subscribe() invokes the listener immediately (synchronously, before
+    // the assignment below completes) if the value is already cached — so
+    // both timeoutId and unsubscribe must already be declared (not yet
+    // assigned is fine) before calling subscribe, or referencing them from
+    // inside the immediate synchronous call throws a TDZ ReferenceError.
+    unsubscribe = textureCache.subscribe((cache, _) => {
       const asset = cache[url]
       if (asset && asset !== ('queued' as any)) {
-        // not sure if not unsubbing causes a leak
-        // but i get a hard to resolve error if i unsubscribe
-        // unsubscribe()
+        clearTimeout(timeoutId)
+        // deferred: calling unsubscribe() synchronously here mutates
+        // nanostores' listener set while it's still iterating it for this
+        // notification, which throws. Deferring to a microtask avoids that.
+        setTimeout(unsubscribe, 0)
         cb(asset)
       }
     })
 
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       unsubscribe()
       err(`${url} loading timed out in ${timeout}ms`)
     }, timeout)
