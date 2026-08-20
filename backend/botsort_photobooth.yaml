@@ -1,0 +1,36 @@
+# BoT-SORT tuned for the photobooth's close-range, multi-person case.
+# Copied from ultralytics' botsort.yaml (8.4.90) so the schema matches the
+# installed version exactly; only the two values below differ from stock.
+#
+# Why: when someone stands close enough to fill much of the frame, their box
+# grows fast between frames and detection gets marginal at the edges. The
+# tracker then fails to associate them with their existing track and issues a
+# NEW id. Downstream, a fresh id looks like a brand-new person, so their
+# animation slot is freed and reassigned — which is how a clown/pig face ends
+# up on somebody else.
+
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+
+# 30 -> 90: keep a lost track alive ~3 s at 30 fps instead of ~1 s, so a person
+# who blips out at close range reclaims their original id rather than getting
+# a new one.
+track_buffer: 90
+
+# 0.8 -> 0.9: accept a match down to IoU ~0.1 instead of ~0.2. A box that is
+# growing quickly (person walking toward the camera) overlaps its own previous
+# frame less, and stock 0.8 drops the association exactly when someone
+# approaches — the case being fixed here.
+match_thresh: 0.9
+
+fuse_score: True
+gmc_method: sparseOptFlow
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+# ReID would help further with identity swaps but needs extra compute; the
+# codebase deliberately keeps the CPU path light, so it stays off. Flip to
+# True (model: auto reuses detector features) if swaps persist on a GPU box.
+with_reid: False
+model: auto

@@ -18,6 +18,14 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 // not just span the raw ear-to-ear distance. Same approach as clown.ts.
 const FACE_SIZE_FACTOR = 2.2
 
+// A jump larger than this (in multiples of face size) is not a person moving.
+// It means this animation slot has been handed to a different person, which
+// happens when someone stands close enough that the tracker briefly loses
+// them and re-acquires them under a fresh ID. Easing into the new target
+// would drag the mask across the frame and over somebody else's face on the
+// way, so snap the filters onto the new person instead.
+const REBIND_SNAP_RATIO = 1.5
+
 /** Face center/size/tilt from MP-33 pose landmarks (nose=0, ears=7/8) —
  * there's no dedicated face-mesh detector in this pipeline, so the sparse
  * face points already present in body pose are reused, same as
@@ -62,17 +70,21 @@ export async function createPigAnim(app: PIXI.Application) {
   sprite.anchor.set(0.5, 0.5)
   container.addChild(sprite)
 
-  const initialState = () => {
-    container.alpha = 0
-  }
-  initialState()
-
-  const kf = {
+  const makeFilters = () => ({
     x: new KalmanFilter(KF_PARAMS),
     y: new KalmanFilter(KF_PARAMS),
     size: new KalmanFilter(KF_PARAMS),
     angle: new KalmanFilter(KF_PARAMS),
+  })
+  let kf = makeFilters()
+  // whether kf currently holds a recent target belonging to this same person
+  let bound = false
+
+  const initialState = () => {
+    container.alpha = 0
+    bound = false
   }
+  initialState()
 
   let x = 0
   let y = 0
@@ -83,6 +95,14 @@ export async function createPigAnim(app: PIXI.Application) {
   const update = (pose: NormalizedLandmarkList) => {
     const face = getFaceTarget(pose, height, width)
     if (face) {
+      const jumped =
+        bound && Math.hypot(face.x - x, face.y - y) > face.size * REBIND_SNAP_RATIO
+      if (jumped || !bound) {
+        // Fresh person for this slot: discard the old person's filter state so
+        // the mask appears on them rather than travelling there.
+        kf = makeFilters()
+        bound = true
+      }
       x = kf.x.filter(face.x)
       y = kf.y.filter(face.y)
       size = kf.size.filter(face.size)

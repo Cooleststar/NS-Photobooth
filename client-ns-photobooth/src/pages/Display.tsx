@@ -1,3 +1,4 @@
+import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
 import { useStore } from '@nanostores/preact'
 import { useCam, useNiceROS, useNiceRTC } from 'nice-ros-react'
 import {
@@ -50,10 +51,9 @@ const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 's
 }
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// clown/pig read body pose only, drone and ocfusion read hand landmarks
-// only (ignores pose entirely), laptop is a fixed-position fade prop that
-// reads neither, scuba needs both (pose for the nose position, hands for
-// the pinch/wave gesture). Told to the backend via POST /detection_mode so
+// clown/pig/scuba read body pose only, drone and ocfusion read hand
+// landmarks only (ignores pose entirely), laptop is a fixed-position fade
+// prop that reads neither. Told to the backend via POST /detection_mode so
 // it skips idle models per-frame instead of running YOLO/ViTPose/MediaPipe
 // Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
@@ -63,7 +63,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   globe: 'pose',
   drone: 'hands',
   laptop: 'none',
-  scuba: 'both',
+  scuba: 'pose',
   ocfusion: 'hands',
   clown: 'pose',
   pig: 'pose',
@@ -72,6 +72,54 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
 const MARGIN_X = 30 / 1920
 const MARGIN_T = 30 / 1080
 const MARGIN_B = 30 / 1080
+
+/** Stable person -> slot assignment for multi-target animations.
+ *
+ * Poses arrive keyed by tracker id, and Object.keys() returns those keys in
+ * ascending numeric order — so driving slot i from ids[i] re-shuffles every
+ * slot the moment anyone enters or leaves, and a newcomer whose id sorts
+ * below an existing one shifts all the slots after it. Each slot owns its
+ * own Kalman filters and AnimState, so a reshuffle makes a mask slide off
+ * its person and across to another, briefly stacking two masks on one face.
+ *
+ * Keying by tracker id instead means a person holds the same slot for as
+ * long as they are tracked, whoever else comes and goes. */
+function createSlotAssigner<T>(slotCount: number) {
+  const slotOf = new Map<number, number>()
+  const freedAt = new Array<number>(slotCount).fill(-1)
+  let tick = 0
+
+  return (allPoses: { [id: number]: T }): (T | undefined)[] => {
+    tick++
+    const ids = Object.keys(allPoses).map(Number)
+    const present = new Set(ids)
+
+    for (const [id, slot] of [...slotOf]) {
+      if (!present.has(id)) {
+        slotOf.delete(id)
+        freedAt[slot] = tick
+      }
+    }
+
+    const taken = new Set(slotOf.values())
+    const free: number[] = []
+    for (let i = 0; i < slotCount; i++) if (!taken.has(i)) free.push(i)
+    // Longest-free first, so a slot isn't handed straight to a new person
+    // while its filters are still settled on the previous one.
+    free.sort((a, b) => freedAt[a] - freedAt[b])
+
+    let next = 0
+    for (const id of ids) {
+      if (slotOf.has(id)) continue
+      if (next >= free.length) break // more people than slots — extras go unrendered
+      slotOf.set(id, free[next++])
+    }
+
+    const bySlot = new Array<T | undefined>(slotCount)
+    for (const [id, slot] of slotOf) bySlot[slot] = allPoses[id]
+    return bySlot
+  }
+}
 
 function postprocessPicture(pic: HTMLCanvasElement) {
   const { width, height } = pic
@@ -552,10 +600,9 @@ export default function Display({
       } else if (option === 'scuba') {
         const [container, updateScuba] = await createScubaAnim(app, marginOpts)
         // Scuba needs all tracked people's poses (to find whoever is closest
-        // to the camera) plus raw hand landmarks — neither is the single
-        // `pose` arg this slot system passes, so read both directly.
-        const wrappedUpdate = (_pose: any) =>
-          updateScuba(dataRef.current.allPoses ?? {}, rawRef.current.hands ?? [])
+        // to the camera), not the single `pose` arg this slot system passes,
+        // so read them directly.
+        const wrappedUpdate = (_pose: any) => updateScuba(dataRef.current.allPoses ?? {})
         return [container, wrappedUpdate] as const
       } else if (option === 'ocfusion') {
         const [container, updateOCFusion] = await createOCFusionAnim(app, marginOpts)
@@ -626,17 +673,14 @@ export default function Display({
       bannerContainer = banner
       console.log('Animations added')
 
+      const assignAnimSlots = createSlotAssigner<NormalizedLandmarkList>(animSlots.length)
+
       app.ticker.add(() => {
         if (isMulti && animSlots.length > 1) {
-          // Multi-person: assign each detected person to an animation slot
-          const allPoses = dataRef.current.allPoses ?? {}
-          const ids = Object.keys(allPoses).map(Number)
+          // Multi-person: each person holds their own slot while tracked
+          const bySlot = assignAnimSlots(dataRef.current.allPoses ?? {})
           for (let i = 0; i < animSlots.length; i++) {
-            if (i < ids.length) {
-              animSlots[i].update(allPoses[ids[i]])
-            } else {
-              animSlots[i].update([])
-            }
+            animSlots[i].update(bySlot[i] ?? [])
           }
         } else if (animSlots.length > 0) {
           // Single-person: use selected pose
@@ -649,17 +693,20 @@ export default function Display({
         for (const updateCorner of cornerAnims) updateCorner(hasPerson)
       })
 
+      const assignArrowSlots = createSlotAssigner<NormalizedLandmarkList>(arrows.length)
+
       app.ticker.add(() => {
         const visible = pointerEnabled.get()
         for (const [container] of arrows) container.visible = visible
         if (!visible) return
 
         if (isMulti && arrows.length > 1) {
-          const allPoses = dataRef.current.allPoses ?? {}
-          const ids = Object.keys(allPoses).map(Number)
+          // Same stable assignment as the anim slots — an arrow drifting
+          // between people looks just as wrong as a mask doing it.
+          const bySlot = assignArrowSlots(dataRef.current.allPoses ?? {})
           for (let i = 0; i < arrows.length; i++) {
             const [, updateArrow] = arrows[i]
-            updateArrow(i < ids.length ? allPoses[ids[i]] : [])
+            updateArrow(bySlot[i] ?? [])
           }
         } else {
           const curPose = dataRef.current.mp_pose?.pose

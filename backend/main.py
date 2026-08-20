@@ -203,6 +203,10 @@ def run_hand_detection(frame: np.ndarray):
 # Revert to 'yolov8n-pose.pt' if tracking becomes unstable.
 _yolo = YOLO('yolo26n-pose.pt')
 _yolo_lock = threading.Lock()
+# Tuned BoT-SORT settings - longer track_buffer and a looser match_thresh so a
+# person standing close to the camera keeps their track ID instead of being
+# re-issued a new one every time detection wobbles. See the file for details.
+_TRACKER_CFG = str(pathlib.Path(__file__).parent / 'botsort_photobooth.yaml')
 _multi_target: bool = False
 
 # ---------------------------------------------------------------------------
@@ -231,9 +235,26 @@ _vitpose_device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # queue(1): drops frames when worker is busy so we always process the latest
 _vitpose_queue: queue.Queue = queue.Queue(maxsize=1)
-# {track_id: (timestamp, kps_xyn (17,2), kps_scores (17,))}
+# {track_id: (timestamp, kps_xyn (17,2), kps_scores (17,), box_xyxy (4,))}
 _vitpose_cache: dict = {}
 _VITPOSE_CACHE_TTL = 2.0   # seconds before a cached result is considered stale
+# A cached entry is only trusted if the box it was computed from still
+# overlaps the box the same track ID occupies now — see run_pose_detection().
+_VITPOSE_MIN_IOU = 0.5
+
+
+def _box_iou(a, b) -> float:
+    """IoU of two xyxy boxes."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0 else 0.0
 
 if not _ENABLE_VITPOSE:
     log.info("ViTPose++ disabled — set ENABLE_VITPOSE=1 to re-enable (GPU recommended)")
@@ -307,11 +328,23 @@ def _vitpose_worker():
             for i, person in enumerate(_vitpose_processor.post_process_pose_estimation(
                 outputs, boxes=[boxes_list],
             )[0]):
-                track_id = ids[i] if i < len(ids) else i
+                if i >= len(ids):
+                    continue   # no identity for this box; caching it under a
+                               # made-up ID would hand these keypoints to an
+                               # unrelated person later
+                track_id = int(ids[i])
+                if track_id < 0:
+                    continue   # untracked detection: the ID is positional, so
+                               # it would point at a different person next
+                               # frame — see the ID fallback in run_pose_detection()
                 kps_xy  = person["keypoints"].cpu().float().numpy()   # (17, 2) pixels
                 kps_sc  = person["scores"].cpu().float().numpy()      # (17,)
                 kps_xyn = kps_xy / np.array([w, h], dtype=np.float32)
-                _vitpose_cache[track_id] = (now, kps_xyn, kps_sc)
+                # Box is kept so the merge site can check this result still
+                # describes the person currently holding the track ID.
+                _vitpose_cache[track_id] = (
+                    now, kps_xyn, kps_sc, np.asarray(boxes_list[i], dtype=np.float32),
+                )
 
             # tracked IDs only ever grow over a long-running session, so
             # entries for people no longer around must be evicted here or
@@ -395,6 +428,7 @@ def run_pose_detection(frame: np.ndarray) -> dict:
                 conf=0.4,
                 iou=0.45,
                 imgsz=640,
+                tracker=_TRACKER_CFG,
             )
 
         r = results[0] if results else None
@@ -402,8 +436,18 @@ def run_pose_detection(frame: np.ndarray) -> dict:
             kps_xyn  = r.keypoints.xyn.cpu().numpy()     # (N, 17, 2) normalised
             kps_conf = (r.keypoints.conf.cpu().numpy()
                         if r.keypoints.conf is not None else None)
-            ids = (r.boxes.id.cpu().numpy().astype(int).tolist()
-                   if r.boxes.id is not None else list(range(len(kps_xyn))))
+            boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+            if r.boxes.id is not None:
+                ids = r.boxes.id.cpu().numpy().astype(int).tolist()
+            else:
+                # No tracker IDs this frame: detections exist but the tracker
+                # hasn't confirmed them, which gets more frequent the more
+                # people are in shot. Positional 0,1,2… would collide with real
+                # track IDs and hand one person's identity — and their cached
+                # ViTPose keypoints — to whoever sits at that index, which is
+                # the "face jumps to the wrong person" bug. Negative IDs can
+                # never collide with real ones.
+                ids = [-(i + 1) for i in range(len(kps_xyn))]
 
             # Single-target: keep only highest-confidence detection
             if not _multi_target and len(kps_xyn) > 1:
@@ -413,14 +457,12 @@ def run_pose_detection(frame: np.ndarray) -> dict:
                 kps_xyn  = kps_xyn[best:best + 1]
                 kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
                 ids      = [ids[best]]
+                boxes_xyxy = boxes_xyxy[best:best + 1]
 
             # Submit frame to ViTPose++ worker (non-blocking: drops if busy)
             if _vitpose_model is not None:
-                boxes_xyxy = r.boxes.xyxy.cpu().numpy()
-                if not _multi_target and len(boxes_xyxy) > 1:
-                    boxes_xyxy = boxes_xyxy[best:best + 1]
                 try:
-                    _vitpose_queue.put_nowait((frame.copy(), boxes_xyxy, ids[:]))
+                    _vitpose_queue.put_nowait((frame.copy(), boxes_xyxy.copy(), ids[:]))
                 except queue.Full:
                     pass  # worker still processing previous frame — skip, no latency added
 
@@ -429,7 +471,13 @@ def run_pose_detection(frame: np.ndarray) -> dict:
             for i in range(len(kps_xyn)):
                 track_id = int(ids[i])
                 cached   = _vitpose_cache.get(track_id)
-                if cached and (now - cached[0]) < _VITPOSE_CACHE_TTL:
+                # The worker runs at least a frame behind, so a cached entry may
+                # belong to whoever held this track ID earlier. Only trust it if
+                # the box it came from still lines up with this person's box now
+                # — otherwise fall back to YOLO's own keypoints.
+                if (cached and (now - cached[0]) < _VITPOSE_CACHE_TTL
+                        and i < len(boxes_xyxy)
+                        and _box_iou(cached[3], boxes_xyxy[i]) >= _VITPOSE_MIN_IOU):
                     x, y, scores = _to_mp33(cached[1], cached[2])   # ViTPose++ keypoints
                 else:
                     conf_row = kps_conf[i] if kps_conf is not None else None
