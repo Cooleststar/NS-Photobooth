@@ -35,6 +35,17 @@ export type GifOption = keyof typeof GIF_OPTIONS
 export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
 export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
+// When on, the backend switches from pose/hand tracking to QR-code
+// detection: a guest holding the drone QR code up to the camera triggers
+// the drone gif — see QR_DRONE_PAYLOAD in Display.tsx for the mapped text.
+export const qrModeEnabled = persistentAtom('qrModeEnabled', false, opts)
+// True once the QR-triggered drone has locked onto a guest's face — from
+// then on it follows their head position instead of staying at a fixed
+// spot, and keeps following even after the QR code is put away or a photo
+// is taken. Not persisted: intentionally resets on reload (a fresh booth
+// session shouldn't stay locked onto yesterday's guest), and otherwise only
+// clears via the "Reset Drone Lock" button in Settings.
+export const qrDroneLocked = atom(false)
 
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)
