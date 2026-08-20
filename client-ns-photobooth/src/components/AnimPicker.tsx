@@ -7,6 +7,8 @@ import globeThumb from '../assets/globe_anim/globe.gif'
 import laptopThumb from '../assets/laptop_anim/laptop.gif'
 import droneThumb from '../assets/drone_anim/drone.gif'
 import scubaThumb from '../assets/cat_anim/scuba.gif'
+import clownThumb from '../assets/Clown/clownicon.jpg'
+import pigThumb from '../assets/Pig/Pig_icon.jpg'
 
 const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,
@@ -15,6 +17,8 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   laptop: laptopThumb,
   drone: droneThumb,
   scuba: scubaThumb,
+  clown: clownThumb,
+  pig: pigThumb,
 }
 
 /** side strip of thumbnail buttons for switching the active animation without opening settings */
