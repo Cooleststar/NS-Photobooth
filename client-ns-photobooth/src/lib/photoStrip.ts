@@ -38,7 +38,16 @@ export const STRIP_BG_OPTIONS = [
   '#f2ebe1', // cream
 ]
 
-const PADDING = 24
+// No border around the photos themselves (sides/top) — the strip's photo
+// area now sits flush against the canvas edge. PRE_FOOTER_GAP is the only
+// remaining spacing: a small breathing gap between the last photo and the
+// footer band, kept so the branding/QR don't look like they're touching
+// the photo directly. FOOTER_TEXT_INSET is unrelated to the photo border —
+// just how far the brand text sits from the footer's own edges.
+const SIDE_PADDING = 0
+const TOP_PADDING = 0
+const PRE_FOOTER_GAP = 12
+const FOOTER_TEXT_INSET = 12
 const GAP = 10
 const FOOTER_HEIGHT = 230
 const BRAND_TEXT = 'NS Photobooth'
@@ -104,8 +113,8 @@ async function drawFooter(
   ctx.textAlign = 'left'
   ctx.fillText(
     `${BRAND_TEXT}   ${formatDateTime(timestamp)}`,
-    PADDING,
-    canvasHeight - PADDING,
+    FOOTER_TEXT_INSET,
+    canvasHeight - FOOTER_TEXT_INSET,
   )
 
   // Both logos sit beside the QR box, vertically centered on the same row
@@ -135,16 +144,16 @@ export async function createPhotoStrip(
   const totalPhotoHeight = loaded.reduce((sum, img) => sum + img.height, 0)
 
   const canvas = document.createElement('canvas')
-  canvas.width = photoWidth + PADDING * 2
+  canvas.width = photoWidth + SIDE_PADDING * 2
   canvas.height =
-    totalPhotoHeight + GAP * (loaded.length - 1) + PADDING * 2 +
+    totalPhotoHeight + GAP * (loaded.length - 1) + TOP_PADDING + PRE_FOOTER_GAP +
     footerMetrics(loaded.length).height
 
   const ctx = canvas.getContext('2d')!
   ctx.fillStyle = bgColor
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  let y = PADDING
+  let y = TOP_PADDING
   for (const img of loaded) {
     const x = (canvas.width - img.width) / 2
     ctx.drawImage(img, x, y)

@@ -26,7 +26,6 @@ import {
   saveDirName,
   selectedGif,
   textureCache,
-  useLocalHosting,
 } from '../store'
 
 function Section({ title, children }: { title: string; children: any }) {
@@ -215,7 +214,6 @@ export default function Settings() {
               />
             </div>
             <SwitchRow label='Disable Online Features' boolVar={offlineOnly} />
-            <SwitchRow label='Share via Local Network (skip ImgBB)' boolVar={useLocalHosting} />
           </Section>
 
           <Section title='Storage'>
