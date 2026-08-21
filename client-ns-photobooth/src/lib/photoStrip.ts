@@ -38,24 +38,28 @@ export const STRIP_BG_OPTIONS = [
   '#f2ebe1', // cream
 ]
 
-// No border around the photos themselves (sides/top) — the strip's photo
-// area now sits flush against the canvas edge. PRE_FOOTER_GAP is the only
-// remaining spacing: a small breathing gap between the last photo and the
-// footer band, kept so the branding/QR don't look like they're touching
-// the photo directly. FOOTER_TEXT_INSET is unrelated to the photo border —
-// just how far the brand text sits from the footer's own edges.
-const SIDE_PADDING = 0
-const TOP_PADDING = 0
-const PRE_FOOTER_GAP = 12
-const FOOTER_TEXT_INSET = 12
+// The strip's background colour (the one the swatches change) shows as a
+// border on all four sides, not just under the photos. STRIP_BORDER is that
+// band's thickness — roughly an eighth of the old 230px footer — and is
+// reused for the gap above the footer so the inset is even all the way
+// round. FOOTER_TEXT_INSET matches it so the brand text lines up with the
+// photo edge above it.
+const STRIP_BORDER = 28
+const SIDE_PADDING = STRIP_BORDER
+const TOP_PADDING = STRIP_BORDER
+const PRE_FOOTER_GAP = STRIP_BORDER
+const FOOTER_TEXT_INSET = STRIP_BORDER
 const GAP = 10
-const FOOTER_HEIGHT = 230
+// Was 230, which dwarfed the photos above it. The footer only has to hold
+// one row of icons plus a line of text, so it is sized off the icons now.
+const FOOTER_HEIGHT = 130
 const BRAND_TEXT = 'NS Photobooth'
-// QR code and both logos are all the same visual size in the footer.
-const FOOTER_ICON_SIZE = 150
-const QR_MARGIN = 20
-const LOGO_GAP = 12
-const FONT_SIZE = 50
+// QR code and both logos are all drawn into the same square box, so they
+// come out the same width and the same height as each other.
+const FOOTER_ICON_SIZE = 96
+const QR_MARGIN = 16
+const LOGO_GAP = 10
+const FONT_SIZE = 38
 // A single photo makes a much shorter strip overall, so the same
 // fixed-height footer sized for a 3-photo strip looks oversized/
 // disproportionate — scale the whole footer band down for single images.
@@ -73,6 +77,60 @@ function footerMetrics(imageCount: number) {
     logoGap: LOGO_GAP * scale,
     fontSize: FONT_SIZE * scale,
   }
+}
+
+/** 11logo.png carries transparent padding inside the file (its opaque content
+ * is ~880x798 of a 1152x1100 canvas) while fusionlogo.png has none. Drawing
+ * both into the same box therefore renders the 11 logo visibly smaller.
+ * Measure each logo's opaque bounds once, then draw only that region. */
+const opaqueBoxCache = new WeakMap<HTMLImageElement, { x: number; y: number; w: number; h: number }>()
+
+function opaqueBox(img: HTMLImageElement) {
+  const cached = opaqueBoxCache.get(img)
+  if (cached) return cached
+  const full = { x: 0, y: 0, w: img.width, h: img.height }
+  let box = full
+  try {
+    const c = document.createElement('canvas')
+    c.width = img.width
+    c.height = img.height
+    const cx = c.getContext('2d')!
+    cx.drawImage(img, 0, 0)
+    const { data } = cx.getImageData(0, 0, img.width, img.height)
+    let x0 = img.width, y0 = img.height, x1 = -1, y1 = -1
+    for (let y = 0; y < img.height; y++) {
+      for (let x = 0; x < img.width; x++) {
+        if (data[(y * img.width + x) * 4 + 3] > 8) {
+          if (x < x0) x0 = x
+          if (x > x1) x1 = x
+          if (y < y0) y0 = y
+          if (y > y1) y1 = y
+        }
+      }
+    }
+    if (x1 >= x0 && y1 >= y0) box = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+  } catch {
+    // Fall back to the whole image if the canvas can't be read.
+  }
+  opaqueBoxCache.set(img, box)
+  return box
+}
+
+/** Draw a logo's opaque content centred in a size x size box with its aspect
+ * preserved, so both logos occupy the same footprint as each other and as
+ * the QR code beside them. */
+function drawFooterIcon(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  boxX: number,
+  boxY: number,
+  size: number,
+) {
+  const b = opaqueBox(img)
+  const scale = Math.min(size / b.w, size / b.h)
+  const w = b.w * scale
+  const h = b.h * scale
+  ctx.drawImage(img, b.x, b.y, b.w, b.h, boxX + (size - w) / 2, boxY + (size - h) / 2, w, h)
 }
 
 function formatDateTime(timestamp: number): string {
@@ -125,8 +183,8 @@ async function drawFooter(
   const logo11X = fusionX - logoGap - logoSize
 
   const [logo11Img, fusionLogoImg] = await loadBrandLogos()
-  ctx.drawImage(logo11Img, logo11X, logoY, logoSize, logoSize)
-  ctx.drawImage(fusionLogoImg, fusionX, logoY, logoSize, logoSize)
+  drawFooterIcon(ctx, logo11Img, logo11X, logoY, logoSize)
+  drawFooterIcon(ctx, fusionLogoImg, fusionX, logoY, logoSize)
 }
 
 /** Stack photos vertically into a single strip image (data URL), on a

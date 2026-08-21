@@ -30,6 +30,7 @@ export const GIF_OPTIONS = {
   ocfusion: 'OC Fusion',
   clown: 'Clown',
   pig: 'Pig',
+  pignose: 'Pig Nose',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)

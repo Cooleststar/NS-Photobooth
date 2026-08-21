@@ -20,6 +20,7 @@ import { createGlobeAnim } from '../anim/globe'
 import { createOCFusionAnim } from '../anim/ocfusion'
 import { createOwlAnim } from '../anim/owl'
 import { createPigAnim } from '../anim/pig'
+import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
@@ -57,7 +58,7 @@ import {
 // reference implementation's general multi-code mapping config.
 const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
@@ -78,6 +79,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   ocfusion: 'hands',
   clown: 'pose',
   pig: 'pose',
+  pignose: 'pose',
 }
 
 const MARGIN_X = 30 / 1920
@@ -134,28 +136,32 @@ function createSlotAssigner<T>(slotCount: number) {
 
 function postprocessPicture(pic: HTMLCanvasElement) {
   const { width, height } = pic
+
+  // The live view intentionally draws a black margin border around the video
+  // (see the fillRect in createReceivingCtx). That border must not reach the
+  // saved/uploaded photo. This used to paint the four bands white, which just
+  // swapped a black frame for a white one — visible as a white border around
+  // every photo in a strip. Crop them off instead, so the exported photo is
+  // pure video with no frame of any colour. The live preview still keeps its
+  // black margin: only this captured copy is cropped.
+  const xMargin = Math.round(MARGIN_X * width)
+  const yMarginT = Math.round(MARGIN_T * height)
+  const yMarginB = Math.round(MARGIN_B * height)
+  const cropWidth = width - xMargin * 2
+  const cropHeight = height - yMarginT - yMarginB
+
   const tmpCanvas = document.createElement('canvas')
-  tmpCanvas.width = width
-  tmpCanvas.height = height
+  tmpCanvas.width = cropWidth
+  tmpCanvas.height = cropHeight
 
   // capture exactly what's shown live — no extra flip, so the saved
   // photo matches the on-screen (mirrored) preview
   const ctx = tmpCanvas.getContext('2d')!
-  ctx.drawImage(pic, 0, 0)
-
-  // The live view intentionally shows a black margin border around the video
-  // (see the fillRect in createReceivingCtx), but that border shouldn't end
-  // up in the actual saved/uploaded photo — paint white over the same four
-  // margin bands here, on the captured copy only, so the live preview stays
-  // black while exported photos stay clean.
-  const xMargin = MARGIN_X * width
-  const yMarginT = MARGIN_T * height
-  const yMarginB = MARGIN_B * height
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, xMargin, height) // left
-  ctx.fillRect(width - xMargin, 0, xMargin, height) // right
-  ctx.fillRect(xMargin, 0, width - 2 * xMargin, yMarginT) // top
-  ctx.fillRect(xMargin, height - yMarginB, width - 2 * xMargin, yMarginB) // bottom
+  ctx.drawImage(
+    pic,
+    xMargin, yMarginT, cropWidth, cropHeight, // source: inside the margins
+    0, 0, cropWidth, cropHeight,              // dest: flush to the edges
+  )
 
   return tmpCanvas
 }
@@ -633,6 +639,8 @@ export default function Display({
         return await createClownAnim(app)
       } else if (option === 'pig') {
         return await createPigAnim(app)
+      } else if (option === 'pignose') {
+        return await createPigNoseAnim(app)
       }
       return null
     }
@@ -668,7 +676,7 @@ export default function Display({
         qrDroneUpdate = (target) => {
           update(target ? { x: target.x, y: target.y, size: CORNER_SIZE * 2, angle: 0 } : undefined)
         }
-      } else if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba' || gifOption === 'ocfusion' || gifOption === 'clown' || gifOption === 'pig') {
+      } else if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba' || gifOption === 'ocfusion' || gifOption === 'clown' || gifOption === 'pig' || gifOption === 'pignose') {
         // Scuba always runs a single instance regardless of multi-target mode —
         // it already does its own "closest person" selection internally across
         // all tracked people, so multiple instances would just render duplicate,
