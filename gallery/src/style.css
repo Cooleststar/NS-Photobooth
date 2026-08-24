@@ -36,6 +36,30 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.12);
   --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.14);
   --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.15);
+
+  /* Right-hand side panel scale. Every size in the panel (below) is written
+     as its original value x this factor, so the panel's internal proportions
+     are fixed and only this one number needs changing to resize the whole
+     thing — QR included. The QR itself is drawn into a <canvas> by
+     JavaScript, so QrBox in App.jsx reads this same variable rather than
+     carrying a second, separate size that could drift out of step.
+     1 = the original design; 1.49 = current, chosen so the share QR is big
+     enough to scan from arm's length. */
+  --panel-scale: 1.49;
+
+  /* Extra enlargement of the share QR *relative to the rest of the panel*.
+     The QR card has far more width than the code uses (at --panel-scale 1.49
+     the code is 238px inside 384px of usable card width), and a physically
+     bigger code is easier for a phone to lock onto, so it is worth spending
+     some of that slack. Applied on top of --panel-scale, so the QR still
+     grows and shrinks with the panel; this only changes its share of it.
+     1 = same proportion as the original design. This is an *upper bound*
+     only: QrBox (App.jsx) measures the space the panel actually has left and
+     shrinks the code to fit, so it can never be the reason a scrollbar
+     appears down the side panel. Left high deliberately, so the measured fit
+     is what governs and the code comes out as large as the screen allows —
+     lower it below the fit if you ever want the code deliberately smaller. */
+  --qr-scale: 3;
 }
 
 :root[data-theme='dark'] {
@@ -353,10 +377,10 @@ body {
 /* ── Side panel ─────────────────────────────────────────────────────────── */
 .side-panel {
   flex-shrink: 0;
-  width: 290px;
+  width: calc(290px * var(--panel-scale));
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: calc(14px * var(--panel-scale));
   overflow-y: auto;
 }
 
@@ -364,17 +388,17 @@ body {
 .panel-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: calc(12px * var(--panel-scale));
   box-shadow: var(--shadow-sm);
-  padding: 16px;
+  padding: calc(16px * var(--panel-scale));
 }
 .panel-label {
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--panel-scale));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
-  margin-bottom: 10px;
+  margin-bottom: calc(10px * var(--panel-scale));
 }
 
 /* ── QR box ─────────────────────────────────────────────────────────────── */
@@ -382,12 +406,12 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--panel-scale));
 }
 .qr-box.offline {
   flex-direction: row;
-  gap: 8px;
-  font-size: 0.8rem;
+  gap: calc(8px * var(--panel-scale));
+  font-size: calc(0.8rem * var(--panel-scale));
   color: var(--text-muted);
   justify-content: center;
 }
@@ -395,13 +419,79 @@ body {
    in dark mode instead of inheriting the card surface. */
 .qr-box canvas {
   background: #ffffff;
-  padding: 8px;
-  border-radius: 8px;
+  padding: calc(8px * var(--panel-scale));
+  border-radius: calc(8px * var(--panel-scale));
 }
-.qr-label { font-size: 0.85rem; color: var(--text-secondary); font-weight: 500; }
-.qr-sublabel { font-size: 0.72rem; color: var(--text-faint); text-align: center; }
+.qr-label {
+  font-size: calc(0.85rem * var(--panel-scale));
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.qr-sublabel {
+  font-size: calc(0.72rem * var(--panel-scale));
+  color: var(--text-faint);
+  text-align: center;
+}
+/* The panel code is a button so it can be reached by keyboard; it should not
+   look like one, so every default button style is stripped back off. */
+.qr-zoom-trigger {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  line-height: 0;
+  cursor: zoom-in;
+  border-radius: calc(8px * var(--panel-scale));
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.qr-zoom-trigger:hover { transform: scale(1.02); box-shadow: var(--shadow-md); }
+.qr-zoom-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* ── Enlarged QR ────────────────────────────────────────────────────────── */
+/* Fixed to the viewport rather than the panel, so the code sits in the middle
+   of the screen regardless of where in the layout the trigger happens to be. */
+.qr-zoom-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  /* Dim rather than black out: the photo stays recognisable behind the code,
+     so it is obvious which picture is being shared. */
+  background: rgba(0, 0, 0, 0.5);
+  cursor: zoom-out;
+  animation: fadein 160ms ease;
+}
+.qr-zoom-plate {
+  background: #ffffff;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-xl);
+  line-height: 0;
+}
+/* The panel's `.qr-box canvas` rule would otherwise apply here too (the
+   overlay is rendered inside the QR card), doubling up the white plate. */
+.qr-zoom-plate canvas {
+  display: block;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+.qr-zoom-caption {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 1rem;
+  font-weight: 500;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
 .qr-offline-dot {
-  width: 8px; height: 8px;
+  width: calc(8px * var(--panel-scale)); height: calc(8px * var(--panel-scale));
   border-radius: 50%;
   background: var(--text-faint);
   flex-shrink: 0;
@@ -414,37 +504,41 @@ body {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: calc(10px * var(--panel-scale));
 }
 .swatch {
-  width: 34px; height: 34px;
+  width: calc(34px * var(--panel-scale)); height: calc(34px * var(--panel-scale));
   /* Rounded square rather than a circle: it reads as a colour chip / paint
      sample, and squares tile more evenly across the row than circles do. */
-  border-radius: 9px;
-  border: 2px solid var(--bg-surface);
+  border-radius: calc(9px * var(--panel-scale));
+  border: calc(2px * var(--panel-scale)) solid var(--bg-surface);
   box-shadow: 0 0 0 1px var(--border-mid);
   cursor: pointer;
   transition: transform 0.1s, box-shadow 0.1s;
 }
 .swatch:hover:not(:disabled) { transform: scale(1.1); }
 .swatch:disabled { opacity: 0.4; pointer-events: none; }
-.swatch.active { box-shadow: 0 0 0 2px var(--text-secondary), 0 0 0 4px var(--bg-surface); }
+.swatch.active {
+  box-shadow:
+    0 0 0 calc(2px * var(--panel-scale)) var(--text-secondary),
+    0 0 0 calc(4px * var(--panel-scale)) var(--bg-surface);
+}
 
-.capture-time { font-size: 0.85rem; color: var(--text-secondary); }
+.capture-time { font-size: calc(0.85rem * var(--panel-scale)); color: var(--text-secondary); }
 
 /* ── Actions ────────────────────────────────────────────────────────────── */
 .actions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: calc(8px * var(--panel-scale));
 }
 
 .btn {
   width: 100%;
-  padding: 9px 16px;
-  border-radius: 8px;
+  padding: calc(9px * var(--panel-scale)) calc(16px * var(--panel-scale));
+  border-radius: calc(8px * var(--panel-scale));
   border: 1px solid transparent;
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--panel-scale));
   font-weight: 600;
   cursor: pointer;
   text-decoration: none;
@@ -471,7 +565,7 @@ body {
 .btn-cancel { background: var(--bg-sunken); color: var(--text-secondary); }
 .btn-cancel:hover { background: var(--border-mid); }
 
-.confirm-row { display: flex; gap: 8px; }
+.confirm-row { display: flex; gap: calc(8px * var(--panel-scale)); }
 .confirm-row .btn { flex: 1; }
 
 /* ── State messages ─────────────────────────────────────────────────────── */

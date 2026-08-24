@@ -229,12 +229,156 @@ function ThemeToggle({ theme, onToggle, class: className }) {
 
 // ── QR code box ────────────────────────────────────────────────────────────
 
-function QrBox({ url }) {
+// Base on-screen size of the share QR, before --panel-scale is applied. The
+// panel's scale lives in style.css (see --panel-scale) so all of its sizing
+// stays in one place; this is a <canvas>, though, so it has to be rendered at
+// the final pixel size rather than stretched by CSS — upscaling a 160px raster
+// would soften the module edges and make the code harder for a phone to read.
+const QR_BASE_SIZE = 160
+
+/** Reads one of the panel's numeric scale variables out of CSS, so the canvas
+ * below can't drift out of step with the CSS-sized box around it. Falls back
+ * to 1 if the variable is missing or unparseable. */
+function cssScale(name) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name)
+  const n = parseFloat(raw)
+  return Number.isFinite(n) && n > 0 ? n : 1
+}
+
+/** Never shrink the code below this, even on a very short screen — past this
+ * point it stops being reliably scannable and the panel should scroll
+ * instead, which is the lesser problem. */
+const QR_MIN_SIZE = 140
+
+/** Fraction of the smaller viewport dimension the enlarged code fills. Leaves
+ * room for the caption and a comfortable margin so it never touches the
+ * screen edge. */
+const QR_ZOOM_VIEWPORT_FRACTION = 0.72
+
+/** The share code blown up over a dimmed backdrop, so a guest can scan it from
+ * across the room rather than leaning over the panel. Dismissed by clicking
+ * anywhere or pressing Escape — the gallery is left running unattended, so it
+ * must never be possible to get stuck in this state. */
+function QrZoom({ url, onClose }) {
   const canvasRef = useRef(null)
 
   useEffect(() => {
-    if (!url || !canvasRef.current) return
-    QRCode.toCanvas(canvasRef.current, url, { width: 160, margin: 1 })
+    const canvas = canvasRef.current
+    if (!canvas) return
+    // Drawn at its final pixel size for the same reason as the panel copy:
+    // this is a raster canvas, and stretching it with CSS would soften the
+    // module edges just when the code is meant to be easiest to scan.
+    const draw = () => {
+      const size = Math.floor(
+        Math.min(window.innerWidth, window.innerHeight) * QR_ZOOM_VIEWPORT_FRACTION,
+      )
+      if (Math.abs(canvas.width - size) <= 1) return
+      QRCode.toCanvas(canvas, url, { width: size, margin: 1 })
+    }
+    draw()
+    window.addEventListener('resize', draw)
+    return () => window.removeEventListener('resize', draw)
+  }, [url])
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      class="qr-zoom-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Enlarged QR code"
+      onClick={onClose}
+    >
+      {/* The code keeps its white quiet zone against the dimmed backdrop —
+          a QR needs the light border to decode reliably. */}
+      <div class="qr-zoom-plate">
+        <canvas ref={canvasRef} />
+      </div>
+      <p class="qr-zoom-caption">Scan to download · tap anywhere to close</p>
+    </div>
+  )
+}
+
+function QrBox({ url }) {
+  const canvasRef = useRef(null)
+  const [zoomed, setZoomed] = useState(false)
+
+  // Close the enlarged view when the photo changes (the arrow keys browse the
+  // filmstrip even while it is open). Without this, stepping onto a photo that
+  // has no share link unmounts the overlay but leaves the flag set, and it
+  // would spring back open on returning to a photo that does have one.
+  useEffect(() => { setZoomed(false) }, [url])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!url || !canvas) return
+
+    /* The code is drawn as large as the panel can actually accommodate rather
+       than at a fixed size, because the two things that decide the limit — the
+       viewport height and how tall the other cards are — are only known at
+       runtime. The side panel scrolls (overflow-y: auto), so a QR sized past
+       the space left over doesn't overflow visibly; it silently puts a
+       scrollbar down the right-hand edge instead. Measuring means the code is
+       always the largest scannable size that avoids that, on any display the
+       booth happens to be plugged into. */
+    const measure = () => {
+      const panel = canvas.closest('.side-panel')
+      if (!panel) return
+
+      const scale = cssScale('--panel-scale')
+
+      // Height left for the canvas: measure what the panel's contents actually
+      // occupy, less the canvas's own box, to get the fixed cost of the other
+      // cards (and this card's label, padding and gaps). Whatever the panel's
+      // visible height has spare over that is the canvas's to use.
+      //
+      // The children are summed rather than read off panel.scrollHeight,
+      // because scrollHeight collapses to clientHeight whenever the content is
+      // *shorter* than the panel — which is precisely the case where there is
+      // room to grow into. Using it would peg the code at its current size and
+      // never let it expand.
+      const gap = parseFloat(getComputedStyle(panel).rowGap) || 0
+      const kids = Array.from(panel.children)
+      const contentHeight =
+        kids.reduce((sum, el) => sum + el.offsetHeight, 0) +
+        gap * Math.max(0, kids.length - 1)
+      const otherHeight = contentHeight - canvas.offsetHeight
+      const plate = 2 * 8 * scale  // white quiet-zone padding, both sides
+      const heightFit = panel.clientHeight - otherHeight - plate
+
+      // Width left inside the card: its inner width less that same plate.
+      const widthFit = 290 * scale - 2 * 16 * scale - plate
+
+      // --qr-scale stays an upper bound, so the code can be deliberately held
+      // smaller than the space allows; the fit limits only ever shrink it.
+      const desired = QR_BASE_SIZE * scale * cssScale('--qr-scale')
+      const width = Math.max(
+        QR_MIN_SIZE,
+        Math.floor(Math.min(desired, heightFit, widthFit)),
+      )
+
+      // Redrawing sets the canvas's own height, which changes scrollHeight and
+      // re-triggers the observer below — so only redraw on a real change, or
+      // the two would feed each other in a loop.
+      if (Math.abs(canvas.width - width) <= 1) return
+      QRCode.toCanvas(canvas, url, { width, margin: 1 })
+    }
+
+    measure()
+
+    // Re-fit when the panel's height changes — window resize, a photo whose
+    // capture-time label wraps to two lines, the delete confirmation swapping
+    // one button for two.
+    const panel = canvas.closest('.side-panel')
+    if (!panel || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(panel)
+    return () => ro.disconnect()
   }, [url])
 
   if (!url) {
@@ -248,9 +392,19 @@ function QrBox({ url }) {
 
   return (
     <div class="panel-card qr-box">
-      <canvas ref={canvasRef} />
+      {/* A button rather than a click handler on the canvas, so the enlarged
+          view is reachable by keyboard too. */}
+      <button
+        type="button"
+        class="qr-zoom-trigger"
+        onClick={() => setZoomed(true)}
+        aria-label="Show a larger QR code"
+      >
+        <canvas ref={canvasRef} />
+      </button>
       <p class="qr-label">Scan to download</p>
-      <p class="qr-sublabel">Also printed on your strip</p>
+      <p class="qr-sublabel">Tap the code to enlarge it</p>
+      {zoomed && <QrZoom url={url} onClose={() => setZoomed(false)} />}
     </div>
   )
 }
