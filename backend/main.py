@@ -409,24 +409,82 @@ _detection_mode: str = 'both'
 
 # QR code detection, for QR mode (a guest holds a printed/on-screen QR code
 # up to the camera and the frontend shows a matching animation — see
-# QR_GIF_MAP in Display.tsx). Uses OpenCV's built-in decoder: no extra
-# dependency beyond opencv-python, which the project already requires.
+# QR_DRONE_PAYLOAD in Display.tsx). Two interchangeable backends: pyzbar is
+# noticeably more tolerant of small, angled, or partially-blurred codes than
+# OpenCV's built-in detector, but needs the zbar DLL on Windows, which isn't
+# always present — degrade to OpenCV (always available, ships with
+# opencv-python) rather than crash if it's missing.
 _qr_detector = cv2.QRCodeDetector()
-_QR_DOWNSCALE_WIDTH = 960  # detection doesn't need full resolution; costs more per frame
+_QR_DOWNSCALE_WIDTH = 1280  # more pixels per QR module = more reliable decode at a distance, at some CPU cost
+
+_pyzbar_decode = None
+_pyzbar_symbol = None
+try:
+    from pyzbar.pyzbar import ZBarSymbol as _ZBarSymbol, decode as _pyzbar_decode_fn
+    _pyzbar_decode = _pyzbar_decode_fn
+    _pyzbar_symbol = _ZBarSymbol
+    log.info("pyzbar available — using it for QR detection (more tolerant of small/angled codes)")
+except Exception as _e:
+    log.info("pyzbar unavailable, falling back to OpenCV's QR detector: %s", _e)
+
+
+def _decode_qr_pyzbar(working: np.ndarray) -> list:
+    """[(payload, cx, cy), ...] — cx/cy normalised 0-1."""
+    h, w = working.shape[:2]
+    gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
+    out = []
+    for symbol in _pyzbar_decode(gray, symbols=[_pyzbar_symbol.QRCODE]):
+        try:
+            text = symbol.data.decode('utf-8', errors='replace').strip()
+        except Exception:
+            continue
+        if not text:
+            continue
+        rect = symbol.rect
+        cx = (rect.left + rect.width / 2) / w
+        cy = (rect.top + rect.height / 2) / h
+        out.append((text, cx, cy))
+    return out
+
+
+def _decode_qr_opencv(working: np.ndarray) -> list:
+    """[(payload, cx, cy), ...] — cx/cy normalised 0-1."""
+    h, w = working.shape[:2]
+    try:
+        ok, payloads, points, _ = _qr_detector.detectAndDecodeMulti(working)
+    except cv2.error:
+        # OpenCV's detector occasionally throws on degenerate frames.
+        return []
+    if not ok or payloads is None or points is None:
+        return []
+    out = []
+    for text_raw, quad in zip(payloads, points):
+        text = (text_raw or '').strip()
+        if not text:
+            continue
+        cx = float(quad[:, 0].mean()) / w
+        cy = float(quad[:, 1].mean()) / h
+        out.append((text, cx, cy))
+    return out
 
 # Raw per-frame decodes are noisy — a code drops out for a frame or two the
 # moment it tilts, blurs, or is briefly occluded (e.g. by a hand), which
 # without smoothing flickers the overlay on/off on the frontend. Track each
-# payload's last-seen time and keep reporting it as "visible" for a short
-# grace window after its last successful decode, same idea as a track TTL.
-_qr_last_seen: dict = {}
+# payload's last-seen time (and position) and keep reporting it as "visible"
+# for a short grace window after its last successful decode, same idea as a
+# track TTL. Position lets the frontend figure out *who* is holding a given
+# code (by proximity to a tracked person's hand) rather than just that some
+# code is visible somewhere in frame.
+_qr_last_seen: dict = {}  # payload -> (timestamp, cx, cy) — cx/cy normalised 0-1
 _QR_TRACK_TTL = 0.8  # seconds a code stays "visible" after its last successful decode
 
 
 def _decode_qr_codes(frame: np.ndarray) -> list:
-    """Every QR payload visible in the frame, or seen within the last
+    """Every QR code visible in the frame, or seen within the last
     _QR_TRACK_TTL seconds — absorbs brief decode dropouts instead of
-    flickering the overlay off every time a single frame fails to decode."""
+    flickering the overlay off every time a single frame fails to decode.
+    Returns [{"payload": str, "x": float, "y": float}, ...], position being
+    the code's center in normalised (0-1) frame coordinates."""
     height, width = frame.shape[:2]
     working = frame
     if width > _QR_DOWNSCALE_WIDTH:
@@ -435,25 +493,20 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
             frame, (_QR_DOWNSCALE_WIDTH, max(1, int(round(height * scale)))),
             interpolation=cv2.INTER_AREA,
         )
-
-    try:
-        ok, payloads, _points, _ = _qr_detector.detectAndDecodeMulti(working)
-    except cv2.error:
-        # OpenCV's detector occasionally throws on degenerate frames.
-        ok, payloads = False, None
+    decoded = _decode_qr_pyzbar(working) if _pyzbar_decode is not None else _decode_qr_opencv(working)
 
     now = time.time()
-    if ok and payloads is not None:
-        for p in payloads:
-            text = (p or '').strip()
-            if text:
-                _qr_last_seen[text] = now
+    for text, cx, cy in decoded:
+        _qr_last_seen[text] = (now, cx, cy)
 
-    stale = [text for text, ts in _qr_last_seen.items() if now - ts >= _QR_TRACK_TTL]
+    stale = [text for text, (ts, *_r) in _qr_last_seen.items() if now - ts >= _QR_TRACK_TTL]
     for text in stale:
         del _qr_last_seen[text]
 
-    return list(_qr_last_seen.keys())
+    return [
+        {"payload": text, "x": cx, "y": cy}
+        for text, (_ts, cx, cy) in _qr_last_seen.items()
+    ]
 
 
 def run_pose_detection(frame: np.ndarray) -> dict:

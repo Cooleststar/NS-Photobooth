@@ -151,6 +151,7 @@ export default function Settings() {
   const burstOn = useStore(burstModeEnabled)
   const burstN = useStore(burstCount)
   const burstSec = useStore(burstIntervalSec)
+  const qrMode = useStore(qrModeEnabled)
   const niceRos = useNiceROSState()
 
   useKeybind('KeyD', () => debugEnabled.set(!debugEnabled.get()))
@@ -284,31 +285,35 @@ export default function Settings() {
           </Section>
 
           <Section title='Animation'>
-            <div tw='flex flex-col gap-1'>
-              <span tw='text-xs text-gray-500'>Animation GIF</span>
-              <select
-                tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
-                value={gifOption}
-                onChange={(e) =>
-                  selectedGif.set((e.target as HTMLSelectElement).value as GifOption)
-                }
-              >
-                {Object.entries(GIF_OPTIONS).map(([key, label]) => (
-                  <option key={key} value={key}>{label}</option>
-                ))}
-              </select>
-            </div>
-            <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
+            {!qrMode && (
+              <div tw='flex flex-col gap-1'>
+                <span tw='text-xs text-gray-500'>Animation GIF</span>
+                <select
+                  tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
+                  value={gifOption}
+                  onChange={(e) =>
+                    selectedGif.set((e.target as HTMLSelectElement).value as GifOption)
+                  }
+                >
+                  {Object.entries(GIF_OPTIONS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {!qrMode && <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />}
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
             <SwitchRow label='QR Code Mode' boolVar={qrModeEnabled} />
-            <button
-              tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
-              onClick={() => qrDroneLocked.set(false)}
-            >
-              Reset Drone Lock
-            </button>
+            {qrMode && (
+              <button
+                tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
+                onClick={() => qrDroneLocked.set(false)}
+              >
+                Reset Animation
+              </button>
+            )}
           </Section>
 
           <Section title='Actions'>

@@ -16,6 +16,12 @@ export type HandData = {
   palmUp: boolean
 }
 
+/** One decoded QR code (QR mode). x/y are its center — normalized 0-1 on
+ * rawRef (raw camera-frame coordinates), or remapped screen-space pixels on
+ * dataRef (see the qrCodes remap in Display.tsx's createReceivingCtx,
+ * mirroring how pose/prop detections are remapped there). */
+export type QrCodeDetection = { payload: string; x: number; y: number }
+
 /** structure of analysis from nicepipe */
 export type Analysis = {
   mp_pose?: {
@@ -30,8 +36,8 @@ export type Analysis = {
   }
   allPoses?: { [id: number]: NormalizedLandmarkList }
   hands?: HandData[]
-  /** Decoded payload text of every QR code currently visible in-frame (QR mode only) */
-  qrCodes?: string[]
+  /** Every QR code currently visible in-frame (QR mode only) */
+  qrCodes?: QrCodeDetection[]
   /** performance.now() timestamp of the last /pose_out message received — used to
    * show a "delay" metric (how stale the detection data currently in use is) */
   lastUpdateTs?: number

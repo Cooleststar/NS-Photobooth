@@ -6,7 +6,7 @@ import { useNiceROSState } from 'nice-ros-react'
 import { AnyTopicMap, MSG } from 'nice-ros-sdk'
 import { MutableRefObject, useEffect } from 'react'
 import { NormalizedLandmark } from '@mediapipe/drawing_utils'
-import { Analysis, HandData, PoseKeypoint } from './nicepipe'
+import { Analysis, HandData, PoseKeypoint, QrCodeDetection } from './nicepipe'
 import { Point } from './nicepipe/propDetection'
 
 /** ImageMarker isn't part of nice-ros-sdk.MSG... Typing below is incomplete but sufficient */
@@ -34,7 +34,7 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
         poses: { x: number[]; y: number[]; z: number[]; scores: number[]; track: { id: number } }[]
         hands?: { x: number[]; y: number[]; z: number[]; label: string; palm_up: boolean }[]
         mp_pose?: { x: number[]; y: number[]; z: number[]; scores: number[] } | null
-        qr_codes?: string[]
+        qr_codes?: { payload: string; x: number; y: number }[]
       }
       dataRef.current.mmpose = Object.fromEntries(
         poses.map(({ x, y, z, scores, track }) => [
@@ -59,7 +59,7 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
         label: h.label as 'Left' | 'Right',
         palmUp: h.palm_up,
       }))
-      dataRef.current.qrCodes = qr_codes ?? []
+      dataRef.current.qrCodes = (qr_codes ?? []) as QrCodeDetection[]
       dataRef.current.lastUpdateTs = performance.now()
     })
     const unsub2 = niceROS.subscribeTopic('/rect_out', ({ markers }) => {
