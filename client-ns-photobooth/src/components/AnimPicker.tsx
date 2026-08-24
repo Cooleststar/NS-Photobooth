@@ -1,6 +1,6 @@
 import tw from 'twin.macro'
 import { useStore } from '@nanostores/preact'
-import { GIF_OPTIONS, GifOption, qrModeEnabled, selectedGif } from '../store'
+import { GIF_OPTIONS, GifOption, qrModeEnabled, selectedGifs } from '../store'
 import owlThumb from '../assets/owl_anim/owl_idle_new.gif'
 import batThumb from '../assets/Bat_anim/Bat_rest.png'
 import globeThumb from '../assets/globe_anim/globe.gif'
@@ -23,9 +23,10 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   pignose: pigNoseThumb,
 }
 
-/** side strip of thumbnail buttons for switching the active animation without opening settings */
+/** side strip of thumbnail buttons for toggling active animations (multiple can
+ * be on at once, all stacked on the same tracked person) without opening settings */
 export function AnimPicker() {
-  const current = useStore(selectedGif)
+  const current = useStore(selectedGifs)
   const qrMode = useStore(qrModeEnabled)
 
   // The character picker is meaningless in QR mode — animations there are
@@ -38,12 +39,22 @@ export function AnimPicker() {
       {Object.entries(GIF_OPTIONS).map(([key, label]) => {
         const option = key as GifOption
         const thumb = THUMBS[option]
-        const active = option === current
+        const active = option === 'none' ? current.length === 0 : current.includes(option)
         return (
           <button
             key={option}
             title={label}
-            onClick={() => selectedGif.set(option)}
+            onClick={() => {
+              if (option === 'none') {
+                selectedGifs.set([])
+              } else {
+                selectedGifs.set(
+                  current.includes(option)
+                    ? current.filter((o) => o !== option)
+                    : [...current, option],
+                )
+              }
+            }}
             tw='w-14 h-14 rounded-lg overflow-hidden border-2 flex items-center justify-center bg-gray-300 transition-all duration-150'
             css={
               active

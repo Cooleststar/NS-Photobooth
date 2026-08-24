@@ -32,7 +32,7 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
     const unsub1 = niceROS.subscribeTopic('/pose_out', (msg: any) => {
       const { poses, hands, mp_pose, qr_codes } = msg as {
         poses: { x: number[]; y: number[]; z: number[]; scores: number[]; track: { id: number } }[]
-        hands?: { x: number[]; y: number[]; z: number[]; label: string; palm_up: boolean }[]
+        hands?: { x: number[]; y: number[]; z: number[]; label: string; palm_up: boolean; palm_sky: boolean }[]
         mp_pose?: { x: number[]; y: number[]; z: number[]; scores: number[] } | null
         qr_codes?: { payload: string; x: number; y: number }[]
       }
@@ -58,6 +58,7 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
         z: h.z,
         label: h.label as 'Left' | 'Right',
         palmUp: h.palm_up,
+        palmSky: h.palm_sky,
       }))
       dataRef.current.qrCodes = (qr_codes ?? []) as QrCodeDetection[]
       dataRef.current.lastUpdateTs = performance.now()

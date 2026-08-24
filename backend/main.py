@@ -57,6 +57,7 @@ _GESTURE_DEBUG_DIR = pathlib.Path(__file__).parent / 'gesture_debug'
 _GESTURE_DEBUG_MIN_INTERVAL = 0.5  # seconds between routine (non-transition) samples
 _gesture_debug_last_write: float = 0.0
 _gesture_debug_last_palm_up: dict = {}  # label -> last logged palm_up bool, to detect flips
+_gesture_debug_last_palm_sky: dict = {}  # label -> last logged palm_sky bool, to detect flips
 
 if _GESTURE_DEBUG:
     _GESTURE_DEBUG_DIR.mkdir(exist_ok=True)
@@ -70,13 +71,16 @@ def _log_gesture_debug(records: list, frame: np.ndarray) -> None:
     global _gesture_debug_last_write
     now = time.time()
     any_transition = any(
-        _gesture_debug_last_palm_up.get(r['label']) != r['palm_up'] for r in records
+        _gesture_debug_last_palm_up.get(r['label']) != r['palm_up']
+        or _gesture_debug_last_palm_sky.get(r['label']) != r['palm_sky']
+        for r in records
     )
     if not any_transition and (now - _gesture_debug_last_write) < _GESTURE_DEBUG_MIN_INTERVAL:
         return
     _gesture_debug_last_write = now
     for r in records:
         _gesture_debug_last_palm_up[r['label']] = r['palm_up']
+        _gesture_debug_last_palm_sky[r['label']] = r['palm_sky']
 
     ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     try:
@@ -135,6 +139,66 @@ except Exception as _e:
     log.warning("MediaPipe Hands unavailable — drone palm-up detection disabled: %s", _e)
 
 
+# Lower magnitude (closer to 0) = easier to trigger, tolerates a palm that's
+# tilted rather than facing dead-on vertical. Higher magnitude = stricter.
+# Picked by geometric reasoning, not measured against real footage (no
+# camera available in this environment) — tune against GESTURE_DEBUG=1
+# output (normal_y ranges roughly -1 "straight up" to +1 "straight down").
+_PALM_SKY_THRESHOLD = -0.4
+
+
+def _palm_facing_sky(hand_world_lms, label: str):
+    """Whether the palm's surface faces upward (skyward) — a roughly
+    horizontal, outstretched hand held like it's offering/presenting
+    something on it, as opposed to an upright hand held palm-toward-camera
+    (that's the separate, older 'palm_up' heuristic below).
+
+    Computed as the palm's surface normal: the cross product of two vectors
+    lying in the palm plane (wrist->index_mcp, wrist->pinky_mcp). Takes
+    HandLandmarker's *world* landmarks (hand_world_landmarks — real-world
+    metric coordinates, roughly meters, independent of camera FOV/distance)
+    rather than the normalized image landmarks used everywhere else in this
+    file: those are fine for on-screen positioning, but their z is a rough,
+    perspective-relative approximation, noisier than world z and not really
+    meant for angle/orientation math like this.
+
+    IMPORTANT — world landmarks are NOT guaranteed to share image landmarks'
+    axis convention (image y increases downward; world coordinates may or
+    may not put +y "up"). This was implemented and reasoned about without a
+    live camera to verify against, so the sign in _PALM_SKY_THRESHOLD's
+    comparison below is a best guess, not a confirmed fact — if the gesture
+    ends up backwards (triggers on palm-down instead of palm-up), flip the
+    comparison direction (and the sign of _PALM_SKY_THRESHOLD) rather than
+    assuming the geometry itself is wrong. Verify with GESTURE_DEBUG=1 and
+    check normal_y in backend/gesture_debug/log.jsonl against what the palm
+    was actually doing in the matching saved frame.
+
+    The winding order index->pinky flips between hands, so the resulting
+    normal is negated for the left hand to keep "positive/negative" meaning
+    the same regardless of which hand is shown; requiring the up/down
+    component to dominate the vector (via _PALM_SKY_THRESHOLD) rules out a
+    hand that's merely tilted rather than genuinely palm-up.
+
+    Returns (is_sky_facing, normal_y) — the raw normal_y is included for
+    GESTURE_DEBUG tuning, same reasoning as the palm_up debug fields below.
+    """
+    wrist = hand_world_lms[0]
+    index_mcp = hand_world_lms[5]
+    pinky_mcp = hand_world_lms[17]
+    v1 = (index_mcp.x - wrist.x, index_mcp.y - wrist.y, index_mcp.z - wrist.z)
+    v2 = (pinky_mcp.x - wrist.x, pinky_mcp.y - wrist.y, pinky_mcp.z - wrist.z)
+    nx = v1[1] * v2[2] - v1[2] * v2[1]
+    ny = v1[2] * v2[0] - v1[0] * v2[2]
+    nz = v1[0] * v2[1] - v1[1] * v2[0]
+    if label == 'Left':
+        nx, ny, nz = -nx, -ny, -nz
+    length = (nx * nx + ny * ny + nz * nz) ** 0.5
+    if length < 1e-6:
+        return False, 0.0
+    ny /= length
+    return ny < _PALM_SKY_THRESHOLD, ny
+
+
 def _mp_hands_worker():
     global _mp_hands_cache
     while True:
@@ -165,7 +229,19 @@ def _mp_hands_worker():
                 else:
                     palm_facing_up = thumb_x > pinky_x
                 palm_up = bool(hand_upright and palm_facing_up)
-                hands.append({"x": x, "y": y, "z": z, "label": label, "palm_up": palm_up})
+                # hand_world_landmarks is parallel to hand_landmarks (same
+                # index per detected hand) — real-world metric coordinates,
+                # better suited to orientation math than the image landmarks
+                # used everywhere else here. See _palm_facing_sky's docstring.
+                world_lms = (
+                    result.hand_world_landmarks[i]
+                    if i < len(result.hand_world_landmarks) else hand_lms
+                )
+                palm_sky, palm_normal_y = _palm_facing_sky(world_lms, label)
+                hands.append({
+                    "x": x, "y": y, "z": z, "label": label,
+                    "palm_up": palm_up, "palm_sky": palm_sky,
+                })
                 if _GESTURE_DEBUG:
                     debug_records.append({
                         'label': label,
@@ -173,6 +249,7 @@ def _mp_hands_worker():
                         'mcp_y': mcp_y, 'wrist_y': wrist_y, 'hand_upright': hand_upright,
                         'thumb_x': thumb_x, 'pinky_x': pinky_x, 'palm_facing_up': palm_facing_up,
                         'palm_up': palm_up,
+                        'palm_normal_y': palm_normal_y, 'palm_sky': palm_sky,
                     })
             _mp_hands_cache = hands
             if _GESTURE_DEBUG and debug_records:

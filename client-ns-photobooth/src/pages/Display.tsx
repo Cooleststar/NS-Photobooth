@@ -48,7 +48,7 @@ import {
   customRtspURL,
   poseInd,
   selectedDevice,
-  selectedGif,
+  selectedGifs,
 } from '../store'
 
 // QR mode (Settings → "QR Code Mode"): a guest holds a QR code encoding
@@ -61,6 +61,12 @@ const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
 const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'none'>, string> = {
   laptop: laptopGif,
 }
+
+/** Pose/hand-anchored characters (follow a tracked person) — everything else
+ * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
+const CHARACTER_OPTIONS = new Set<GifOption>([
+  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pig', 'pignose',
+])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
 // clown/pig/scuba read body pose only, drone and ocfusion read hand
@@ -80,6 +86,18 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   clown: 'pose',
   pig: 'pose',
   pignose: 'pose',
+}
+
+/** Multiple animations can be selected at once now, each possibly wanting a
+ * different model — union their needs so the backend runs whatever's
+ * actually required (e.g. Owl + Drone selected together needs 'both', even
+ * though neither alone does). */
+function computeDetectionMode(gifOptions: GifOption[]): 'pose' | 'hands' | 'none' | 'both' {
+  const needs = new Set(gifOptions.map((g) => DETECTION_MODE_BY_GIF[g] ?? 'both'))
+  needs.delete('none')
+  if (needs.size === 0) return 'none'
+  if (needs.has('both') || (needs.has('pose') && needs.has('hands'))) return 'both'
+  return needs.has('pose') ? 'pose' : 'hands'
 }
 
 const MARGIN_X = 30 / 1920
@@ -375,7 +393,8 @@ export default function Display({
   const deviceId = useStore(selectedDevice)
   const camRes = useStore(camSize)
   const url = useStore(nicepipeURL)
-  const gifOption = useStore(selectedGif)
+  const gifOptions = useStore(selectedGifs)
+  const gifOptionsKey = gifOptions.join(',')
   const qrMode = useStore(qrModeEnabled)
   const { rosState } = useNiceConnState()
   const camSource = useStore(cameraSource)
@@ -419,12 +438,12 @@ export default function Display({
   // just once on initial mount. Without this, QR mode (and any other
   // non-default mode) would silently stop working after every backend
   // restart until the user happened to toggle something that changes
-  // gifOption/qrMode again.
+  // gifOptions/qrMode again.
   useEffect(() => {
     if (rosState !== 'connected') return
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
-    const mode = qrMode ? 'qr' : (DETECTION_MODE_BY_GIF[gifOption] ?? 'both')
+    const mode = qrMode ? 'qr' : computeDetectionMode(gifOptions)
 
     const send = () => {
       fetch(`${getBackendHttpUrl()}/detection_mode`, {
@@ -446,7 +465,7 @@ export default function Display({
       active = false
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [gifOption, qrMode, rosState])
+  }, [gifOptionsKey, qrMode, rosState])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
@@ -686,7 +705,19 @@ export default function Display({
       try {
 
       type AnimUpdate = (pose: typeof dataRef.current.mp_pose.pose) => void
-      const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
+      // Grouped per selected character type, each with its OWN per-person
+      // slot assignment — this is what lets several characters be selected
+      // at once while each still independently tracks every detected person
+      // (Multi-Person Tracking on) rather than everything collapsing onto
+      // one shared "selected" pose. A single flat slot list across all
+      // selected types doesn't work: assigning person->slot needs to happen
+      // per type, or e.g. Pig Nose selected alongside Clown would each only
+      // get whichever single instance was left over from a shared pool,
+      // rather than both correctly following every person.
+      const animGroups: {
+        instances: { container: PIXI.Container; update: AnimUpdate }[]
+        assign: (allPoses: { [id: number]: NormalizedLandmarkList }) => (NormalizedLandmarkList | undefined)[]
+      }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
       // QR mode: a single fade-prop instance (drone gif). Before lock-on, it
       // fades in and follows the code's own live on-screen position (from
@@ -714,41 +745,60 @@ export default function Display({
         qrDroneUpdate = (target) => {
           update(target ? { x: target.x, y: target.y, size: CORNER_SIZE * 2, angle: 0 } : undefined)
         }
-      } else if (gifOption === 'owl' || gifOption === 'bat' || gifOption === 'globe' || gifOption === 'drone' || gifOption === 'scuba' || gifOption === 'ocfusion' || gifOption === 'clown' || gifOption === 'pig' || gifOption === 'pignose') {
-        // Scuba always runs a single instance regardless of multi-target mode —
-        // it already does its own "closest person" selection internally across
-        // all tracked people, so multiple instances would just render duplicate,
-        // overlapping gifs on the same target.
-        const count = isMulti && gifOption !== 'scuba' ? MAX_PEOPLE : 1
-        const results = await Promise.all(
-          Array.from({ length: count }, () => createAnimForGif(gifOption))
-        )
-        for (const result of results) {
-          if (result) {
-            const [container, update] = result
-            animLayer.addChild(container)
-            animSlots.push({ container, update })
+      } else {
+        // Multiple animations can be selected at once, and each one
+        // independently follows every detected person when Multi-Person
+        // Tracking is on (its own animGroups entry below, own slot
+        // assigner) — so e.g. Clown + Pig Nose both selected means every
+        // person in frame gets both, not just whoever "wins" a shared slot.
+        for (const option of gifOptions) {
+          if (option === 'none') continue
+          if (CHARACTER_OPTIONS.has(option)) {
+            // Scuba, Drone, and OC Fusion always run a single (outer)
+            // instance regardless of multi-target mode. Scuba does its own
+            // "closest person" selection internally across all tracked
+            // people. Drone/OC Fusion go further — each already implements
+            // its own internal 4-slot multi-HAND assignment (reading the
+            // raw global hand list directly, not a single assigned person's
+            // pose), specifically so several hands/people can show the
+            // gesture at once. Spawning multiple outer instances for these
+            // would each spin up their own competing 4-slot system fighting
+            // over the same hands — several duplicate drones jumping
+            // between the same targets — instead of one coordinated system.
+            const count = isMulti && option !== 'scuba' && option !== 'drone' && option !== 'ocfusion' ? MAX_PEOPLE : 1
+            const results = await Promise.all(
+              Array.from({ length: count }, () => createAnimForGif(option))
+            )
+            const instances: { container: PIXI.Container; update: AnimUpdate }[] = []
+            for (const result of results) {
+              if (result) {
+                const [container, update] = result
+                animLayer.addChild(container)
+                instances.push({ container, update })
+              }
+            }
+            animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
+          } else {
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'none'>]
+            const corners = await Promise.all(
+              CORNER_POSITIONS.map((pos) =>
+                createSimpleFadePropAnim(app, {
+                  animUrl,
+                  kalman: { R: 0.01, Q: 5 },
+                  sizeFactor: 1,
+                }).then(([container, update]) => {
+                  animLayer.addChild(container)
+                  return (hasPerson: boolean) => {
+                    update(hasPerson ? { x: pos.x, y: pos.y, size: CORNER_SIZE, angle: 0 } : undefined)
+                  }
+                })
+              )
+            )
+            cornerAnims.push(...corners)
           }
         }
-      } else if (gifOption !== 'none') {
-        const animUrl = GIF_URLS[gifOption]
-        const corners = await Promise.all(
-          CORNER_POSITIONS.map((pos) =>
-            createSimpleFadePropAnim(app, {
-              animUrl,
-              kalman: { R: 0.01, Q: 5 },
-              sizeFactor: 1,
-            }).then(([container, update]) => {
-              animLayer.addChild(container)
-              return (hasPerson: boolean) => {
-                update(hasPerson ? { x: pos.x, y: pos.y, size: CORNER_SIZE, angle: 0 } : undefined)
-              }
-            })
-          )
-        )
-        cornerAnims.push(...corners)
       }
-      // gifOption === 'none': no animSlots, no cornerAnims — raw video feed only
+      // gifOptions empty (or only 'none'): no animGroups, no cornerAnims — raw video feed only
 
       const arrowCount = isMulti ? MAX_PEOPLE : 1
       const [arrows, banner] = await Promise.all([
@@ -760,19 +810,21 @@ export default function Display({
       bannerContainer = banner
       console.log('Animations added')
 
-      const assignAnimSlots = createSlotAssigner<NormalizedLandmarkList>(animSlots.length)
-
       app.ticker.add(() => {
-        if (isMulti && animSlots.length > 1) {
-          // Multi-person: each person holds their own slot while tracked
-          const bySlot = assignAnimSlots(dataRef.current.allPoses ?? {})
-          for (let i = 0; i < animSlots.length; i++) {
-            animSlots[i].update(bySlot[i] ?? [])
+        for (const group of animGroups) {
+          if (isMulti && group.instances.length > 1) {
+            // Multi-person: each person holds their own slot within this
+            // group while tracked — independent of every other selected
+            // animation's own grouping.
+            const bySlot = group.assign(dataRef.current.allPoses ?? {})
+            for (let i = 0; i < group.instances.length; i++) {
+              group.instances[i].update(bySlot[i] ?? [])
+            }
+          } else if (group.instances.length > 0) {
+            // Single-person: use selected pose
+            const curPose = dataRef.current.mp_pose?.pose
+            if (curPose) group.instances[0].update(curPose)
           }
-        } else if (animSlots.length > 0) {
-          // Single-person: use selected pose
-          const curPose = dataRef.current.mp_pose?.pose
-          if (curPose) animSlots[0].update(curPose)
         }
 
         const curPose = dataRef.current.mp_pose?.pose
@@ -797,7 +849,7 @@ export default function Display({
 
           // qrDroneLocked persists globally across effect remounts, but
           // qrLockedTrackId is local to this mount — if the effect
-          // remounted while locked (e.g. gifOption/isMulti changed), it'd
+          // remounted while locked (e.g. gifOptions/isMulti changed), it'd
           // otherwise inherit "locked" with no id to follow and get stuck
           // forever. Treat that combination as unlocked so it can re-acquire.
           if ((!qrDroneLocked.get() || qrLockedTrackId === undefined) && droneCode) {
@@ -922,7 +974,7 @@ export default function Display({
       }
       canvas.remove()
     }
-  }, [height, width, gifOption, isRtspMode, isMulti, qrMode]) // including the ref currents here triggers an unnecessary rerender
+  }, [height, width, gifOptionsKey, isRtspMode, isMulti, qrMode]) // including the ref currents here triggers an unnecessary rerender
   return (
     <>
       <div ref={divRef} {...props}></div>

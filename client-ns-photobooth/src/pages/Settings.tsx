@@ -1,6 +1,6 @@
 import { useStore } from '@nanostores/preact'
 import { useNiceROSState } from 'nice-ros-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { storeDirHandle } from '../lib/dirHandle'
 import tw from 'twin.macro'
 import { WritableAtom } from 'nanostores'
@@ -26,7 +26,7 @@ import {
   router,
   saveDirHandle,
   saveDirName,
-  selectedGif,
+  selectedGifs,
   textureCache,
 } from '../store'
 
@@ -56,6 +56,70 @@ function SwitchRow({ label, boolVar }: { label: string; boolVar: WritableAtom })
           css={value && tw`translate-x-[18px]`}
         />
       </button>
+    </div>
+  )
+}
+
+/** Dropdown that opens into a checkbox list — lets several animations be
+ * selected at once (see selectedGifs) while still collapsing to a single
+ * closed control like a normal dropdown. */
+function AnimMultiSelect() {
+  const gifOptions = useStore(selectedGifs)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  const options = Object.entries(GIF_OPTIONS).filter(([key]) => key !== 'none')
+  const summary = gifOptions.length === 0
+    ? 'No animation'
+    : gifOptions.map((o) => GIF_OPTIONS[o]).join(', ')
+
+  return (
+    <div ref={rootRef} tw='relative flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>Animation GIF</span>
+      <button
+        type='button'
+        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 text-left truncate flex items-center justify-between gap-2'
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span tw='truncate'>{summary}</span>
+        <span tw='text-gray-500 flex-shrink-0'>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div tw='absolute top-full left-0 right-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto p-1'>
+          {options.map(([key, label]) => {
+            const option = key as GifOption
+            const checked = gifOptions.includes(option)
+            return (
+              <label
+                key={key}
+                tw='flex items-center gap-2 text-sm text-gray-300 px-2 py-1.5 rounded hover:bg-gray-700 cursor-pointer'
+              >
+                <input
+                  type='checkbox'
+                  checked={checked}
+                  onChange={() =>
+                    selectedGifs.set(
+                      checked
+                        ? gifOptions.filter((o) => o !== option)
+                        : [...gifOptions, option],
+                    )
+                  }
+                />
+                {label}
+              </label>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -145,7 +209,6 @@ export default function Settings() {
   const [dirError, setDirError] = useState('')
   const dirName = useStore(saveDirName)
   const url = useStore(nicepipeURL)
-  const gifOption = useStore(selectedGif)
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
   const burstOn = useStore(burstModeEnabled)
@@ -285,22 +348,7 @@ export default function Settings() {
           </Section>
 
           <Section title='Animation'>
-            {!qrMode && (
-              <div tw='flex flex-col gap-1'>
-                <span tw='text-xs text-gray-500'>Animation GIF</span>
-                <select
-                  tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
-                  value={gifOption}
-                  onChange={(e) =>
-                    selectedGif.set((e.target as HTMLSelectElement).value as GifOption)
-                  }
-                >
-                  {Object.entries(GIF_OPTIONS).map(([key, label]) => (
-                    <option key={key} value={key}>{label}</option>
-                  ))}
-                </select>
-              </div>
-            )}
+            {!qrMode && <AnimMultiSelect />}
             {!qrMode && <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />}
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />

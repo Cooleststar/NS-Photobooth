@@ -13,7 +13,11 @@ export type HandData = {
   y: number[]
   z: number[]
   label: 'Left' | 'Right'
+  /** Upright hand, palm facing the camera (e.g. a "stop" gesture) */
   palmUp: boolean
+  /** Palm's surface facing upward/skyward — a roughly horizontal outstretched
+   * hand, like offering/presenting something on it. Distinct from palmUp. */
+  palmSky: boolean
 }
 
 /** One decoded QR code (QR mode). x/y are its center — normalized 0-1 on

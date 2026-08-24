@@ -33,7 +33,10 @@ export const GIF_OPTIONS = {
   pignose: 'Pig Nose',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
-export const selectedGif = persistentAtom<GifOption>('selectedGif', 'owl', opts)
+/** Every currently-active pose/hand-tracked animation and/or corner-prop —
+ * multiple can be on at once, all stacked on the same tracked person.
+ * 'none' is never a member: an empty array means "no animation" instead. */
+export const selectedGifs = persistentAtom<GifOption[]>('selectedGifs', ['owl'], opts)
 export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
 // When on, the backend switches from pose/hand tracking to QR-code
