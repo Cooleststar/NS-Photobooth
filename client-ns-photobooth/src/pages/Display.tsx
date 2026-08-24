@@ -1,6 +1,6 @@
 import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
 import { useStore } from '@nanostores/preact'
-import { useCam, useNiceROS, useNiceRTC } from 'nice-ros-react'
+import { useCam, useNiceConnState, useNiceROS, useNiceRTC } from 'nice-ros-react'
 import {
   ComponentProps,
   MutableRefObject,
@@ -26,6 +26,7 @@ import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
+import { convertPoint } from '../api/nicepipe/mpPose'
 import { useNiceROSAnalysis } from '../api/niceRos'
 import laptopGif from '../assets/laptop_anim/laptop.gif'
 import qrDroneGif from '../assets/drone_anim/drone.gif'
@@ -376,6 +377,7 @@ export default function Display({
   const url = useStore(nicepipeURL)
   const gifOption = useStore(selectedGif)
   const qrMode = useStore(qrModeEnabled)
+  const { rosState } = useNiceConnState()
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
   const isMulti = useStore(multiTarget)
@@ -409,7 +411,17 @@ export default function Display({
   // mode (full YOLO+ViTPose) until the user happens to switch characters,
   // which is exactly what caused real, measurable GPU contention and lag
   // during drone testing even though drone only ever needs MediaPipe Hands.
+  //
+  // Also re-sent whenever the rosbridge connection (re)connects (rosState
+  // dependency below) — the backend's detection mode is in-memory only, so
+  // any backend restart silently resets it to 'both' with no way for the
+  // frontend to know unless it explicitly resends on every reconnect, not
+  // just once on initial mount. Without this, QR mode (and any other
+  // non-default mode) would silently stop working after every backend
+  // restart until the user happened to toggle something that changes
+  // gifOption/qrMode again.
   useEffect(() => {
+    if (rosState !== 'connected') return
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     const mode = qrMode ? 'qr' : (DETECTION_MODE_BY_GIF[gifOption] ?? 'both')
@@ -434,7 +446,7 @@ export default function Display({
       active = false
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [gifOption, qrMode])
+  }, [gifOption, qrMode, rosState])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
@@ -677,8 +689,9 @@ export default function Display({
       const animSlots: { container: PIXI.Container; update: AnimUpdate }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
       // QR mode: a single fade-prop instance (drone gif). Before lock-on, it
-      // just fades in/out at a fixed center position while QR_DRONE_PAYLOAD
-      // is visible. The moment a guest shows that code, whichever tracked
+      // fades in and follows the code's own live on-screen position (from
+      // the backend's decoded QR center) while QR_DRONE_PAYLOAD is visible.
+      // The moment a guest shows that code, whichever tracked
       // person has a wrist closest to the code's position is assumed to be
       // the one holding it up — the drone locks onto that person's track id
       // (reusing this project's existing YOLO pose detection rather than a
@@ -767,12 +780,27 @@ export default function Display({
         for (const updateCorner of cornerAnims) updateCorner(hasPerson)
 
         if (qrDroneUpdate) {
-          // dataRef.current.qrCodes is already remapped to screen space (see
-          // createReceivingCtx), same coordinate space as allPoses/mp_pose below.
-          const droneCode = dataRef.current.qrCodes?.find((c) => c.payload === QR_DRONE_PAYLOAD)
-          const allPoses = dataRef.current.allPoses ?? {}
+          // dataRef.current.qrCodes/allPoses are still normalised [0,1]
+          // fractions at this point (remapPoint only adjusts for margins,
+          // it doesn't scale to pixels — the actual conversion happens via
+          // convertPoint, same as every other character e.g. owl.ts does),
+          // so convert to pixel space here before any position math.
+          const droneCodeRaw = dataRef.current.qrCodes?.find((c) => c.payload === QR_DRONE_PAYLOAD)
+          const droneCode = droneCodeRaw
+            ? convertPoint({ x: droneCodeRaw.x, y: droneCodeRaw.y, z: 0 }, height, width)
+            : undefined
+          const allPosesRaw = dataRef.current.allPoses ?? {}
+          const allPoses: { [id: number]: { x: number; y: number }[] } = {}
+          for (const [idStr, pose] of Object.entries(allPosesRaw)) {
+            allPoses[Number(idStr)] = pose.map((p) => convertPoint(p, height, width))
+          }
 
-          if (!qrDroneLocked.get() && droneCode) {
+          // qrDroneLocked persists globally across effect remounts, but
+          // qrLockedTrackId is local to this mount — if the effect
+          // remounted while locked (e.g. gifOption/isMulti changed), it'd
+          // otherwise inherit "locked" with no id to follow and get stuck
+          // forever. Treat that combination as unlocked so it can re-acquire.
+          if ((!qrDroneLocked.get() || qrLockedTrackId === undefined) && droneCode) {
             // Whichever tracked person has a wrist closest to the code's
             // position is assumed to be the one holding it up. Falls back
             // to that person's nose if neither wrist is available (e.g.
@@ -796,18 +824,18 @@ export default function Display({
             }
           }
 
-          if (qrDroneLocked.get()) {
+          if (qrDroneLocked.get() && qrLockedTrackId !== undefined) {
             // Locked: follow a point above the locked person's head, holding
             // the last known spot on frames where their pose is briefly lost
             // (e.g. momentarily out of frame) rather than disappearing.
-            const lockedPose = qrLockedTrackId !== undefined ? allPoses[qrLockedTrackId] : undefined
+            const lockedPose = allPoses[qrLockedTrackId]
             const headTop = lockedPose && headTopFromPose(lockedPose)
             if (headTop) qrDroneLastPos = headTop
             qrDroneUpdate(qrDroneLastPos)
           } else {
-            // Not locked yet: fixed center position, visible only while the
-            // code itself is shown.
-            qrDroneUpdate(droneCode ? { x: width / 2, y: height / 2 } : undefined)
+            // Not locked yet: follow the code's own live on-screen position,
+            // visible only while the code itself is shown.
+            qrDroneUpdate(droneCode ? { x: droneCode.x, y: droneCode.y } : undefined)
           }
         }
       })

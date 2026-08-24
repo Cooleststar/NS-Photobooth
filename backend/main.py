@@ -429,20 +429,36 @@ except Exception as _e:
 
 
 def _decode_qr_pyzbar(working: np.ndarray) -> list:
-    """[(payload, cx, cy), ...] — cx/cy normalised 0-1."""
+    """[(payload, cx, cy), ...] — cx/cy normalised 0-1. Uses each symbol's
+    actual polygon (the real corner points, which are non-rectangular for a
+    skewed/angled code) rather than its axis-aligned bounding rect, falling
+    back to reconstructing a rect only if pyzbar didn't return 4 points."""
     h, w = working.shape[:2]
     gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
     out = []
-    for symbol in _pyzbar_decode(gray, symbols=[_pyzbar_symbol.QRCODE]):
+    try:
+        symbols = _pyzbar_decode(gray, symbols=[_pyzbar_symbol.QRCODE])
+    except Exception:
+        # pyzbar/zbar can throw on degenerate input, same as OpenCV's
+        # detector below — treat it as "no codes this frame", not a crash.
+        return []
+    for symbol in symbols:
         try:
             text = symbol.data.decode('utf-8', errors='replace').strip()
         except Exception:
             continue
         if not text:
             continue
-        rect = symbol.rect
-        cx = (rect.left + rect.width / 2) / w
-        cy = (rect.top + rect.height / 2) / h
+        polygon = symbol.polygon
+        if len(polygon) >= 4:
+            xs = [p.x for p in polygon]
+            ys = [p.y for p in polygon]
+            cx = (sum(xs) / len(xs)) / w
+            cy = (sum(ys) / len(ys)) / h
+        else:
+            rect = symbol.rect
+            cx = (rect.left + rect.width / 2) / w
+            cy = (rect.top + rect.height / 2) / h
         out.append((text, cx, cy))
     return out
 
@@ -459,6 +475,8 @@ def _decode_qr_opencv(working: np.ndarray) -> list:
         return []
     out = []
     for text_raw, quad in zip(payloads, points):
+        # A code can be located but not decodable (empty payload) — normal
+        # at distance or a steep angle, just skip it rather than error.
         text = (text_raw or '').strip()
         if not text:
             continue
@@ -478,6 +496,12 @@ def _decode_qr_opencv(working: np.ndarray) -> list:
 _qr_last_seen: dict = {}  # payload -> (timestamp, cx, cy) — cx/cy normalised 0-1
 _QR_TRACK_TTL = 0.8  # seconds a code stays "visible" after its last successful decode
 
+# Diagnostic counters — /qr_debug reports these so we can tell "detection is
+# running but finding nothing" apart from "detection never even runs".
+_qr_attempt_count = 0
+_qr_last_attempt_ts: float = 0.0
+_qr_last_frame_shape: tuple = ()
+
 
 def _decode_qr_codes(frame: np.ndarray) -> list:
     """Every QR code visible in the frame, or seen within the last
@@ -485,9 +509,26 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
     flickering the overlay off every time a single frame fails to decode.
     Returns [{"payload": str, "x": float, "y": float}, ...], position being
     the code's center in normalised (0-1) frame coordinates."""
+    global _qr_attempt_count, _qr_last_attempt_ts, _qr_last_frame_shape
+    _qr_attempt_count += 1
+    _qr_last_attempt_ts = time.time()
+    _qr_last_frame_shape = frame.shape
+
     height, width = frame.shape[:2]
     working = frame
     if width > _QR_DOWNSCALE_WIDTH:
+        # Decoding a smaller image is cheaper, and detection runs on every
+        # processed frame — that cost matters more than the (negligible)
+        # accuracy loss from downscaling something as high-contrast as a QR
+        # code. _decode_qr_pyzbar/_decode_qr_opencv report each code's
+        # center as a fraction (0-1) of *this* (downscaled) frame's own
+        # dimensions, which is exactly equivalent to detecting on the small
+        # copy, multiplying the corner points back up by the scale factor,
+        # then dividing by the original full-resolution dimensions — just
+        # without the intermediate pixel-space step, since the resize below
+        # preserves aspect ratio uniformly (same factor on both axes).
+        # Downstream code (Display.tsx) always works with these normalised
+        # fractions, so it never needs to know downscaling happened at all.
         scale = _QR_DOWNSCALE_WIDTH / float(width)
         working = cv2.resize(
             frame, (_QR_DOWNSCALE_WIDTH, max(1, int(round(height * scale)))),
@@ -509,8 +550,18 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
     ]
 
 
-def run_pose_detection(frame: np.ndarray) -> dict:
+def run_pose_detection(frame: np.ndarray, qr_frame: np.ndarray = None) -> dict:
     """Detect poses/hands on a BGR frame, gated by _detection_mode.
+
+    `frame` must be a *consistent* size across calls — YOLO's BoT-SORT
+    tracker keeps internal state (including a previous-frame pyramid for its
+    GMC/optical-flow motion compensation) between calls, and feeding it a
+    differently-sized frame breaks that comparison (OpenCV assertion error,
+    "GMC failed, falling back to identity", repeating on every subsequent
+    call since it never gets a matching pair of frames to recover with).
+    QR decoding wants much higher resolution than pose/hand keypoints need,
+    so it takes its own separately-sized `qr_frame` (defaults to `frame`)
+    instead of sharing YOLO's input.
 
     YOLO26-Pose runs synchronously for fast tracking + bounding boxes.
     ViTPose++ runs in a background worker thread; its cached keypoints are
@@ -597,7 +648,7 @@ def run_pose_detection(frame: np.ndarray) -> dict:
     if mode in ('hands', 'both'):
         hands = run_hand_detection(frame)
 
-    qr_codes = _decode_qr_codes(frame) if mode == 'qr' else []
+    qr_codes = _decode_qr_codes(qr_frame if qr_frame is not None else frame) if mode == 'qr' else []
 
     return {"poses": poses, "hands": hands, "qr_codes": qr_codes}
 
@@ -954,23 +1005,26 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             )
             if should_infer:
                 global _rtsp_pose_busy
-                # QR codes need real pixel density per module to decode —
-                # 320x240 (fine for pose/hand keypoints) is too low-res and
-                # makes anything but a huge, close QR code undecodable, so
-                # QR mode runs detection on the full-resolution frame.
-                small = frame if mode == 'qr' else cv2.resize(frame, (320, 240))
+                # YOLO always gets a fixed 320x240 frame regardless of mode —
+                # its tracker keeps state between calls and breaks (repeating
+                # "GMC failed" errors) if the frame size changes call to
+                # call. QR codes need much more pixel density than that to
+                # decode, so QR mode passes the full-resolution frame
+                # separately, only for QR decoding — never into YOLO.
+                small = cv2.resize(frame, (320, 240))
+                qr_frame = frame if mode == 'qr' else None
                 if not _rtsp_pose_busy:
                     _rtsp_pose_busy = True
-                    def _rtsp_infer(f):
+                    def _rtsp_infer(f, qf):
                         global _rtsp_pose_busy
                         try:
                             asyncio.run_coroutine_threadsafe(
-                                broadcast("/pose_out", run_pose_detection(f)),
+                                broadcast("/pose_out", run_pose_detection(f, qf)),
                                 _loop,
                             ).result()
                         finally:
                             _rtsp_pose_busy = False
-                    threading.Thread(target=_rtsp_infer, args=(small,), daemon=True).start()
+                    threading.Thread(target=_rtsp_infer, args=(small, qr_frame), daemon=True).start()
     finally:
         stop_event.set()
         ffmpeg_thread.join(timeout=10)
@@ -1295,6 +1349,25 @@ async def detection_mode_handler(request: web.Request) -> web.Response:
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
+async def qr_debug_handler(request: web.Request) -> web.Response:
+    """Diagnostic: what QR codes the backend currently thinks are visible
+    (within the TTL grace window), plus which decode backend is active.
+    GET /qr_debug — no auth, dev-only convenience for troubleshooting."""
+    return web.json_response({
+        'detection_mode': _detection_mode,
+        'backend': 'pyzbar' if _pyzbar_decode is not None else 'opencv',
+        'attempts': _qr_attempt_count,
+        'last_attempt_age_seconds': (
+            round(time.time() - _qr_last_attempt_ts, 2) if _qr_last_attempt_ts else None
+        ),
+        'last_frame_shape': list(_qr_last_frame_shape) if _qr_last_frame_shape else None,
+        'seen': [
+            {'payload': text, 'age_seconds': round(time.time() - ts, 2), 'x': cx, 'y': cy}
+            for text, (ts, cx, cy) in _qr_last_seen.items()
+        ],
+    }, headers=_CORS)
+
+
 async def gallery_client_handler(request: web.Request) -> web.Response:
     html_path = pathlib.Path(__file__).parent / 'gallery.html'
     return web.FileResponse(html_path)
@@ -1390,6 +1463,7 @@ def make_http_app() -> web.Application:
     app.router.add_get('/browse', browse_handler)
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
     app.router.add_route('*', '/detection_mode', detection_mode_handler)
+    app.router.add_get('/qr_debug', qr_debug_handler)
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)
