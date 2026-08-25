@@ -10,6 +10,7 @@ import scubaThumb from '../assets/cat_anim/scuba.gif'
 import clownThumb from '../assets/Clown/clownicon.jpg'
 import pigThumb from '../assets/Pig/Pig_icon.jpg'
 import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
+import batEarsThumb from '../assets/batears/leftear.png'
 
 const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,
@@ -21,6 +22,7 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   clown: clownThumb,
   pig: pigThumb,
   pignose: pigNoseThumb,
+  batears: batEarsThumb,
 }
 
 /** side strip of thumbnail buttons for toggling active animations (multiple can

@@ -13,6 +13,7 @@ import {
 import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
 import { createBatAnim } from '../anim/bat'
+import { createBatEarsAnim } from '../anim/batears'
 import { createBanner } from '../anim/banner'
 import { createClownAnim } from '../anim/clown'
 import { createDroneAnim } from '../anim/drone'
@@ -58,22 +59,22 @@ import {
 // reference implementation's general multi-code mapping config.
 const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'batears' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
-  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pig', 'pignose',
+  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pig', 'pignose', 'batears',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// clown/pig/scuba read body pose only, drone and ocfusion read hand
-// landmarks only (ignores pose entirely), laptop is a fixed-position fade
-// prop that reads neither. Told to the backend via POST /detection_mode so
-// it skips idle models per-frame instead of running YOLO/ViTPose/MediaPipe
-// Hands unconditionally.
+// clown/pig/pignose/batears/scuba read body pose only, drone and ocfusion
+// read hand landmarks only (ignores pose entirely), laptop is a
+// fixed-position fade prop that reads neither. Told to the backend via
+// POST /detection_mode so it skips idle models per-frame instead of running
+// YOLO/ViTPose/MediaPipe Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
   none: 'none',
   owl: 'pose',
@@ -86,6 +87,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   clown: 'pose',
   pig: 'pose',
   pignose: 'pose',
+  batears: 'pose',
 }
 
 /** Multiple animations can be selected at once now, each possibly wanting a
@@ -694,6 +696,8 @@ export default function Display({
         return await createPigAnim(app)
       } else if (option === 'pignose') {
         return await createPigNoseAnim(app)
+      } else if (option === 'batears') {
+        return await createBatEarsAnim(app)
       }
       return null
     }
