@@ -37,6 +37,7 @@ import {
   bannerEnabled,
   camSize,
   debugEnabled,
+  detectionCamSize,
   getBackendHttpUrl,
   multiTarget,
   nicepipeURL,
@@ -220,6 +221,11 @@ function createReceivingCtx(
   dataRef: MutableRefObject<Analysis>,
   size?: { width: number; height: number },
   bitmapRef?: { current: ImageBitmap | null },
+  /** True glass-to-glass video latency (ms) for the RTSP path — backend
+   * timestamps each frame the moment it's decoded, browser diffs that
+   * against Date.now() on arrival. Undefined outside RTSP mode, where the
+   * generic /pose_out-staleness delay below is used instead. */
+  videoDelayMsRef?: { current: number | undefined },
 ) {
   const { width = 640, height = 480 } = size ?? {}
   const canvas = document.createElement('canvas')
@@ -349,12 +355,16 @@ function createReceivingCtx(
           })
         : pose
       if (debugEnabled.get()) {
-        // How stale the detection data currently driving the overlay is —
-        // time since the last /pose_out message, not a frame-accurate
-        // round-trip (RTSP mode never sends frames to the backend at all,
-        // so round-trip timing isn't meaningful there), but a mode-agnostic
-        // proxy for pipeline lag that's directly useful either way.
-        const delayMs = data.lastUpdateTs !== undefined ? performance.now() - data.lastUpdateTs : undefined
+        // RTSP mode: real glass-to-glass video latency, measured by the
+        // websocket handler below off each frame's backend capture
+        // timestamp — a true "camera delay" reading. Webcam mode has no
+        // such timestamp (frames never round-trip through the backend at
+        // all before display), so it falls back to a proxy: staleness of
+        // the last /pose_out detection message, which is at least a useful
+        // indicator of pipeline lag even if not frame-accurate.
+        const delayMs = videoDelayMsRef?.current !== undefined
+          ? videoDelayMsRef.current
+          : data.lastUpdateTs !== undefined ? performance.now() - data.lastUpdateTs : undefined
         drawDebug(ctx, debugPose, propDets, fps, delayMs)
       }
     },
@@ -394,6 +404,7 @@ export default function Display({
 
   const deviceId = useStore(selectedDevice)
   const camRes = useStore(camSize)
+  const detectionRes = useStore(detectionCamSize)
   const url = useStore(nicepipeURL)
   const gifOptions = useStore(selectedGifs)
   const gifOptionsKey = gifOptions.join(',')
@@ -472,6 +483,14 @@ export default function Display({
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
     videoRef.current.srcObject = stream
+    // Requested width/height are "ideal" constraints, not guaranteed — if
+    // the camera/driver can't do the requested resolution, the browser
+    // silently falls back to whatever it can, with no error. Logged here so
+    // a mismatch (requested 2560x1440 but actually got e.g. 1920x1080) is
+    // visible instead of just looking like "changing the setting did
+    // nothing".
+    const settings = stream.getVideoTracks()[0]?.getSettings()
+    console.log('Camera stream actual resolution:', settings?.width, 'x', settings?.height)
   }, [])
 
   useCam({ deviceId: isRtspMode ? undefined : deviceId, videoConstraints: camRes, videoCallback: setVideo })
@@ -479,11 +498,19 @@ export default function Display({
 
   useNiceROS(url, { enabled: true })
 
+  // Separate, lower-resolution camera stream just for the backend detector
+  // (see detectionCamSize) — deliberately NOT wired to setVideo. It used to
+  // share setVideo with useCam above, which meant this stream's own
+  // getUserMedia call (opened independently, same physical camera) would
+  // clobber the local preview/capture video with whichever stream's
+  // callback fired last. Two full-resolution opens of the same camera is
+  // also what was causing the live feed to buffer once camSize was raised
+  // past 1080p — this keeps the detection stream light regardless of
+  // camSize.
   useNiceRTC(deviceId, {
     enabled: !!deviceId,
     mode: 'send',
-    videoConstraints: camRes,
-    videoCallback: setVideo,
+    videoConstraints: detectionRes,
   })
 
   useNiceROSAnalysis(rawRef)
@@ -551,6 +578,9 @@ export default function Display({
   // Receive RTSP frames over WebSocket; decode each JPEG off-thread via
   // createImageBitmap so the PixiJS tick always draws from a fully-decoded bitmap.
   const rtspBitmapRef = useRef<ImageBitmap | null>(null)
+  // Real glass-to-glass video latency (ms) — see the header parsing in
+  // ws.onmessage below and drawDebug's use of this ref.
+  const rtspDelayMsRef = useRef<number | undefined>(undefined)
   useEffect(() => {
     if (!isRtspMode || !wsStreamUrl) return
 
@@ -560,6 +590,7 @@ export default function Display({
     function connect() {
       if (!active) return
       try {
+        console.log('RTSP stream connecting:', wsStreamUrl)
         ws = new WebSocket(wsStreamUrl)
         ws.binaryType = 'blob'
 
@@ -567,19 +598,34 @@ export default function Display({
         // dropping frames that arrive while the previous decode runs.
         let latestBlob: Blob | null = null
         let decoding = false
+        let loggedFrameSize = false
         const decode = () => {
           if (!latestBlob) { decoding = false; return }
           const blob = latestBlob
           latestBlob = null
           createImageBitmap(blob).then((bm) => {
             if (!active) { bm.close(); return }
+            if (!loggedFrameSize) {
+              loggedFrameSize = true
+              console.log('RTSP frame actual resolution:', bm.width, 'x', bm.height)
+            }
             rtspBitmapRef.current?.close()
             rtspBitmapRef.current = bm
           }).catch(() => {}).finally(decode)
         }
 
         ws.onmessage = (e) => {
-          latestBlob = e.data as Blob
+          // Backend prepends an 8-byte big-endian float64 (its own
+          // time.time() when this frame was decoded from the RTSP stream)
+          // before the JPEG bytes — see ws_stream_handler in main.py. Split
+          // it off here: the header goes into the latency reading, the rest
+          // is the actual image to decode/display.
+          const raw = e.data as Blob
+          raw.slice(0, 8).arrayBuffer().then((buf) => {
+            const captureTs = new DataView(buf).getFloat64(0, false)
+            rtspDelayMsRef.current = Date.now() - captureTs * 1000
+          })
+          latestBlob = raw.slice(8)
           if (!decoding) { decoding = true; decode() }
         }
         ws.onclose = () => {
@@ -623,7 +669,7 @@ export default function Display({
     let [canvas, update] = createReceivingCtx(activeRef, dataRef, {
       width,
       height,
-    }, isRtspMode ? rtspBitmapRef : undefined)
+    }, isRtspMode ? rtspBitmapRef : undefined, isRtspMode ? rtspDelayMsRef : undefined)
 
     attachStream2Pixi(app, canvas)
     // Feed the video into the canvas immediately, independent of animation
@@ -659,7 +705,11 @@ export default function Display({
       { x: visRight - pad, y: visBot - pad },    // bottom-right
     ]
 
-    const MAX_PEOPLE = 4
+    // "Unlimited" in practice: a fixed pool sized well past any realistic
+    // photobooth crowd, rather than a truly dynamic per-person instance pool
+    // (which would need async instance creation/teardown mid-ticker as
+    // people enter/leave frame — a much larger, riskier change).
+    const MAX_PEOPLE = 32
     const marginOpts = { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B }
     // hoisted so photographerRef.current (defined outside the IIFE below)
     // can hide the decorative banner during capture — captured photos get
@@ -679,12 +729,7 @@ export default function Display({
         const wrappedUpdate = (_pose: any) => updateDrone(rawRef.current.hands ?? [])
         return [container, wrappedUpdate] as const
       } else if (option === 'scuba') {
-        const [container, updateScuba] = await createScubaAnim(app, marginOpts)
-        // Scuba needs all tracked people's poses (to find whoever is closest
-        // to the camera), not the single `pose` arg this slot system passes,
-        // so read them directly.
-        const wrappedUpdate = (_pose: any) => updateScuba(dataRef.current.allPoses ?? {})
-        return [container, wrappedUpdate] as const
+        return await createScubaAnim(app, marginOpts)
       } else if (option === 'ocfusion') {
         const [container, updateOCFusion] = await createOCFusionAnim(app, marginOpts)
         // Same as drone — driven by MediaPipe hand landmarks, not body pose
@@ -758,18 +803,19 @@ export default function Display({
         for (const option of gifOptions) {
           if (option === 'none') continue
           if (CHARACTER_OPTIONS.has(option)) {
-            // Scuba, Drone, and OC Fusion always run a single (outer)
-            // instance regardless of multi-target mode. Scuba does its own
-            // "closest person" selection internally across all tracked
-            // people. Drone/OC Fusion go further — each already implements
-            // its own internal 4-slot multi-HAND assignment (reading the
-            // raw global hand list directly, not a single assigned person's
+            // Drone and OC Fusion always run a single (outer) instance
+            // regardless of multi-target mode — each already implements its
+            // own internal 4-slot multi-HAND assignment (reading the raw
+            // global hand list directly, not a single assigned person's
             // pose), specifically so several hands/people can show the
             // gesture at once. Spawning multiple outer instances for these
             // would each spin up their own competing 4-slot system fighting
             // over the same hands — several duplicate drones jumping
             // between the same targets — instead of one coordinated system.
-            const count = isMulti && option !== 'scuba' && option !== 'drone' && option !== 'ocfusion' ? MAX_PEOPLE : 1
+            // Scuba doesn't need that special-casing: it just reads its
+            // assigned person's own pose like Clown/Pig/etc, so it gets a
+            // normal per-person instance via the outer slot assigner below.
+            const count = isMulti && option !== 'drone' && option !== 'ocfusion' ? MAX_PEOPLE : 1
             const results = await Promise.all(
               Array.from({ length: count }, () => createAnimForGif(option))
             )
@@ -942,6 +988,7 @@ export default function Display({
       const imCanvas = postprocessPicture(app.renderer.view)
       if (bannerContainer) bannerContainer.visible = prevBannerVisible
 
+      console.log('Captured photo resolution:', imCanvas.width, 'x', imCanvas.height)
       return imCanvas.toDataURL(
         // TODO: should these be configurable instead of hardcoded
         import.meta.env.VITE_IMG_UPLOAD_FORMAT,

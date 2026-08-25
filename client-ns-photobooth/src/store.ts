@@ -86,6 +86,22 @@ export const camSize = persistentAtom(
   opts,
 )
 
+// Resolution requested for the SEPARATE camera stream sent to the backend
+// for pose/hand/QR detection (see useNiceRTC in Display.tsx) — independent
+// of camSize, which is what the local canvas (and therefore captured
+// photos) actually renders at. Keeping this lower lets camSize be raised
+// for photo quality (e.g. 2560x1440) without doubling the camera bandwidth/
+// encode load that a second full-res stream would add, which is what was
+// causing the live feed to buffer.
+export const detectionCamSize = persistentAtom(
+  'detectionCameraSize',
+  {
+    height: 720,
+    width: 1280,
+  },
+  opts,
+)
+
 export const enableRTC = atom(false)
 
 export const nicepipeURL = persistentAtom<string>(

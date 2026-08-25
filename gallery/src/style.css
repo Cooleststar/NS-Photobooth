@@ -565,15 +565,6 @@ body {
 }
 .btn-delete-outline:hover:not(:disabled) { background: var(--danger-bg); }
 
-.btn-delete { background: var(--danger); color: white; }
-.btn-delete:hover:not(:disabled) { background: var(--danger-hover); }
-
-.btn-cancel { background: var(--bg-sunken); color: var(--text-secondary); }
-.btn-cancel:hover { background: var(--border-mid); }
-
-.confirm-row { display: flex; gap: calc(8px * var(--panel-scale)); }
-.confirm-row .btn { flex: 1; }
-
 /* ── State messages ─────────────────────────────────────────────────────── */
 .state-msg {
   flex: 1;

@@ -545,7 +545,6 @@ function GalleryScreen({
 }) {
   const photo = photos[selected]
   const previewRef = useRef(null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState(null)
 
@@ -555,9 +554,6 @@ function GalleryScreen({
     void previewRef.current.offsetWidth
     previewRef.current.style.animation = ''
   }, [selected, photo?.filename, versions[photo?.filename]])
-
-  // Never carry a pending delete confirmation onto a different photo.
-  useEffect(() => { setConfirmDelete(false) }, [selected, photo?.filename])
 
   // Never carry a stale download error onto a different photo.
   useEffect(() => { setDownloadError(null) }, [selected, photo?.filename])
@@ -658,30 +654,13 @@ function GalleryScreen({
                 <p class="download-error" role="alert">{downloadError}</p>
               )}
 
-              {/* Two-step delete: the gallery is left running unattended and
-                  this removes the file from the booth for every viewer. */}
-              {confirmDelete ? (
-                <div class="confirm-row">
-                  <button
-                    class="btn btn-delete"
-                    onClick={() => { setConfirmDelete(false); onDelete() }}
-                    disabled={deleting || recoloring}
-                  >
-                    {deleting ? '…' : 'Delete for good'}
-                  </button>
-                  <button class="btn btn-cancel" onClick={() => setConfirmDelete(false)}>
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  class="btn btn-delete-outline"
-                  onClick={() => setConfirmDelete(true)}
-                  disabled={deleting || recoloring}
-                >
-                  Delete
-                </button>
-              )}
+              <button
+                class="btn btn-delete-outline"
+                onClick={onDelete}
+                disabled={deleting || recoloring}
+              >
+                {deleting ? '…' : 'Delete'}
+              </button>
             </div>
           </aside>
         </div>

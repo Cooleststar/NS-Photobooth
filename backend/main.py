@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pathlib
+import struct
 import subprocess
 import threading
 import time
@@ -943,8 +944,13 @@ class RWLock:
 # RTSP reader — FFmpeg subprocess, latest-frame-only design
 # ---------------------------------------------------------------------------
 
-def _distribute_frame(jpg_bytes: bytes):
-    """Push a JPEG frame to all connected stream clients (WS and MJPEG)."""
+def _distribute_frame(jpg_bytes: bytes, capture_ts: float):
+    """Push a JPEG frame (+ the wall-clock time it was decoded from the RTSP
+    stream) to all connected stream clients (WS and MJPEG). capture_ts lets
+    the frontend measure actual glass-to-glass video latency — see
+    ws_stream_handler, which prepends it as an 8-byte header the browser can
+    diff against its own clock (assumes browser and backend share a clock,
+    true when they're the same machine, which this booth normally is)."""
     dead = set()
     for q in _stream_clients:
         if q.full():
@@ -953,7 +959,7 @@ def _distribute_frame(jpg_bytes: bytes):
             except asyncio.QueueEmpty:
                 pass
         try:
-            q.put_nowait(jpg_bytes)
+            q.put_nowait((jpg_bytes, capture_ts))
         except Exception:
             dead.add(q)
     _stream_clients.difference_update(dead)
@@ -962,6 +968,7 @@ def _distribute_frame(jpg_bytes: bytes):
 # Shared frame state — written by ffmpeg reader, read by distribute + pose threads
 _current_frame: np.ndarray | None = None
 _current_jpg: bytes | None = None
+_current_jpg_ts: float = 0.0
 _frame_id: int = 0
 _frame_rwlock = RWLock()
 
@@ -983,7 +990,7 @@ def _ffmpeg_read_loop(
     markers.  The latest JPEG bytes and decoded numpy frame are stored for the
     encode/distribute thread — there is no queue.
     """
-    global _current_frame, _current_jpg, _frame_id
+    global _current_frame, _current_jpg, _current_jpg_ts, _frame_id
 
     cmd = [
         'ffmpeg',
@@ -1062,6 +1069,7 @@ def _ffmpeg_read_loop(
                     _frame_rwlock.write_acquire()
                     _current_frame = frame
                     _current_jpg = jpg_bytes
+                    _current_jpg_ts = time.time()
                     _frame_id += 1
                     _frame_rwlock.write_release()
 
@@ -1111,6 +1119,7 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             fid = _frame_id
             frame = _current_frame
             jpg = _current_jpg
+            jpg_ts = _current_jpg_ts
             _frame_rwlock.read_release()
 
             if fid == prev_id or jpg is None:
@@ -1119,7 +1128,7 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             prev_id = fid
             frame_count += 1
 
-            _loop.call_soon_threadsafe(_distribute_frame, jpg)
+            _loop.call_soon_threadsafe(_distribute_frame, jpg, jpg_ts)
 
             # Sampling rate is mode-aware: YOLO+ViTPose (~31ms/call) needs the
             # every-3rd-frame throttle to stay cheap, but MediaPipe Hands
@@ -1239,8 +1248,14 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
     log.info(f"WS stream client connected (total: {len(_stream_clients)})")
     try:
         while not ws.closed:
-            jpg_bytes: bytes = await asyncio.wait_for(q.get(), timeout=20.0)
-            await ws.send_bytes(jpg_bytes)
+            jpg_bytes: bytes
+            capture_ts: float
+            jpg_bytes, capture_ts = await asyncio.wait_for(q.get(), timeout=20.0)
+            # 8-byte big-endian float64 wall-clock capture time prepended
+            # before the JPEG bytes, so the browser can diff it against its
+            # own clock (Date.now()) to measure real glass-to-glass video
+            # latency — see the matching unpack in Display.tsx's RTSP effect.
+            await ws.send_bytes(struct.pack('>d', capture_ts) + jpg_bytes)
     except (asyncio.TimeoutError, ConnectionResetError, asyncio.CancelledError):
         pass
     finally:
@@ -1269,7 +1284,8 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
     log.info(f"MJPEG client connected (total: {len(_stream_clients)})")
     try:
         while True:
-            jpg_bytes: bytes = await asyncio.wait_for(q.get(), timeout=20.0)
+            jpg_bytes: bytes
+            jpg_bytes, _capture_ts = await asyncio.wait_for(q.get(), timeout=20.0)
             await response.write(
                 b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg_bytes + b'\r\n'
             )
