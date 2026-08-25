@@ -1,10 +1,8 @@
 import { useStore } from '@nanostores/preact'
-import { useNiceROSState } from 'nice-ros-react'
 import { useEffect, useRef, useState } from 'react'
-import { storeDirHandle } from '../lib/dirHandle'
 import tw from 'twin.macro'
 import { WritableAtom } from 'nanostores'
-import { KeybindBtn, useKeybind } from '../components'
+import { useKeybind } from '../components'
 import {
   GIF_OPTIONS,
   GifOption,
@@ -16,16 +14,14 @@ import {
   canvasSize,
   debugEnabled,
   multiTarget,
-  nicepipeURL,
   offlineOnly,
   cameraInitialized,
+  photoCountdownSec,
   pictures,
   pointerEnabled,
   qrDroneLocked,
   qrModeEnabled,
   router,
-  saveDirHandle,
-  saveDirName,
   selectedGifs,
   textureCache,
 } from '../store'
@@ -204,18 +200,14 @@ function NumberRow({
 }
 
 export default function Settings() {
-  const route = useStore(router)?.route
   const [shown, setShown] = useState(false)
-  const [dirError, setDirError] = useState('')
-  const dirName = useStore(saveDirName)
-  const url = useStore(nicepipeURL)
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
   const burstOn = useStore(burstModeEnabled)
   const burstN = useStore(burstCount)
   const burstSec = useStore(burstIntervalSec)
+  const countdownSec = useStore(photoCountdownSec)
   const qrMode = useStore(qrModeEnabled)
-  const niceRos = useNiceROSState()
 
   useKeybind('KeyD', () => debugEnabled.set(!debugEnabled.get()))
   useKeybind('KeyS', () => setShown((s) => !s))
@@ -251,73 +243,8 @@ export default function Settings() {
         </div>
 
         <div tw='flex-1 overflow-y-auto px-5'>
-          {route && (
-            <Section title='Navigate'>
-              {route === 'booth' && (
-                <a href='/qr' tw='text-sm text-blue-400 hover:text-blue-300 transition-colors'>
-                  Go to Gallery →
-                </a>
-              )}
-              {route === 'qr' && (
-                <a href='/booth' tw='text-sm text-blue-400 hover:text-blue-300 transition-colors'>
-                  Go to Booth Page →
-                </a>
-              )}
-            </Section>
-          )}
-
           <Section title='Connection'>
-            <div tw='flex flex-col gap-1'>
-              <span tw='text-xs text-gray-500'>NicePipe URL</span>
-              <input
-                tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
-                type='text'
-                value={url}
-                placeholder='ws://localhost:9091'
-                onChange={(e) =>
-                  nicepipeURL.set((e.target as HTMLInputElement).value)
-                }
-              />
-            </div>
             <SwitchRow label='Disable Online Features' boolVar={offlineOnly} />
-          </Section>
-
-          <Section title='Storage'>
-            <div tw='flex flex-col gap-1'>
-              <span tw='text-xs text-gray-500'>Save Folder</span>
-              <div tw='flex items-center gap-2'>
-                <span tw='flex-1 text-xs text-gray-300 bg-gray-800 border border-gray-700 px-3 py-2 rounded-lg truncate'>
-                  {dirName || 'No folder selected'}
-                </span>
-                <button
-                  tw='flex-shrink-0 bg-gray-700 hover:bg-gray-600 text-white text-sm px-3 py-2 rounded-lg transition-colors'
-                  onClick={() => {
-                    setDirError('')
-                    if (!('showDirectoryPicker' in window)) {
-                      setDirError('Not supported in this browser')
-                      return
-                    }
-                    ;(window as any).showDirectoryPicker({ mode: 'readwrite' })
-                      .then(async (handle: FileSystemDirectoryHandle) => {
-                        await storeDirHandle(handle)
-                        saveDirHandle.set(handle)
-                        saveDirName.set(handle.name)
-                      })
-                      .catch((e: any) => {
-                        if (e?.name !== 'AbortError') setDirError(e?.message ?? String(e))
-                      })
-                  }}
-                >
-                  Browse
-                </button>
-              </div>
-              {dirError && (
-                <span tw='text-[10px] text-red-400'>{dirError}</span>
-              )}
-              <span tw='text-[10px] text-gray-600'>
-                Photos auto-save here when online features are disabled
-              </span>
-            </div>
           </Section>
 
           <Section title='Display'>
@@ -325,7 +252,14 @@ export default function Settings() {
             <ResRow label='Camera Size' value={camRes} setter={camSize.set} />
           </Section>
 
-          <Section title='Burst Mode'>
+          <Section title='Capture'>
+            <NumberRow
+              label='Countdown before shot (s)'
+              value={countdownSec}
+              setter={photoCountdownSec.set}
+              min={0}
+              max={15}
+            />
             <SwitchRow label='Enable Burst Mode' boolVar={burstModeEnabled} />
             {burstOn && (
               <>
@@ -365,28 +299,6 @@ export default function Settings() {
           </Section>
 
           <Section title='Actions'>
-            <KeybindBtn
-              tw='w-full text-sm py-2 px-3 rounded-lg text-left'
-              onClick={() => {
-                canvasSize.notify()
-                niceRos.reset()
-              }}
-              keyCode='KeyR'
-            >
-              Reset Connection
-            </KeybindBtn>
-            <button
-              tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
-              onClick={() => pictures.set([])}
-            >
-              Clear Image Cache
-            </button>
-            <button
-              tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
-              onClick={() => textureCache.set({})}
-            >
-              Clear Texture Cache
-            </button>
             <button
               tw='w-full text-sm py-2 px-3 bg-red-900 hover:bg-red-800 text-white rounded-lg text-left transition-colors'
               onClick={() => {

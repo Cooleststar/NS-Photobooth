@@ -1300,7 +1300,11 @@ def _write_photo_files(
         ext = 'jpg'
 
     pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    # Millisecond-precision client timestamp, not server-side second-resolution
+    # datetime.now(): multiple strips from one burst confirm can otherwise
+    # save within the same second and overwrite each other's files.
+    dt = datetime.fromtimestamp(pic_timestamp / 1000) if pic_timestamp else datetime.now()
+    timestamp = dt.strftime('%Y-%m-%d_%H-%M-%S_%f')[:-3]
     filepath = os.path.join(directory, f'photo_{timestamp}.{ext}')
 
     with open(filepath, 'wb') as f:

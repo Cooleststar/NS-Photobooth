@@ -1,3 +1,4 @@
+import { useStore } from '@nanostores/preact'
 import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
 import { uploadImage } from '../api/imgbb'
@@ -17,12 +18,12 @@ import {
   freezePosition,
   getBackendHttpUrl,
   offlineOnly,
+  photoCountdownSec,
   pointerEnabled,
   poseInd,
 } from '../store'
 import { sleep } from '../utils'
 
-const countdown = parseInt(import.meta.env.VITE_PHOTO_COUNTDOWN)
 const STRIP_SIZE = 3
 const BURST_INTERVAL_MS = () => burstIntervalSec.get() * 1000
 const FLASH_MS = 80
@@ -51,6 +52,7 @@ export interface HUDProps {
 }
 
 export default function HUD({ photographerRef }: HUDProps) {
+  const countdown = useStore(photoCountdownSec)
   const [error, setError] = useState('')
   const [state, setState] = useState<CamState>('ready')
   const [images, setImages] = useState<string[]>([])
@@ -68,7 +70,7 @@ export default function HUD({ photographerRef }: HUDProps) {
       pointerEnabled.set(false)
       freezePosition.set(true)
       try {
-        await sleep(countdown * 1000)
+        await sleep(photoCountdownSec.get() * 1000)
         const img = await flash(imgGetter)
         // single photos get the same card border treatment as burst strips
         // (see photoStrip.ts) instead of the old baked-in banner overlay
@@ -94,7 +96,7 @@ export default function HUD({ photographerRef }: HUDProps) {
       pointerEnabled.set(false)
       freezePosition.set(true)
       try {
-        await sleep(countdown * 1000)
+        await sleep(photoCountdownSec.get() * 1000)
 
         const total = burstCount.get()
         const captured: string[] = []
@@ -207,8 +209,13 @@ export default function HUD({ photographerRef }: HUDProps) {
         }
       })()
     } else {
+      const baseTimestamp = Date.now()
       for (let i = 0; i < images.length; i++) {
-        savePicture(Date.now(), images[i], '', i)
+        // Offset each strip by 1ms: the loop runs synchronously with no
+        // await between iterations, so Date.now() alone can return the same
+        // millisecond for several strips and collide on the backend's
+        // per-photo filename.
+        savePicture(baseTimestamp + i, images[i], '', i)
       }
       setState('ready')
     }

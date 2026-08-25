@@ -16,43 +16,55 @@ const ANIM = {
 
 const KF_PARAMS = { R: 0.03, Q: 2 }
 
-// Each source PNG (496x503) is a single ear shape — pointed tip up-left
-// (left ear) / up-right (right ear), tapering to a narrow *zero-width*
-// point at the inner-bottom corner where it'd meet the head (leftear.png:
-// x=183, y=152 of 496x503). Anchoring exactly at that point (an earlier
-// attempt) put the ear's actual visible bulk noticeably away from the
-// landmark — nothing has any width right at a zero-width tip — which
-// showed up as a gap between the real ear and the start of the graphic,
-// worse at larger sizes since that "dead zone" scales up too. Anchoring
-// instead where the shape already has real width (traced the shape's
-// thickness moving in from the tip; picked x=160, where it's ~57px thick,
-// comparable to a real ear) puts substantial artwork immediately at the
-// landmark, wrapping around the ear instead of floating beside it.
-// rightear.png mirrors these. Found by inspecting the actual source art,
-// not assumed from bounding-box math — see git history for earlier
-// wrong guesses on this and the previous (different) source art.
-const LEFT_EAR_ANCHOR = { x: 0.3226, y: 0.2674 }
-const RIGHT_EAR_ANCHOR = { x: 0.6774, y: 0.2674 }
+// Earlier attempts anchored each ear directly to its own detected ear
+// landmark (pose[7]/pose[8]) and tried to make the art wrap around the real
+// ear. That landmark is noisy/awkwardly-placed for this purpose and kept
+// producing bad results (gaps, one ear floating disconnected from the
+// head). What actually looks right (per reference) is the same approach
+// this file's horns used before they were removed: both ears positioned
+// together at the top of the head, derived from the nose + ear-to-ear line
+// (not tracking the ear landmarks' positions directly), like a headband —
+// each source PNG's own visual center as the anchor (leftear.png content
+// bbox center: x=92, y=142 of 496x503; rightear.png mirrors it), which
+// keeps the art's own natural tilt intact instead of us guessing a
+// rotation offset.
+const LEFT_EAR_ANCHOR = { x: 0.1855, y: 0.2823 }
+const RIGHT_EAR_ANCHOR = { x: 0.8145, y: 0.2823 }
 
 // How much of the canvas's width the actual visible artwork occupies — used
 // to convert a *desired visible size* (relative to ear-to-ear distance, an
 // intuitive knob) into the full sprite width PIXI needs to be told (which
-// includes the transparent margin). Also computed from the source files.
+// includes the transparent margin). Computed from the source files.
 const EAR_CONTENT_WIDTH_FRACTION = 0.3669
 
 // Desired *visible* width of each ear, relative to ear-to-ear distance —
-// the actual tuning knob. Was 0.85 — too large relative to a real head.
-// Tune this if the ears look too small/large on a real face.
-const EAR_VISIBLE_SIZE_FACTOR = 0.5
+// the actual tuning knob. Was 0.8, reduced ~30% per feedback. Tune this if
+// the ears look too small/large.
+const EAR_VISIBLE_SIZE_FACTOR = 0.56
 
-// Extra rotation on top of head-tilt, pivoting around the fixed anchor
-// point (so the tip swings while the base stays put) — meant to angle the
-// ear's base edge to sit flush against the head/hairline instead of
-// leaving a gap below it. Mirrored between ears (each rotates toward the
-// head, not the same direction) since they're mirror images of each other.
-// A guess, not verified against a live camera — if the ears tilt the wrong
-// way (gap gets worse, or they tip toward the face), flip the sign.
-const EAR_TILT_OFFSET = 0.35 // ~20 degrees
+// Ears don't have their own reliable detected landmark to anchor to (see
+// note above), so — same as this file's earlier horn logic — position is
+// derived from the nose + ear-to-ear line: shifted up, then left/right
+// along the ear line to spread the pair apart. Both as a fraction of
+// ear-to-ear distance. CROWN_OFFSET_FACTOR at 0.2 (ear's own vertical
+// center at eye level) put the ears overlapping the temples/cheekbones —
+// reads as "ears growing out of the sides of the face" rather than sitting
+// above the hairline like a natural cat/bat-ear look. Settled between that
+// and the original crown/forehead height (0.7-1.05, reported as too high)
+// — high enough to clear the hairline, lower than pure crown height. Tune
+// this if the ears sit too low/high on the head, EAR_SPREAD_FACTOR if too
+// close together/far apart.
+const CROWN_OFFSET_FACTOR = 0.45
+const EAR_SPREAD_FACTOR = 0.55
+
+// Extra rotation on top of head-tilt — applying the same +40° to both ears
+// last time only visibly rotated one of them, since they're mirror-image
+// art: adding the same signed offset to both moves them toward opposite
+// visual effects (one ear's tilt gets accentuated, the other's gets
+// cancelled out toward upright). Mirrored here instead (+ on one ear, - on
+// the other) so both rotate outward by the same amount. PIXI's rotation is
+// clockwise-positive on screen (y grows downward).
+const EAR_ROTATION_OFFSET = (40 * Math.PI) / 180
 
 // A jump larger than this (in multiples of ear-to-ear distance) is not a
 // person moving — it means this animation slot has been handed to a
@@ -100,10 +112,12 @@ function createPiece(sprite: PIXI.Sprite, anchor: { x: number; y: number }) {
   return { sprite, resetFilters, applyTarget }
 }
 
-/** Nose + ear-to-ear geometry — the basis each ear's target is computed
- * from. Same sparse-face-point approach as pig.ts/clown.ts/pignose.ts:
- * there's no dedicated face-mesh detector in this pipeline, so the face
- * points already present in body pose (nose=0, ears=7/8) are reused. */
+/** Nose, ear-to-ear geometry, and derived crown-left/crown-right points —
+ * the basis both ears' targets are computed from. Same sparse-face-point
+ * approach as pig.ts/clown.ts/pignose.ts: there's no dedicated face-mesh
+ * detector in this pipeline, so the face points already present in body
+ * pose (nose=0, ears=7/8) are reused — here only for scale/tilt, not as
+ * the ears' own placement (see note at the top of this file). */
 function getHeadGeometry(pose: NormalizedLandmarkList, height: number, width: number) {
   if (pose.length === 0) return undefined
   const nose = pose[0]
@@ -122,26 +136,26 @@ function getHeadGeometry(pose: NormalizedLandmarkList, height: number, width: nu
   const earDist = Math.hypot(dx, dy)
   if (earDist < 1) return undefined
 
-  // Head tilt, from the ear-to-ear line — so the ears rotate with the head.
   const angle = Math.atan2(dy, dx)
+  // Unit vectors along the ear-to-ear line ("right" along the head) and
+  // perpendicular to it ("up", toward the top of the head) — both rotate
+  // correctly with head tilt since they're derived from the same line the
+  // rotation angle itself comes from.
+  const rightX = dx / earDist
+  const rightY = dy / earDist
+  const upX = dy / earDist
+  const upY = -dx / earDist
+
+  const crownX = n.x + upX * earDist * CROWN_OFFSET_FACTOR
+  const crownY = n.y + upY * earDist * CROWN_OFFSET_FACTOR
+  const spread = earDist * EAR_SPREAD_FACTOR
 
   return {
     nose: n,
-    leftEar: le,
-    rightEar: re,
-    // Each ear's own landmark can be individually unreliable even when the
-    // other one (and the nose) is solid — most commonly a turned/profile
-    // head, where the far ear is occluded. MediaPipe still returns *some*
-    // coordinate for an occluded landmark (often wrong, e.g. landing on the
-    // cheek/eye instead of the actual ear), so this has to be checked per
-    // ear, not just "at least one ear is visible" as the early-return above
-    // does — otherwise the ear for the unreliable side renders wherever
-    // that bad guess happens to be, e.g. on the face, instead of being
-    // hidden until that ear is actually visible again.
-    leftEarVisible: (leftEar.visibility ?? 1) >= 0.5,
-    rightEarVisible: (rightEar.visibility ?? 1) >= 0.5,
     earDist,
     angle,
+    leftCrown: { x: crownX - rightX * spread, y: crownY - rightY * spread },
+    rightCrown: { x: crownX + rightX * spread, y: crownY + rightY * spread },
   }
 }
 
@@ -191,17 +205,8 @@ export async function createBatEarsAnim(app: PIXI.Application) {
       lastNoseX = geo.nose.x
       lastNoseY = geo.nose.y
 
-      // Hide (rather than reposition onto a bad guess) whichever ear's own
-      // landmark isn't currently trustworthy — see the comment on
-      // leftEarVisible/rightEarVisible in getHeadGeometry.
-      leftEar.sprite.visible = geo.leftEarVisible
-      rightEar.sprite.visible = geo.rightEarVisible
-      if (geo.leftEarVisible) {
-        leftEar.applyTarget({ x: geo.leftEar.x, y: geo.leftEar.y, size: geo.earDist * EAR_VISIBLE_SIZE_FACTOR, angle: geo.angle + EAR_TILT_OFFSET })
-      }
-      if (geo.rightEarVisible) {
-        rightEar.applyTarget({ x: geo.rightEar.x, y: geo.rightEar.y, size: geo.earDist * EAR_VISIBLE_SIZE_FACTOR, angle: geo.angle - EAR_TILT_OFFSET })
-      }
+      leftEar.applyTarget({ x: geo.leftCrown.x, y: geo.leftCrown.y, size: geo.earDist * EAR_VISIBLE_SIZE_FACTOR, angle: geo.angle - EAR_ROTATION_OFFSET })
+      rightEar.applyTarget({ x: geo.rightCrown.x, y: geo.rightCrown.y, size: geo.earDist * EAR_VISIBLE_SIZE_FACTOR, angle: geo.angle + EAR_ROTATION_OFFSET })
     }
 
     animManager.tracking = !!geo

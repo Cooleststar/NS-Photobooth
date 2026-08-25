@@ -552,6 +552,12 @@ body {
 .btn-download { background: var(--info); color: white; }
 .btn-download:hover { background: var(--info-hover); }
 
+.download-error {
+  color: var(--danger-text);
+  font-size: 0.8rem;
+  margin: 6px 0 0;
+}
+
 .btn-delete-outline {
   background: transparent;
   color: var(--danger);

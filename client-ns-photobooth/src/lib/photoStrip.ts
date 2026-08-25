@@ -30,13 +30,6 @@ function loadBrandLogos(): Promise<[HTMLImageElement, HTMLImageElement]> {
 }
 
 export const DEFAULT_STRIP_BG = '#ffffff'
-export const STRIP_BG_OPTIONS = [
-  '#ffffff', // white
-  '#f6dade', // blush pink
-  '#dbe8dd', // sage green
-  '#dbe4ef', // dusty blue
-  '#f2ebe1', // cream
-]
 
 // The strip's background colour (the one the swatches change) shows as a
 // border on all four sides, not just under the photos. STRIP_BORDER is that

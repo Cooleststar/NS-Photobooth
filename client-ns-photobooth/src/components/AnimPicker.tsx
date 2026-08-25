@@ -10,7 +10,7 @@ import scubaThumb from '../assets/cat_anim/scuba.gif'
 import clownThumb from '../assets/Clown/clownicon.jpg'
 import pigThumb from '../assets/Pig/Pig_icon.jpg'
 import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
-import batEarsThumb from '../assets/batears/leftear.png'
+import batEarsThumb from '../assets/batears/batearsicon.png'
 
 const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,

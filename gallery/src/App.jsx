@@ -192,6 +192,44 @@ function photoUrl(ip, filename, ver = 0) {
   return ver ? `${base}?v=${ver}` : base
 }
 
+// A plain <a download> only works for same-origin URLs — the gallery and
+// backend run on different origins (different ports, and often different
+// machines on the LAN), so browsers silently ignore the download attribute
+// for it and just navigate to/open the image instead. Fetching the bytes
+// ourselves and downloading from a same-origin blob: URL works regardless
+// of origin. Where available (Chromium, on localhost/HTTPS — not plain LAN
+// HTTP from another machine), showSaveFilePicker additionally lets the
+// user pick the destination folder/filename instead of silently landing in
+// the default downloads folder.
+async function downloadPhoto(url, filename) {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Failed to fetch photo: HTTP ${res.status}`)
+  const blob = await res.blob()
+
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: filename })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      return
+    } catch (e) {
+      if (e?.name === 'AbortError') return // user cancelled the picker
+      // Any other failure (e.g. API present but blocked in this context) —
+      // fall through to the plain download below rather than losing the photo.
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 /** Light/dark preference. Falls back to the OS setting the first time, so the
@@ -508,6 +546,8 @@ function GalleryScreen({
   const photo = photos[selected]
   const previewRef = useRef(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState(null)
 
   useEffect(() => {
     if (!previewRef.current) return
@@ -518,6 +558,21 @@ function GalleryScreen({
 
   // Never carry a pending delete confirmation onto a different photo.
   useEffect(() => { setConfirmDelete(false) }, [selected, photo?.filename])
+
+  // Never carry a stale download error onto a different photo.
+  useEffect(() => { setDownloadError(null) }, [selected, photo?.filename])
+
+  const handleDownload = async () => {
+    setDownloadError(null)
+    setDownloading(true)
+    try {
+      await downloadPhoto(photoUrl(ip, photo.filename, versions[photo.filename] ?? 0), photo.filename)
+    } catch (e) {
+      setDownloadError(e?.message ?? String(e))
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   // Arrow keys move through the filmstrip, so browsing doesn't require
   // aiming at small thumbnails.
@@ -592,13 +647,16 @@ function GalleryScreen({
             </div>
 
             <div class="panel-card actions">
-              <a
+              <button
                 class="btn btn-download"
-                href={photoUrl(ip, photo.filename, versions[photo.filename] ?? 0)}
-                download={photo.filename}
+                onClick={handleDownload}
+                disabled={downloading}
               >
-                Download
-              </a>
+                {downloading ? 'Downloading…' : 'Download'}
+              </button>
+              {downloadError && (
+                <p class="download-error" role="alert">{downloadError}</p>
+              )}
 
               {/* Two-step delete: the gallery is left running unattended and
                   this removes the file from the booth for every viewer. */}

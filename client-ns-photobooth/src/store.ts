@@ -67,8 +67,6 @@ export const customRtspURL = persistentAtom<string>('customRtspURL', '')
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
 export const cameraInitialized = persistentAtom('cameraInitialized', false, opts)
-export const saveDirHandle = atom<FileSystemDirectoryHandle | null>(null)
-export const saveDirName = persistentAtom<string>('saveDirName', '')
 
 export const canvasSize = persistentAtom(
   'canvasSize',
@@ -102,6 +100,13 @@ export function getBackendHttpUrl(): string {
 export const burstModeEnabled = persistentAtom('burstModeEnabled', false, opts)
 export const burstCount = persistentAtom('burstCount', 3, opts)
 export const burstIntervalSec = persistentAtom<number>('burstIntervalSec', 1, opts)
+// Delay before the first shot of a capture — applies to both single shots
+// and the initial shot of a burst. Was a fixed VITE_PHOTO_COUNTDOWN env var.
+export const photoCountdownSec = persistentAtom<number>(
+  'photoCountdownSec',
+  parseInt(import.meta.env.VITE_PHOTO_COUNTDOWN) || 3,
+  opts,
+)
 
 export interface Picture {
   timestamp: number
@@ -128,19 +133,9 @@ export function addPicture(pic: Picture) {
     [...pictures.get(), pic].sort((a, b) => a.timestamp - b.timestamp),
   )
 }
-export function updatePicture(timestamp: number, patch: Partial<Picture>) {
-  pictures.set(
-    pictures.get().map((p) => (p.timestamp === timestamp ? { ...p, ...patch } : p)),
-  )
-}
-export function deletePicture(timestamp: number) {
-  pictures.set(pictures.get().filter((p) => p.timestamp !== timestamp))
-}
-
 export const router = createRouter({
   select: '/',
   booth: '/booth',
-  qr: '/qr',
 })
 
 export const textureCache = map<Record<string, PIXI.LoaderResource>>({})

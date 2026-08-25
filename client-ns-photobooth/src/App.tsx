@@ -2,26 +2,21 @@ import { useStore } from '@nanostores/preact'
 import { useEffect } from 'react'
 import Booth from './pages/Booth'
 import CameraSelect from './pages/CameraSelect'
-import QRPage from './pages/QRPage'
 import Settings from './pages/Settings'
-import { loadDirHandle } from './lib/dirHandle'
 import { loadPictures } from './lib/picturesDb'
-import { cameraInitialized, pictures, router, saveDirHandle } from './store'
+import { cameraInitialized, pictures, router } from './store'
 
 export default function App() {
   const route = useStore(router)?.route
 
   useEffect(() => {
-    loadDirHandle().then((handle) => {
-      if (handle) saveDirHandle.set(handle)
-    })
     loadPictures().then((pics) => {
       if (pics.length) pictures.set(pics)
     })
   }, [])
 
   useEffect(() => {
-    if ((route === 'booth' || route === 'qr') && !cameraInitialized.get()) {
+    if (route === 'booth' && !cameraInitialized.get()) {
       router.open('/')
     }
   }, [route])
@@ -33,7 +28,6 @@ export default function App() {
         {
           select: <CameraSelect />,
           booth: <Booth />,
-          qr: <QRPage />,
         }[route]
       }
       {route !== 'select' && <Settings />}
