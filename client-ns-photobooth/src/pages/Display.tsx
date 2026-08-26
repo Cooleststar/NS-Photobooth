@@ -16,11 +16,11 @@ import { createBatAnim } from '../anim/bat'
 import { createBatEarsAnim } from '../anim/batears'
 import { createBanner } from '../anim/banner'
 import { createClownAnim } from '../anim/clown'
+import { createConfettiBurst } from '../anim/confetti'
 import { createDroneAnim } from '../anim/drone'
 import { createGlobeAnim } from '../anim/globe'
 import { createOCFusionAnim } from '../anim/ocfusion'
 import { createOwlAnim } from '../anim/owl'
-import { createPigAnim } from '../anim/pig'
 import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
@@ -44,6 +44,11 @@ import {
   pointerEnabled,
   qrDroneLocked,
   qrOwlLocked,
+  qrBatLocked,
+  qrGlobeLocked,
+  qrClownLocked,
+  qrPigNoseLocked,
+  qrBatEarsLocked,
   qrModeEnabled,
   HIKVISION_IPS,
   RTSP_BASE,
@@ -55,30 +60,47 @@ import {
 } from '../store'
 
 // QR mode (Settings → "QR Code Mode"): a guest holds a QR code encoding
-// one of these exact payload strings up to the camera, and the matching gif
-// spawns — see the qrMode branch in the main render effect below. Whoever
-// prints these codes must encode these exact strings.
+// one of these exact payload strings up to the camera, and the matching
+// character spawns — see the qrMode branch in the main render effect below.
+// Whoever prints these codes must encode these exact strings.
+//
+// The drone is its own special case (a fixed fade-prop that follows a
+// point above the locked person's head, not their own pose-anchored
+// character). Every other entry below is a normal AnimPicker character
+// (owl/bat/globe/clown/pignose/batears) driven through QR_CHARACTERS —
+// same "nearest wrist locks onto that person" heuristic as the drone, then
+// the character just gets fed that person's pose every frame like it would
+// via the ordinary (non-QR) per-person slot system. Locked forever once
+// acquired, same as the drone — needs the "Reset Animation" button in
+// Settings to free it up for the next guest.
+//
+// Scuba isn't here: it already has its own dedicated gesture trigger
+// (anim/scuba.ts) rather than "just appears once selected", so it doesn't
+// fit this same "QR overrides the normal spawn condition" pattern. OC
+// Fusion isn't here either — like the drone, it's hand-driven with its own
+// internal multi-hand tracking, not a single person's pose.
 const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
-// Locks onto whichever tracked person is holding the code (same "nearest
-// wrist" heuristic as the drone), then lands the existing Owl character
-// (anim/owl.ts — same one AnimPicker's "Owl" option uses) on that person's
-// raised arm and keeps following them. Unlike the drone, this one actually
-// despawns (owl.ts's own fade-out) once they're genuinely out of frame, at
-// which point the lock releases so the next guest can trigger a fresh one.
-const QR_OWL_PAYLOAD = 'BOOTH-OWL'
+const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLocked }[] = [
+  { payload: 'BOOTH-OWL', gif: 'owl', locked: qrOwlLocked },
+  { payload: 'BOOTH-BAT', gif: 'bat', locked: qrBatLocked },
+  { payload: 'BOOTH-GLOBE', gif: 'globe', locked: qrGlobeLocked },
+  { payload: 'BOOTH-CLOWN', gif: 'clown', locked: qrClownLocked },
+  { payload: 'BOOTH-PIGNOSE', gif: 'pignose', locked: qrPigNoseLocked },
+  { payload: 'BOOTH-BATEARS', gif: 'batears', locked: qrBatEarsLocked },
+]
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'batears' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
-  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pig', 'pignose', 'batears',
+  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pignose', 'batears',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// clown/pig/pignose/batears/scuba read body pose only, drone and ocfusion
+// clown/pignose/batears/scuba read body pose only, drone and ocfusion
 // read hand landmarks only (ignores pose entirely), laptop is a
 // fixed-position fade prop that reads neither. Told to the backend via
 // POST /detection_mode so it skips idle models per-frame instead of running
@@ -93,7 +115,6 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   scuba: 'pose',
   ocfusion: 'hands',
   clown: 'pose',
-  pig: 'pose',
   pignose: 'pose',
   batears: 'pose',
 }
@@ -416,8 +437,14 @@ export default function Display({
   const gifOptions = useStore(selectedGifs)
   const gifOptionsKey = gifOptions.join(',')
   const qrMode = useStore(qrModeEnabled)
+  const debugOn = useStore(debugEnabled)
   const droneLocked = useStore(qrDroneLocked)
   const owlLocked = useStore(qrOwlLocked)
+  const batLocked = useStore(qrBatLocked)
+  const globeLocked = useStore(qrGlobeLocked)
+  const clownLocked = useStore(qrClownLocked)
+  const pigNoseLocked = useStore(qrPigNoseLocked)
+  const batEarsLocked = useStore(qrBatEarsLocked)
   const { rosState } = useNiceConnState()
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
@@ -465,13 +492,27 @@ export default function Display({
     if (rosState !== 'connected') return
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
-    // Once both QR-triggered characters have locked onto someone, neither
-    // needs QR_codes data anymore — they follow pose from then on (see the
-    // qrDroneUpdate/qrOwlUpdate ticker logic below) — so drop back to plain
-    // pose detection instead of paying for QR decode work nothing's reading
-    // anymore. Flips back to 'qr' automatically if a lock later resets
-    // (e.g. the owl fully despawns and needs to detect the code again).
-    const mode = qrMode ? (droneLocked && owlLocked ? 'pose' : 'qr') : computeDetectionMode(gifOptions)
+    // With 8 possible QR characters now, requiring *every* one to lock
+    // before ever dropping out of expensive 'qr' detection would almost
+    // never actually happen in practice (most guests only ever show one
+    // code) — leaving it stuck paying for QR decode indefinitely, same bug
+    // as before just at a worse scale. Instead: drop to plain pose
+    // detection as soon as *any* one locks, matching how this is actually
+    // used (one code per guest, then "Reset Animation" for the next). The
+    // real tradeoff this makes: triggering a second character on the same
+    // guest, back-to-back before resetting, stops being possible — the
+    // first lock closes the window for QR data everyone else needed too.
+    // If that ever matters, the fix would be re-arming 'qr' mode for a
+    // short grace period after each lock instead of switching immediately.
+    const anyLocked = droneLocked || owlLocked || batLocked || globeLocked ||
+      clownLocked || pigNoseLocked || batEarsLocked
+    let mode = qrMode ? (anyLocked ? 'pose' : 'qr') : computeDetectionMode(gifOptions)
+    // Debug Animation draws a live pose skeleton (see drawDebug below), which
+    // needs detection actually running to have anything to draw. Without
+    // this, turning off QR mode (or just having no character selected) with
+    // Debug still on would drop the backend to 'none' and freeze the
+    // skeleton on its last-received pose instead of showing it's stale.
+    if (debugOn && mode === 'none') mode = 'pose'
 
     const send = () => {
       fetch(`${getBackendHttpUrl()}/detection_mode`, {
@@ -493,7 +534,10 @@ export default function Display({
       active = false
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [gifOptionsKey, qrMode, rosState, droneLocked, owlLocked])
+  }, [
+    gifOptionsKey, qrMode, rosState, debugOn,
+    droneLocked, owlLocked, batLocked, globeLocked, clownLocked, pigNoseLocked, batEarsLocked,
+  ])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
@@ -752,8 +796,6 @@ export default function Display({
         return [container, wrappedUpdate] as const
       } else if (option === 'clown') {
         return await createClownAnim(app)
-      } else if (option === 'pig') {
-        return await createPigAnim(app)
       } else if (option === 'pignose') {
         return await createPigNoseAnim(app)
       } else if (option === 'batears') {
@@ -796,23 +838,45 @@ export default function Display({
       // on frames where their pose is briefly lost, until reset via
       // Settings. See the ticker below for the actual lock/follow logic.
       let qrDroneUpdate: ((target: { x: number; y: number } | undefined) => void) | undefined
+      let qrDroneContainer: PIXI.Container | undefined
       let qrDroneLastPos: { x: number; y: number } | undefined
       let qrLockedTrackId: number | undefined
-      // QR-triggered owl — see QR_OWL_PAYLOAD above for the lock/despawn
-      // behavior. qrOwlUpdate takes a raw pose (like any other character),
-      // not a converted screen point, since owl.ts does its own arm-anchor
-      // math from the raw landmarks.
-      let qrOwlUpdate: ((pose: NormalizedLandmarkList) => void) | undefined
-      let qrOwlLockedTrackId: number | undefined
+      // Tracks whether the drone was locked as of last frame, so the ticker
+      // can tell exactly the frame it *becomes* locked (to fire the
+      // confetti burst once, not every frame it stays locked).
+      let qrDroneWasLocked = false
+      // Several characters (owl, bat, globe, the drone) fly in from
+      // elsewhere before landing rather than just fading in at their final
+      // spot — bursting confetti the instant a lock happens would show it
+      // at wherever they start flying from, not the ears/arm/etc. it's
+      // actually supposed to mark. Instead, wait long enough for any
+      // entrance animation to finish settling, then read the character's
+      // own container bounds (wherever it actually ended up — different
+      // per character, e.g. the ears vs the arm) rather than hardcoding a
+      // position per character type. Generous on purpose: covers owl's
+      // longest fly-in + landing sequence with room to spare; the simple
+      // fade-in-place characters settle well before this anyway.
+      const CONFETTI_SETTLE_MS = 2500
+      // Every QR_CHARACTERS entry gets its own instance + mutable lock state
+      // here, all driven through the same generic loop in the ticker below
+      // (see the "if (qrMode)" block there) — new characters just need a
+      // new QR_CHARACTERS entry, nothing else.
+      const qrCharacterInstances: {
+        payload: string
+        container: PIXI.Container
+        locked: typeof qrOwlLocked
+        update: AnimUpdate
+        lockedTrackId: number | undefined
+        wasLocked: boolean
+      }[] = []
 
       if (qrMode) {
         // Belt-and-suspenders alongside the trackId-undefined check further
         // below: force a clean "not locked" state on every fresh mount so a
         // stale true left over from a previous mount can never make the
-        // detection-mode effect above think both are already locked (and
-        // starve a genuine re-acquisition of the QR data it needs).
+        // detection-mode effect above think everything's already locked
+        // (and starve a genuine re-acquisition of the QR data it needs).
         qrDroneLocked.set(false)
-        qrOwlLocked.set(false)
 
         const [container, update] = await createSimpleFadePropAnim(app, {
           animUrl: qrDroneGif,
@@ -820,13 +884,26 @@ export default function Display({
           sizeFactor: 1,
         })
         animLayer.addChild(container)
+        qrDroneContainer = container
         qrDroneUpdate = (target) => {
           update(target ? { x: target.x, y: target.y, size: CORNER_SIZE * 2, angle: 0 } : undefined)
         }
 
-        const [owlContainer, owlUpdate] = await createOwlAnim(app)
-        animLayer.addChild(owlContainer)
-        qrOwlUpdate = owlUpdate
+        for (const cfg of QR_CHARACTERS) {
+          cfg.locked.set(false)
+          const result = await createAnimForGif(cfg.gif)
+          if (!result) continue
+          const [container, update] = result
+          animLayer.addChild(container)
+          qrCharacterInstances.push({
+            payload: cfg.payload,
+            container,
+            locked: cfg.locked,
+            update,
+            lockedTrackId: undefined,
+            wasLocked: false,
+          })
+        }
       } else {
         // Multiple animations can be selected at once, and each one
         // independently follows every detected person when Multi-Person
@@ -846,7 +923,7 @@ export default function Display({
             // over the same hands — several duplicate drones jumping
             // between the same targets — instead of one coordinated system.
             // Scuba doesn't need that special-casing: it just reads its
-            // assigned person's own pose like Clown/Pig/etc, so it gets a
+            // assigned person's own pose like Clown/Pig Nose/etc, so it gets a
             // normal per-person instance via the outer slot assigner below.
             const count = isMulti && option !== 'drone' && option !== 'ocfusion' ? MAX_PEOPLE : 1
             const results = await Promise.all(
@@ -862,7 +939,15 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pig' | 'pignose' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'none'>]
+            // A stale option can still be sitting in the persisted
+            // selectedGifs from before a character was removed from
+            // GIF_OPTIONS (e.g. localStorage from an older session) — that's
+            // not a corner-prop with a URL, so animUrl comes back undefined.
+            // Loading a prop with an undefined GIF never resolves, which
+            // used to hang this whole (sequentially awaited) loading chain
+            // for every other selected animation too. Skip it instead.
+            if (!animUrl) continue
             const corners = await Promise.all(
               CORNER_POSITIONS.map((pos) =>
                 createSimpleFadePropAnim(app, {
@@ -891,6 +976,18 @@ export default function Display({
       for (const [container] of arrows) animLayer.addChild(container)
       app.stage.addChild(banner)
       bannerContainer = banner
+
+      // One-shot confetti burst, fired at the exact spot a QR code locks
+      // onto someone — see the "just locked" checks in the ticker below.
+      // Added to app.stage last (topmost) so it renders over every
+      // character, not just other QR-triggered ones.
+      let burstConfetti: ((x: number, y: number) => void) | undefined
+      if (qrMode) {
+        const [confettiContainer, trigger] = await createConfettiBurst(app)
+        app.stage.addChild(confettiContainer)
+        burstConfetti = trigger
+      }
+
       console.log('Animations added')
 
       app.ticker.add(() => {
@@ -959,11 +1056,22 @@ export default function Display({
             }
           }
 
-          if (qrDroneLocked.get() && qrLockedTrackId !== undefined) {
+          const droneNowLocked = qrDroneLocked.get() && qrLockedTrackId !== undefined
+          if (droneNowLocked && !qrDroneWasLocked) {
+            const container = qrDroneContainer
+            setTimeout(() => {
+              if (cancelled || !qrDroneLocked.get() || !container) return
+              const b = container.getBounds()
+              burstConfetti?.(b.x + b.width / 2, b.y + b.height / 2)
+            }, CONFETTI_SETTLE_MS)
+          }
+          qrDroneWasLocked = droneNowLocked
+
+          if (droneNowLocked) {
             // Locked: follow a point above the locked person's head, holding
             // the last known spot on frames where their pose is briefly lost
             // (e.g. momentarily out of frame) rather than disappearing.
-            const lockedPose = allPoses[qrLockedTrackId]
+            const lockedPose = allPoses[qrLockedTrackId!]
             const headTop = lockedPose && headTopFromPose(lockedPose)
             if (headTop) qrDroneLastPos = headTop
             qrDroneUpdate(qrDroneLastPos)
@@ -974,23 +1082,28 @@ export default function Display({
           }
         }
 
-        if (qrOwlUpdate) {
-          const owlCodeRaw = dataRef.current.qrCodes?.find((c) => c.payload === QR_OWL_PAYLOAD)
-          const owlCode = owlCodeRaw
-            ? convertPoint({ x: owlCodeRaw.x, y: owlCodeRaw.y, z: 0 }, height, width)
+        // Every other QR-triggered character (owl, bat, globe, clown,
+        // pignose, batears) shares the exact same lock/follow logic, so it's
+        // one generic loop over qrCharacterInstances instead of repeating
+        // this block per character — see QR_CHARACTERS above for how to add
+        // another one.
+        for (const inst of qrCharacterInstances) {
+          const codeRaw = dataRef.current.qrCodes?.find((c) => c.payload === inst.payload)
+          const code = codeRaw
+            ? convertPoint({ x: codeRaw.x, y: codeRaw.y, z: 0 }, height, width)
             : undefined
           const allPosesRaw = dataRef.current.allPoses ?? {}
 
           // Same remount-safety as the drone above: don't trust a stale
           // "locked" flag with no id to actually follow.
-          if ((!qrOwlLocked.get() || qrOwlLockedTrackId === undefined) && owlCode) {
+          if ((!inst.locked.get() || inst.lockedTrackId === undefined) && code) {
             let bestId: number | undefined
             let bestDist = Infinity
             for (const [idStr, pose] of Object.entries(allPosesRaw)) {
               const candidates = [pose[15], pose[16], pose[0]].filter(Boolean)
               for (const p of candidates) {
                 const pt = convertPoint(p, height, width)
-                const dist = Math.hypot(pt.x - owlCode.x, pt.y - owlCode.y)
+                const dist = Math.hypot(pt.x - code.x, pt.y - code.y)
                 if (dist < bestDist) {
                   bestDist = dist
                   bestId = Number(idStr)
@@ -998,31 +1111,41 @@ export default function Display({
               }
             }
             if (bestId !== undefined) {
-              qrOwlLockedTrackId = bestId
-              qrOwlLocked.set(true)
+              inst.lockedTrackId = bestId
+              inst.locked.set(true)
             }
           }
 
-          if (qrOwlLocked.get() && qrOwlLockedTrackId !== undefined) {
-            // Locked: feed the locked person's own raw pose every frame —
-            // owl.ts's own arm-anchor logic (calculateArmFromPose) handles
-            // landing on their arm, and its AnimStateManager fades it out
-            // whenever pose.length is 0 (genuinely out of frame). But the
-            // *lock* itself now behaves exactly like the drone's: once
-            // acquired, it never releases on its own — even a track-ID
-            // reassignment (YOLO/ByteTrack occasionally hands the same
-            // physical person a new numeric id, especially with 2+ people
-            // in frame) used to look identical to "they left" and silently
-            // reset the lock, which kept the backend stuck decoding QR
-            // codes indefinitely since it could never re-lock without the
-            // code being shown again. Requires the "Reset Animation" button
-            // in Settings to hand the code back to a new guest, same as
-            // the drone.
-            qrOwlUpdate(allPosesRaw[qrOwlLockedTrackId] ?? [])
+          const instNowLocked = inst.locked.get() && inst.lockedTrackId !== undefined
+          if (instNowLocked && !inst.wasLocked) {
+            const container = inst.container
+            const locked = inst.locked
+            setTimeout(() => {
+              if (cancelled || !locked.get()) return
+              const b = container.getBounds()
+              burstConfetti?.(b.x + b.width / 2, b.y + b.height / 2)
+            }, CONFETTI_SETTLE_MS)
+          }
+          inst.wasLocked = instNowLocked
+
+          if (instNowLocked) {
+            // Locked: feed the locked person's own raw pose every frame,
+            // same as the ordinary per-person slot system feeds any other
+            // character — each character's own AnimStateManager handles
+            // fading out once pose.length is 0 (genuinely out of frame).
+            // The *lock* itself, like the drone's, never releases on its
+            // own — a track-ID reassignment (YOLO/ByteTrack occasionally
+            // hands the same physical person a new numeric id, especially
+            // with 2+ people in frame) would otherwise look identical to
+            // "they left" and silently reset the lock, permanently stuck
+            // since it can't re-acquire without the code being shown again.
+            // Requires the "Reset Animation" button in Settings to hand the
+            // code back to a new guest.
+            inst.update(allPosesRaw[inst.lockedTrackId] ?? [])
           } else {
-            // Not locked yet: no target, so the owl just stays hidden until
-            // the code is shown and picked up by someone.
-            qrOwlUpdate([])
+            // Not locked yet: no target, so it just stays hidden until the
+            // code is shown and picked up by someone.
+            inst.update([])
           }
         }
       })

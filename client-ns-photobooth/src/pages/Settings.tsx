@@ -13,7 +13,6 @@ import {
   camSize,
   canvasSize,
   debugEnabled,
-  detectionCamSize,
   multiTarget,
   offlineOnly,
   cameraInitialized,
@@ -22,6 +21,11 @@ import {
   pointerEnabled,
   qrDroneLocked,
   qrOwlLocked,
+  qrBatLocked,
+  qrGlobeLocked,
+  qrClownLocked,
+  qrPigNoseLocked,
+  qrBatEarsLocked,
   qrModeEnabled,
   router,
   selectedGifs,
@@ -205,7 +209,6 @@ export default function Settings() {
   const [shown, setShown] = useState(false)
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
-  const detectionRes = useStore(detectionCamSize)
   const burstOn = useStore(burstModeEnabled)
   const burstN = useStore(burstCount)
   const burstSec = useStore(burstIntervalSec)
@@ -253,11 +256,6 @@ export default function Settings() {
           <Section title='Display'>
             <ResRow label='Canvas Size' value={canvasRes} setter={canvasSize.set} />
             <ResRow label='Camera Size' value={camRes} setter={camSize.set} />
-            <ResRow
-              label='Detection Size'
-              value={detectionRes}
-              setter={detectionCamSize.set}
-            />
           </Section>
 
           <Section title='Capture'>
@@ -302,6 +300,11 @@ export default function Settings() {
                 onClick={() => {
                   qrDroneLocked.set(false)
                   qrOwlLocked.set(false)
+                  qrBatLocked.set(false)
+                  qrGlobeLocked.set(false)
+                  qrClownLocked.set(false)
+                  qrPigNoseLocked.set(false)
+                  qrBatEarsLocked.set(false)
                 }}
               >
                 Reset Animation

@@ -71,8 +71,17 @@ const EAR_ROTATION_OFFSET = (40 * Math.PI) / 180
 // different person. Both ears reset their filters together when this
 // fires (checked once, off the nose position), so one doesn't lag behind
 // on the old person while the other has already snapped to the new one.
-// Same reasoning as pig.ts/clown.ts/pignose.ts's REBIND_SNAP_RATIO.
+// Same reasoning as clown.ts/pignose.ts's REBIND_SNAP_RATIO.
 const REBIND_SNAP_RATIO = 1.5
+
+// Below this visibility on one ear while the other stays confidently
+// visible means the head has turned into profile, not just noise — the
+// occluded side's landmark doesn't disappear, the pose model just guesses a
+// position for it (usually collapsed toward the visible ear or the nose),
+// which otherwise shrinks earDist toward zero and drags both ears together
+// into the middle of the face instead of one sitting properly at the
+// visible ear's side.
+const EAR_VISIBILITY_MIN = 0.3
 
 interface PieceTarget { x: number; y: number; size: number; angle: number }
 
@@ -114,7 +123,7 @@ function createPiece(sprite: PIXI.Sprite, anchor: { x: number; y: number }) {
 
 /** Nose, ear-to-ear geometry, and derived crown-left/crown-right points —
  * the basis both ears' targets are computed from. Same sparse-face-point
- * approach as pig.ts/clown.ts/pignose.ts: there's no dedicated face-mesh
+ * approach as clown.ts/pignose.ts: there's no dedicated face-mesh
  * detector in this pipeline, so the face points already present in body
  * pose (nose=0, ears=7/8) are reused — here only for scale/tilt, not as
  * the ears' own placement (see note at the top of this file). */
@@ -137,23 +146,35 @@ function getHeadGeometry(pose: NormalizedLandmarkList, height: number, width: nu
   if (earDist < 1) return undefined
 
   const angle = Math.atan2(dy, dx)
-  // Unit vectors along the ear-to-ear line ("right" along the head) and
-  // perpendicular to it ("up", toward the top of the head) — both rotate
-  // correctly with head tilt since they're derived from the same line the
-  // rotation angle itself comes from.
-  const rightX = dx / earDist
-  const rightY = dy / earDist
-  const upX = dy / earDist
-  const upY = -dx / earDist
-
-  const crownX = n.x + upX * earDist * CROWN_OFFSET_FACTOR
-  const crownY = n.y + upY * earDist * CROWN_OFFSET_FACTOR
-  const spread = earDist * EAR_SPREAD_FACTOR
 
   return {
     nose: n,
     earDist,
     angle,
+    leftVisible: (leftEar.visibility ?? 1) >= EAR_VISIBILITY_MIN,
+    rightVisible: (rightEar.visibility ?? 1) >= EAR_VISIBILITY_MIN,
+  }
+}
+
+/** Crown points derived from a nose position plus an ear-to-ear
+ * distance/angle — split out from getHeadGeometry so the caller can pass in
+ * either the current (live) earDist/angle, or a frozen last-known-good pair
+ * during a profile turn (see EAR_VISIBILITY_MIN above). */
+function crownPointsFrom(nose: { x: number; y: number }, earDist: number, angle: number) {
+  // Unit vectors along the ear-to-ear line ("right" along the head) and
+  // perpendicular to it ("up", toward the top of the head) — both rotate
+  // correctly with head tilt since they're derived from the same angle the
+  // rest of the geometry uses.
+  const rightX = Math.cos(angle)
+  const rightY = Math.sin(angle)
+  const upX = rightY
+  const upY = -rightX
+
+  const crownX = nose.x + upX * earDist * CROWN_OFFSET_FACTOR
+  const crownY = nose.y + upY * earDist * CROWN_OFFSET_FACTOR
+  const spread = earDist * EAR_SPREAD_FACTOR
+
+  return {
     leftCrown: { x: crownX - rightX * spread, y: crownY - rightY * spread },
     rightCrown: { x: crownX + rightX * spread, y: crownY + rightY * spread },
   }
@@ -182,10 +203,18 @@ export async function createBatEarsAnim(app: PIXI.Application) {
   let bound = false
   let lastNoseX = 0
   let lastNoseY = 0
+  // Last earDist/angle read while roughly facing the camera (both ears
+  // visible) — reused during a profile turn instead of the live (collapsed)
+  // values, so the pair's size/rotation doesn't shrink toward the face.
+  let lastGoodEarDist: number | undefined
+  let lastGoodAngle: number | undefined
 
   const initialState = () => {
     container.alpha = 0
     bound = false
+    lastGoodEarDist = undefined
+    lastGoodAngle = undefined
+    leftEar.sprite.alpha = rightEar.sprite.alpha = 1
   }
   initialState()
 
@@ -198,15 +227,34 @@ export async function createBatEarsAnim(app: PIXI.Application) {
       const jumped = bound && Math.hypot(geo.nose.x - lastNoseX, geo.nose.y - lastNoseY) > geo.earDist * REBIND_SNAP_RATIO
       if (jumped || !bound) {
         // Fresh person for this slot: discard both ears' filter state so
-        // they appear on them rather than travelling there.
+        // they appear on them rather than travelling there, and any frozen
+        // profile-turn geometry from whoever had this slot before.
         for (const p of pieces) p.resetFilters()
         bound = true
+        lastGoodEarDist = undefined
+        lastGoodAngle = undefined
       }
       lastNoseX = geo.nose.x
       lastNoseY = geo.nose.y
 
-      leftEar.applyTarget({ x: geo.leftCrown.x, y: geo.leftCrown.y, size: geo.earDist * EAR_VISIBLE_SIZE_FACTOR, angle: geo.angle - EAR_ROTATION_OFFSET })
-      rightEar.applyTarget({ x: geo.rightCrown.x, y: geo.rightCrown.y, size: geo.earDist * EAR_VISIBLE_SIZE_FACTOR, angle: geo.angle + EAR_ROTATION_OFFSET })
+      // Exactly one ear crossing the visibility threshold means the head's
+      // turned into profile, not just noise on a mostly-frontal face.
+      const profileTurn = geo.leftVisible !== geo.rightVisible
+      if (!profileTurn) {
+        lastGoodEarDist = geo.earDist
+        lastGoodAngle = geo.angle
+      }
+      const earDist = (profileTurn && lastGoodEarDist !== undefined) ? lastGoodEarDist : geo.earDist
+      const angle = (profileTurn && lastGoodAngle !== undefined) ? lastGoodAngle : geo.angle
+      const { leftCrown, rightCrown } = crownPointsFrom(geo.nose, earDist, angle)
+
+      leftEar.applyTarget({ x: leftCrown.x, y: leftCrown.y, size: earDist * EAR_VISIBLE_SIZE_FACTOR, angle: angle - EAR_ROTATION_OFFSET })
+      rightEar.applyTarget({ x: rightCrown.x, y: rightCrown.y, size: earDist * EAR_VISIBLE_SIZE_FACTOR, angle: angle + EAR_ROTATION_OFFSET })
+
+      // Hide whichever ear is actually occluded during a profile turn,
+      // rather than rendering it collapsed near the visible one/the nose.
+      leftEar.sprite.alpha = profileTurn && !geo.leftVisible ? 0 : 1
+      rightEar.sprite.alpha = profileTurn && !geo.rightVisible ? 0 : 1
     }
 
     animManager.tracking = !!geo
