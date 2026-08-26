@@ -70,9 +70,10 @@ function getHeadAnchor(
 }
 
 // ---------------------------------------------------------------------------
-// Scuba gesture — continuously swinging/waving a wrist (a small, repeated
-// back-and-forth motion from the wrist, not a full arm swing), mirroring the
-// scuba cat's own animation. Purely pose-based (both wrists), so it still
+// Scuba gesture — continuously swinging/waving a wrist SIDE TO SIDE (a small,
+// repeated left-right motion from the wrist, not a full arm swing), mirroring
+// the scuba cat's own swimming animation. Vertical waving deliberately does
+// not count; see MIN_HORIZONTAL_RATIO. Purely pose-based (both wrists), so it still
 // only needs the 'pose' detection mode already wired up for this character.
 //
 // Measured as motion energy rather than counting clean direction reversals:
@@ -99,7 +100,11 @@ const SHAKE_WINDOW_SEC = 1.5       // how far back the motion buffer looks
 // wrist-only wave, not a full arm swing, but well above what pose-landmark
 // jitter alone produces (see MIN_STEP_FACTOR below for why jitter used to
 // slip through this).
-const MOTION_ENERGY_FACTOR = 0.6
+// Raised from 0.6: the gesture was firing on too little movement, so it now
+// takes roughly half as much wrist travel again before the cat appears. This
+// is the main "how much shaking" knob — raise it further to demand a bigger,
+// more deliberate wave, lower it if the gesture stops being reachable.
+const MOTION_ENERGY_FACTOR = 0.9
 // How much of that path must be "wasted" back-and-forth motion rather than
 // net movement in one direction — kept fairly high so it takes sustained,
 // continuous swinging rather than one big wave to trigger.
@@ -112,26 +117,53 @@ const MIN_OSCILLATION_RATIO = 0.4
 // smaller than this are dropped before summing path length, so idle jitter
 // no longer accumulates into anything.
 const MIN_STEP_FACTOR = 0.02
-const GESTURE_HOLD_SEC = 5         // how long the anim lingers after the gesture stops
+// How much of the wrist's travel must be HORIZONTAL for the gesture to count,
+// as a fraction of (horizontal + vertical) path. The scuba cat's own animation
+// is a side-to-side swim, so an up-and-down wave should not summon it.
+// A pure left-right wave scores 1.0, a 45-degree diagonal 0.5, pure up-down 0.
+// 0.65 leaves room for the natural arc of a real wave while rejecting anything
+// diagonal or vertical. Lower it if horizontal waves stop registering; raise it
+// to insist on a flatter, more deliberate side-to-side motion.
+const MIN_HORIZONTAL_RATIO = 0.65
+// How long the anim lingers after the gesture stops. Lowered from 5s: the cat
+// now clears almost as soon as you stop waving, rather than hanging around.
+// Note this also bridges brief detection dropouts mid-gesture, so setting it
+// too low can make the cat flicker while you are still waving.
+const GESTURE_HOLD_SEC = 1
 
 type MotionPoint = { t: number; x: number; y: number }
 
 function isShaking(buffer: MotionPoint[], shoulderWidth: number) {
   if (buffer.length < 4) return false
   const minStep = shoulderWidth * MIN_STEP_FACTOR
-  let pathLength = 0
+  // Horizontal and vertical travel are accumulated separately, so the gesture
+  // can require side-to-side motion specifically. Summing hypot(dx, dy) instead
+  // — as this used to — makes an up-and-down wave score identically to a
+  // left-right one, which is why waving vertically used to summon the cat.
+  let pathX = 0
+  let pathY = 0
   for (let i = 1; i < buffer.length; i++) {
-    const step = Math.hypot(buffer[i].x - buffer[i - 1].x, buffer[i].y - buffer[i - 1].y)
-    if (step >= minStep) pathLength += step
+    const dx = buffer[i].x - buffer[i - 1].x
+    const dy = buffer[i].y - buffer[i - 1].y
+    // Jitter rejection still tests the full 2D step: landmark wobble that
+    // happens to land mostly on one axis should not count as real travel
+    // along it.
+    if (Math.hypot(dx, dy) < minStep) continue
+    pathX += Math.abs(dx)
+    pathY += Math.abs(dy)
   }
+  if (pathX < 1) return false
   const first = buffer[0]
   const last = buffer[buffer.length - 1]
-  const netDisplacement = Math.hypot(last.x - first.x, last.y - first.y)
-  if (pathLength < 1) return false
-  const oscillationRatio = (pathLength - netDisplacement) / pathLength
+  // Oscillation is measured on the horizontal axis too, so one long sweep
+  // across the body doesn't qualify — only repeated back-and-forth does.
+  const netX = Math.abs(last.x - first.x)
+  const oscillationRatio = (pathX - netX) / pathX
+  const horizontalRatio = pathX / (pathX + pathY)
   return (
-    pathLength / shoulderWidth >= MOTION_ENERGY_FACTOR &&
-    oscillationRatio >= MIN_OSCILLATION_RATIO
+    pathX / shoulderWidth >= MOTION_ENERGY_FACTOR &&
+    oscillationRatio >= MIN_OSCILLATION_RATIO &&
+    horizontalRatio >= MIN_HORIZONTAL_RATIO
   )
 }
 
