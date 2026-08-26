@@ -172,7 +172,7 @@ function isShaking(buffer: MotionPoint[], shoulderWidth: number) {
 // createAnimForGif in Display.tsx spins up one createScubaAnim() per
 // detected person (up to MAX_PEOPLE) when Multi-Person Tracking is on, each
 // fed that one person's pose via the same stable per-person slot assignment
-// every other multi-instance character (Clown, Pig Nose, ...) already uses. So
+// every other multi-instance character (Clown Wig & Nose, Pig Nose, ...) already uses. So
 // this only ever needs to watch a single person, not pick amongst several.
 
 // ---------------------------------------------------------------------------

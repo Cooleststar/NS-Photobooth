@@ -68,7 +68,7 @@ const NOSE_VISIBLE_SIZE_FACTOR = 0.30
 // A jump larger than this (in ear-to-ear distances) means this animation slot
 // has been handed to a different person, not that someone moved quickly. Snap
 // to the new face rather than letting the filter drag the costume across the
-// frame and over somebody else on the way. Same guard as clown.ts/pignose.ts.
+// frame and over somebody else on the way. Same guard as pignose.ts.
 const REBIND_SNAP_RATIO = 1.5
 
 // The nose landmark anchors the costume, so a weak detection there would park

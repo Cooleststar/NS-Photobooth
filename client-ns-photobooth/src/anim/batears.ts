@@ -71,7 +71,7 @@ const EAR_ROTATION_OFFSET = (40 * Math.PI) / 180
 // different person. Both ears reset their filters together when this
 // fires (checked once, off the nose position), so one doesn't lag behind
 // on the old person while the other has already snapped to the new one.
-// Same reasoning as clown.ts/pignose.ts's REBIND_SNAP_RATIO.
+// Same reasoning as clownwignose.ts/pignose.ts's REBIND_SNAP_RATIO.
 const REBIND_SNAP_RATIO = 1.5
 
 // Below this visibility on one ear while the other stays confidently
@@ -123,7 +123,7 @@ function createPiece(sprite: PIXI.Sprite, anchor: { x: number; y: number }) {
 
 /** Nose, ear-to-ear geometry, and derived crown-left/crown-right points —
  * the basis both ears' targets are computed from. Same sparse-face-point
- * approach as clown.ts/pignose.ts: there's no dedicated face-mesh
+ * approach as clownwignose.ts/pignose.ts: there's no dedicated face-mesh
  * detector in this pipeline, so the face points already present in body
  * pose (nose=0, ears=7/8) are reused — here only for scale/tilt, not as
  * the ears' own placement (see note at the top of this file). */

@@ -21,7 +21,7 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 // snout looks too big or too small on real faces.
 const NOSE_SIZE_FACTOR = 0.6
 
-// Same rebind guard as clown.ts/pig.ts: a jump larger than this (in
+// Same rebind guard as clownwignose.ts: a jump larger than this (in
 // multiples of snout size) means this slot has been handed to a different
 // person, not that someone moved. Snap rather than let the filter drag the
 // snout across the frame and over somebody else's face. Scaled off a
@@ -29,7 +29,7 @@ const NOSE_SIZE_FACTOR = 0.6
 const REBIND_SNAP_RATIO = 3.0
 
 /** Nose position, head scale and tilt from MP-33 pose landmarks
- * (nose=0, ears=7/8). Same sparse-face-point approach as clown.ts/pig.ts —
+ * (nose=0, ears=7/8). Same sparse-face-point approach as clownwignose.ts —
  * there's no face-mesh detector in this pipeline, so the face points already
  * present in body pose are reused. The nose landmark is what the snout is
  * pinned to; the ears only supply scale and roll. */

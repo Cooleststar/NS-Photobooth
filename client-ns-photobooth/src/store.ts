@@ -28,7 +28,6 @@ export const GIF_OPTIONS = {
   drone: 'Drone',
   scuba: 'Scuba',
   ocfusion: 'OC Fusion',
-  clown: 'Clown',
   pignose: 'Pig Nose',
   batears: 'Bat Ears',
   clownwignose: 'Clown Wig & Nose',

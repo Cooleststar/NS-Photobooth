@@ -7,7 +7,6 @@ import globeThumb from '../assets/globe_anim/globe.gif'
 import laptopThumb from '../assets/laptop_anim/laptop.gif'
 import droneThumb from '../assets/drone_anim/drone.gif'
 import scubaThumb from '../assets/cat_anim/scuba.gif'
-import clownThumb from '../assets/Clown/clownicon.jpg'
 import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
 import batEarsThumb from '../assets/batears/batearsicon.png'
 import clownWigNoseThumb from '../assets/ClownWigNose/ClownWig.webp'
@@ -19,7 +18,6 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   laptop: laptopThumb,
   drone: droneThumb,
   scuba: scubaThumb,
-  clown: clownThumb,
   pignose: pigNoseThumb,
   batears: batEarsThumb,
   clownwignose: clownWigNoseThumb,

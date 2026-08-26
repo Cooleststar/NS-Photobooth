@@ -16,7 +16,6 @@ import { createBatAnim } from '../anim/bat'
 import { createBatEarsAnim } from '../anim/batears'
 import { createClownWigNoseAnim } from '../anim/clownwignose'
 import { createBanner } from '../anim/banner'
-import { createClownAnim } from '../anim/clown'
 import { createConfettiBurst } from '../anim/confetti'
 import { createDroneAnim } from '../anim/drone'
 import { createGlobeAnim } from '../anim/globe'
@@ -68,7 +67,7 @@ import {
 // The drone is its own special case (a fixed fade-prop that follows a
 // point above the locked person's head, not their own pose-anchored
 // character). Every other entry below is a normal AnimPicker character
-// (owl/bat/globe/clown/pignose/batears) driven through QR_CHARACTERS —
+// (owl/bat/globe/pignose/batears/clownwignose) driven through QR_CHARACTERS —
 // same "nearest wrist locks onto that person" heuristic as the drone, then
 // the character just gets fed that person's pose every frame like it would
 // via the ordinary (non-QR) per-person slot system. Locked forever once
@@ -85,7 +84,9 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
   { payload: 'BOOTH-OWL', gif: 'owl', locked: qrOwlLocked },
   { payload: 'BOOTH-BAT', gif: 'bat', locked: qrBatLocked },
   { payload: 'BOOTH-GLOBE', gif: 'globe', locked: qrGlobeLocked },
-  { payload: 'BOOTH-CLOWN', gif: 'clown', locked: qrClownLocked },
+  // Same BOOTH-CLOWN code as before, but now summons Clown Wig & Nose
+  // instead of the original Clown character.
+  { payload: 'BOOTH-CLOWN', gif: 'clownwignose', locked: qrClownLocked },
   { payload: 'BOOTH-PIGNOSE', gif: 'pignose', locked: qrPigNoseLocked },
   { payload: 'BOOTH-BATEARS', gif: 'batears', locked: qrBatEarsLocked },
 ]
@@ -98,20 +99,20 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'clownwignose' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
-  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pignose', 'batears',
+  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
   'clownwignose',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// clown/pignose/batears/scuba read body pose only, drone and ocfusion
-// read hand landmarks only (ignores pose entirely), laptop is a
+// pignose/batears/clownwignose/scuba read body pose only, drone and
+// ocfusion read hand landmarks only (ignores pose entirely), laptop is a
 // fixed-position fade prop that reads neither. Told to the backend via
 // POST /detection_mode so it skips idle models per-frame instead of running
 // YOLO/ViTPose/MediaPipe Hands unconditionally.
@@ -124,7 +125,6 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   laptop: 'none',
   scuba: 'pose',
   ocfusion: 'hands',
-  clown: 'pose',
   pignose: 'pose',
   batears: 'pose',
   clownwignose: 'pose',
@@ -810,8 +810,6 @@ export default function Display({
         // Same as drone — driven by MediaPipe hand landmarks, not body pose
         const wrappedUpdate = (_pose: any) => updateOCFusion(rawRef.current.hands ?? [])
         return [container, wrappedUpdate] as const
-      } else if (option === 'clown') {
-        return await createClownAnim(app)
       } else if (option === 'pignose') {
         return await createPigNoseAnim(app)
       } else if (option === 'batears') {
@@ -835,7 +833,7 @@ export default function Display({
       // (Multi-Person Tracking on) rather than everything collapsing onto
       // one shared "selected" pose. A single flat slot list across all
       // selected types doesn't work: assigning person->slot needs to happen
-      // per type, or e.g. Pig Nose selected alongside Clown would each only
+      // per type, or e.g. Pig Nose selected alongside Clown Wig & Nose would each only
       // get whichever single instance was left over from a shared pool,
       // rather than both correctly following every person.
       const animGroups: {
@@ -925,7 +923,7 @@ export default function Display({
             // over the same hands — several duplicate drones jumping
             // between the same targets — instead of one coordinated system.
             // Scuba doesn't need that special-casing: it just reads its
-            // assigned person's own pose like Clown/Pig Nose/etc, so it gets a
+            // assigned person's own pose like Clown Wig & Nose/Pig Nose/etc, so it gets a
             // normal per-person instance via the outer slot assigner below.
             const count = isMulti && option !== 'drone' && option !== 'ocfusion' ? MAX_PEOPLE : 1
             const results = await Promise.all(
@@ -941,7 +939,7 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'clownwignose' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'none'>]
             // A stale option can still be sitting in the persisted
             // selectedGifs from before a character was removed from
             // GIF_OPTIONS (e.g. localStorage from an older session) — that's
@@ -1097,7 +1095,7 @@ export default function Display({
           }
         }
 
-        // Every other QR-triggered character (owl, bat, globe, clown,
+        // Every other QR-triggered character (owl, bat, globe, clownwignose,
         // pignose, batears) shares the exact same lock/follow logic, so it's
         // one generic loop over qrCharacterInstances instead of repeating
         // this block per character — see QR_CHARACTERS above for how to add
