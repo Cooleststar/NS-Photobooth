@@ -88,6 +88,14 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
   { payload: 'BOOTH-PIGNOSE', gif: 'pignose', locked: qrPigNoseLocked },
   { payload: 'BOOTH-BATEARS', gif: 'batears', locked: qrBatEarsLocked },
 ]
+// A code-to-person lock search (drone and every QR_CHARACTERS entry) never
+// accepts a "closest available" match farther than this fraction of the
+// frame's width from any candidate landmark — without a cap, the search
+// always picks *someone*, so with two people in frame a new code could
+// resolve onto whoever's already locked (if they happened to be nearer on
+// screen) rather than the person actually holding it, or nothing would ever
+// be rejected as "clearly not it."
+const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
 const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'none'>, string> = {
   laptop: laptopGif,
@@ -438,13 +446,6 @@ export default function Display({
   const gifOptionsKey = gifOptions.join(',')
   const qrMode = useStore(qrModeEnabled)
   const debugOn = useStore(debugEnabled)
-  const droneLocked = useStore(qrDroneLocked)
-  const owlLocked = useStore(qrOwlLocked)
-  const batLocked = useStore(qrBatLocked)
-  const globeLocked = useStore(qrGlobeLocked)
-  const clownLocked = useStore(qrClownLocked)
-  const pigNoseLocked = useStore(qrPigNoseLocked)
-  const batEarsLocked = useStore(qrBatEarsLocked)
   const { rosState } = useNiceConnState()
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
@@ -492,29 +493,9 @@ export default function Display({
     if (rosState !== 'connected') return
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
-    // With 8 possible QR characters now, requiring *every* one to lock
-    // before ever dropping out of expensive 'qr' detection would almost
-    // never actually happen in practice (most guests only ever show one
-    // code) — leaving it stuck paying for QR decode indefinitely, same bug
-    // as before just at a worse scale. Instead: drop to plain pose
-    // detection as soon as *any* one locks, matching how this is actually
-    // used (one code per guest, then "Reset Animation" for the next). The
-    // real tradeoff this makes: triggering a second character on the same
-    // guest, back-to-back before resetting, stops being possible — the
-    // first lock closes the window for QR data everyone else needed too.
-    // If that ever matters, the fix would be re-arming 'qr' mode for a
-    // short grace period after each lock instead of switching immediately.
-    const anyLocked = droneLocked || owlLocked || batLocked || globeLocked ||
-      clownLocked || pigNoseLocked || batEarsLocked
-    let mode = qrMode ? (anyLocked ? 'pose' : 'qr') : computeDetectionMode(gifOptions)
-    // Debug Animation draws a live pose skeleton (see drawDebug below), which
-    // needs detection actually running to have anything to draw. Without
-    // this, turning off QR mode (or just having no character selected) with
-    // Debug still on would drop the backend to 'none' and freeze the
-    // skeleton on its last-received pose instead of showing it's stale.
-    if (debugOn && mode === 'none') mode = 'pose'
+    let cycleTimer: ReturnType<typeof setTimeout> | undefined
 
-    const send = () => {
+    const send = (mode: string) => {
       fetch(`${getBackendHttpUrl()}/detection_mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -525,19 +506,51 @@ export default function Display({
         })
         .catch((e) => {
           console.warn('Failed to set detection mode, retrying in 2s:', e)
-          if (active) retryTimer = setTimeout(send, 2000)
+          if (active) retryTimer = setTimeout(() => send(mode), 2000)
         })
     }
-    send()
+
+    if (qrMode) {
+      // Two earlier approaches to "stop paying for QR decode once nothing
+      // needs it" both had real problems: switching to 'pose' the instant
+      // *anything* locked meant a second code — same guest wanting another
+      // character, or the next guest entirely — could never be detected
+      // again until "Reset Animation". Requiring *every* character to lock
+      // first basically never happened in practice, so it never actually
+      // saved anything. Duty-cycling instead: mostly cheap 'pose' mode, but
+      // briefly re-arm 'qr' detection on a fixed interval regardless of
+      // lock state, so any new code — first-time, a second one from the
+      // same guest, or a completely different guest — is still reliably
+      // picked up within one cycle, while the *average* cost stays low.
+      const REARM_INTERVAL_MS = 6000 // how often to re-check for a new code
+      const REARM_WINDOW_MS = 1500 // how long each check stays in 'qr' mode
+      const cycle = () => {
+        if (!active) return
+        send('qr')
+        cycleTimer = setTimeout(() => {
+          if (!active) return
+          send('pose')
+          cycleTimer = setTimeout(cycle, REARM_INTERVAL_MS)
+        }, REARM_WINDOW_MS)
+      }
+      cycle()
+    } else {
+      let mode = computeDetectionMode(gifOptions)
+      // Debug Animation draws a live pose skeleton (see drawDebug below),
+      // which needs detection actually running to have anything to draw.
+      // Without this, having no character selected with Debug still on
+      // would drop the backend to 'none' and freeze the skeleton on its
+      // last-received pose instead of showing it's stale.
+      if (debugOn && mode === 'none') mode = 'pose'
+      send(mode)
+    }
 
     return () => {
       active = false
       if (retryTimer) clearTimeout(retryTimer)
+      if (cycleTimer) clearTimeout(cycleTimer)
     }
-  }, [
-    gifOptionsKey, qrMode, rosState, debugOn,
-    droneLocked, owlLocked, batLocked, globeLocked, clownLocked, pigNoseLocked, batEarsLocked,
-  ])
+  }, [gifOptionsKey, qrMode, rosState, debugOn])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
@@ -838,32 +851,18 @@ export default function Display({
       // on frames where their pose is briefly lost, until reset via
       // Settings. See the ticker below for the actual lock/follow logic.
       let qrDroneUpdate: ((target: { x: number; y: number } | undefined) => void) | undefined
-      let qrDroneContainer: PIXI.Container | undefined
       let qrDroneLastPos: { x: number; y: number } | undefined
       let qrLockedTrackId: number | undefined
       // Tracks whether the drone was locked as of last frame, so the ticker
       // can tell exactly the frame it *becomes* locked (to fire the
       // confetti burst once, not every frame it stays locked).
       let qrDroneWasLocked = false
-      // Several characters (owl, bat, globe, the drone) fly in from
-      // elsewhere before landing rather than just fading in at their final
-      // spot — bursting confetti the instant a lock happens would show it
-      // at wherever they start flying from, not the ears/arm/etc. it's
-      // actually supposed to mark. Instead, wait long enough for any
-      // entrance animation to finish settling, then read the character's
-      // own container bounds (wherever it actually ended up — different
-      // per character, e.g. the ears vs the arm) rather than hardcoding a
-      // position per character type. Generous on purpose: covers owl's
-      // longest fly-in + landing sequence with room to spare; the simple
-      // fade-in-place characters settle well before this anyway.
-      const CONFETTI_SETTLE_MS = 2500
       // Every QR_CHARACTERS entry gets its own instance + mutable lock state
       // here, all driven through the same generic loop in the ticker below
       // (see the "if (qrMode)" block there) — new characters just need a
       // new QR_CHARACTERS entry, nothing else.
       const qrCharacterInstances: {
         payload: string
-        container: PIXI.Container
         locked: typeof qrOwlLocked
         update: AnimUpdate
         lockedTrackId: number | undefined
@@ -884,7 +883,6 @@ export default function Display({
           sizeFactor: 1,
         })
         animLayer.addChild(container)
-        qrDroneContainer = container
         qrDroneUpdate = (target) => {
           update(target ? { x: target.x, y: target.y, size: CORNER_SIZE * 2, angle: 0 } : undefined)
         }
@@ -897,7 +895,6 @@ export default function Display({
           animLayer.addChild(container)
           qrCharacterInstances.push({
             payload: cfg.payload,
-            container,
             locked: cfg.locked,
             update,
             lockedTrackId: undefined,
@@ -1038,10 +1035,24 @@ export default function Display({
             // to that person's nose if neither wrist is available (e.g.
             // arm out of frame) — still a reasonable "where is this person"
             // proxy for picking among multiple candidates.
+            //
+            // Two guards were missing here, both of which mattered once
+            // more than one person is in frame: low-visibility landmarks
+            // (occluded/uncertain — e.g. a second person's wrist tucked
+            // behind them) were still treated as valid candidate points,
+            // so a low-confidence guess could accidentally win over the
+            // actual code holder; and there was no cap on how far away a
+            // "closest" match could be, so with two people it could
+            // resolve to whoever's *already* locked (if they happened to
+            // be nearer on screen) instead of the person actually holding
+            // the new code. QR_LOCK_MAX_DIST_FRACTION rejects matches
+            // farther than that from anyone's landmarks entirely rather
+            // than accepting a distant "best available" guess.
             let bestId: number | undefined
             let bestDist = Infinity
             for (const [idStr, pose] of Object.entries(allPoses)) {
-              const candidates = [pose[15], pose[16], pose[0]].filter(Boolean)
+              const candidates = [pose[15], pose[16], pose[0]]
+                .filter((p): p is NonNullable<typeof p> => !!p && (p.visibility ?? 1) >= 0.5)
               for (const pt of candidates) {
                 const dist = Math.hypot(pt.x - droneCode.x, pt.y - droneCode.y)
                 if (dist < bestDist) {
@@ -1050,20 +1061,19 @@ export default function Display({
                 }
               }
             }
-            if (bestId !== undefined) {
+            if (bestId !== undefined && bestDist <= width * QR_LOCK_MAX_DIST_FRACTION) {
               qrLockedTrackId = bestId
               qrDroneLocked.set(true)
             }
           }
 
           const droneNowLocked = qrDroneLocked.get() && qrLockedTrackId !== undefined
-          if (droneNowLocked && !qrDroneWasLocked) {
-            const container = qrDroneContainer
-            setTimeout(() => {
-              if (cancelled || !qrDroneLocked.get() || !container) return
-              const b = container.getBounds()
-              burstConfetti?.(b.x + b.width / 2, b.y + b.height / 2)
-            }, CONFETTI_SETTLE_MS)
+          if (droneNowLocked && !qrDroneWasLocked && droneCode) {
+            // Bursts immediately at the QR code's own position rather than
+            // waiting for the drone to finish flying to its landing spot —
+            // not pinpoint-accurate to the final position, but near the
+            // person and synced with the moment it actually appears.
+            burstConfetti?.(droneCode.x, droneCode.y)
           }
           qrDroneWasLocked = droneNowLocked
 
@@ -1095,12 +1105,19 @@ export default function Display({
           const allPosesRaw = dataRef.current.allPoses ?? {}
 
           // Same remount-safety as the drone above: don't trust a stale
-          // "locked" flag with no id to actually follow.
+          // "locked" flag with no id to actually follow. Same two guards
+          // as the drone's lock search too — visibility-filtered
+          // candidates and a max-distance cap — see the comment on that
+          // block above for why both matter once more than one person is
+          // in frame (otherwise a second guest's new code could resolve
+          // onto whoever's already locked, or onto a low-confidence
+          // landmark guess, instead of the person actually holding it).
           if ((!inst.locked.get() || inst.lockedTrackId === undefined) && code) {
             let bestId: number | undefined
             let bestDist = Infinity
             for (const [idStr, pose] of Object.entries(allPosesRaw)) {
-              const candidates = [pose[15], pose[16], pose[0]].filter(Boolean)
+              const candidates = [pose[15], pose[16], pose[0]]
+                .filter((p): p is NonNullable<typeof p> => !!p && (p.visibility ?? 1) >= 0.5)
               for (const p of candidates) {
                 const pt = convertPoint(p, height, width)
                 const dist = Math.hypot(pt.x - code.x, pt.y - code.y)
@@ -1110,21 +1127,17 @@ export default function Display({
                 }
               }
             }
-            if (bestId !== undefined) {
+            if (bestId !== undefined && bestDist <= width * QR_LOCK_MAX_DIST_FRACTION) {
               inst.lockedTrackId = bestId
               inst.locked.set(true)
             }
           }
 
           const instNowLocked = inst.locked.get() && inst.lockedTrackId !== undefined
-          if (instNowLocked && !inst.wasLocked) {
-            const container = inst.container
-            const locked = inst.locked
-            setTimeout(() => {
-              if (cancelled || !locked.get()) return
-              const b = container.getBounds()
-              burstConfetti?.(b.x + b.width / 2, b.y + b.height / 2)
-            }, CONFETTI_SETTLE_MS)
+          if (instNowLocked && !inst.wasLocked && code) {
+            // Immediate, at the code's own position — see the drone's
+            // matching comment above for why not the exact landing spot.
+            burstConfetti?.(code.x, code.y)
           }
           inst.wasLocked = instNowLocked
 
