@@ -14,6 +14,7 @@ import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
 import { createBatAnim } from '../anim/bat'
 import { createBatEarsAnim } from '../anim/batears'
+import { createClownWigNoseAnim } from '../anim/clownwignose'
 import { createBanner } from '../anim/banner'
 import { createClownAnim } from '../anim/clown'
 import { createConfettiBurst } from '../anim/confetti'
@@ -97,7 +98,7 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'clownwignose' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
@@ -105,6 +106,7 @@ const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 's
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
   'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'clown', 'pignose', 'batears',
+  'clownwignose',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
@@ -125,6 +127,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   clown: 'pose',
   pignose: 'pose',
   batears: 'pose',
+  clownwignose: 'pose',
 }
 
 /** Multiple animations can be selected at once now, each possibly wanting a
@@ -813,6 +816,8 @@ export default function Display({
         return await createPigNoseAnim(app)
       } else if (option === 'batears') {
         return await createBatEarsAnim(app)
+      } else if (option === 'clownwignose') {
+        return await createClownWigNoseAnim(app)
       }
       return null
     }
@@ -936,7 +941,7 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'clown' | 'pignose' | 'batears' | 'clownwignose' | 'none'>]
             // A stale option can still be sitting in the persisted
             // selectedGifs from before a character was removed from
             // GIF_OPTIONS (e.g. localStorage from an older session) — that's
