@@ -313,6 +313,56 @@ if _mp_hands_available:
     threading.Thread(target=_mp_hands_worker, daemon=True).start()
 
 
+# Width of the frame handed to MediaPipe for hand detection. Hand landmarks -
+# and the palm-orientation maths built on them - need far more pixel density
+# than pose keypoints do, for the same reason QR decoding does.
+#
+# Two defects motivated splitting this away from YOLO's frame, both measured:
+#
+#  * cv2.resize(frame, (320, 240)) forces 4:3, but the source is 16:9, so the
+#    hand reaching MediaPipe was horizontally squashed to 75% of its true
+#    proportion. MediaPipe infers 3D world landmarks from appearance and was
+#    trained on undistorted images, so this skewed its output systematically.
+#
+#  * At 320x240 a hand a couple of metres away spans ~40 pixels. MediaPipe
+#    crops the hand region and resizes it to the landmark model's fixed input,
+#    so that crop was mostly interpolation.
+#
+# Measured effect of moving to an aspect-correct 960-wide frame, on a held
+# palm-to-sky gesture (same hand, same session, back-to-back captures):
+#
+#                        320x240 squashed   960x540 correct
+#   handedness correct        50.5%              91.6%
+#   palm normal sign stable   93.5%              99.4%
+#   palm_sky true             43.0%              90.7%
+#   hand-detection rate    7.8/sec            7.6/sec
+#
+# Handedness was never a bad classifier - it was being shown a 40-pixel
+# squashed hand. Since the palm normal is negated based on that label, fixing
+# the label fixed everything downstream, with no logic change at all and no
+# measurable throughput cost (MediaPipe runs on its own thread and drops
+# frames rather than blocking).
+#
+# Set HANDS_WIDTH=0 to disable and reuse YOLO's frame, or lower it if hand
+# detection ever falls behind. YOLO's own input is untouched either way: its
+# tracker only breaks when ITS frame size varies between calls.
+_HANDS_WIDTH = int(os.environ.get('HANDS_WIDTH', '960'))
+
+
+def _frame_for_hands(frame: np.ndarray) -> np.ndarray:
+    """An aspect-preserving copy no wider than _HANDS_WIDTH. Frames already at
+    or below that width pass through untouched."""
+    height, width = frame.shape[:2]
+    if width <= _HANDS_WIDTH:
+        return frame
+    scale = _HANDS_WIDTH / float(width)
+    return cv2.resize(
+        frame,
+        (_HANDS_WIDTH, max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
 def run_hand_detection(frame: np.ndarray):
     """Submit frame to hand-detection worker (non-blocking) and return cached result."""
     if _mp_hands_available:
@@ -678,7 +728,11 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
     ]
 
 
-def run_pose_detection(frame: np.ndarray, qr_frame: np.ndarray = None) -> dict:
+def run_pose_detection(
+    frame: np.ndarray,
+    qr_frame: np.ndarray = None,
+    hands_frame: np.ndarray = None,
+) -> dict:
     """Detect poses/hands on a BGR frame, gated by _detection_mode.
 
     `frame` must be a *consistent* size across calls — YOLO's BoT-SORT
@@ -687,9 +741,11 @@ def run_pose_detection(frame: np.ndarray, qr_frame: np.ndarray = None) -> dict:
     differently-sized frame breaks that comparison (OpenCV assertion error,
     "GMC failed, falling back to identity", repeating on every subsequent
     call since it never gets a matching pair of frames to recover with).
-    QR decoding wants much higher resolution than pose/hand keypoints need,
-    so it takes its own separately-sized `qr_frame` (defaults to `frame`)
-    instead of sharing YOLO's input.
+    QR decoding and hand landmarks both want much higher resolution than pose
+    keypoints need, so each takes its own separately-sized frame - `qr_frame`
+    and `hands_frame`, both defaulting to `frame` - instead of sharing YOLO's
+    input. Only YOLO is size-locked; the other two models are stateless
+    between calls and can be fed whatever resolution suits them.
 
     YOLO26-Pose runs synchronously for fast tracking + bounding boxes.
     ViTPose++ runs in a background worker thread; its cached keypoints are
@@ -774,7 +830,7 @@ def run_pose_detection(frame: np.ndarray, qr_frame: np.ndarray = None) -> dict:
 
     hands: list = []
     if mode in ('hands', 'both'):
-        hands = run_hand_detection(frame)
+        hands = run_hand_detection(hands_frame if hands_frame is not None else frame)
 
     qr_codes = _decode_qr_codes(qr_frame if qr_frame is not None else frame) if mode == 'qr' else []
 
@@ -1149,18 +1205,28 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                 # separately, only for QR decoding — never into YOLO.
                 small = cv2.resize(frame, (320, 240))
                 qr_frame = frame if mode == 'qr' else None
+                # Hands get their own aspect-correct, higher-resolution frame;
+                # see _HANDS_WIDTH for the measurements that motivated it.
+                hands_frame = (
+                    _frame_for_hands(frame)
+                    if _HANDS_WIDTH and mode in ('hands', 'both') else None
+                )
                 if not _rtsp_pose_busy:
                     _rtsp_pose_busy = True
-                    def _rtsp_infer(f, qf):
+                    def _rtsp_infer(f, qf, hf):
                         global _rtsp_pose_busy
                         try:
                             asyncio.run_coroutine_threadsafe(
-                                broadcast("/pose_out", run_pose_detection(f, qf)),
+                                broadcast("/pose_out", run_pose_detection(f, qf, hf)),
                                 _loop,
                             ).result()
                         finally:
                             _rtsp_pose_busy = False
-                    threading.Thread(target=_rtsp_infer, args=(small, qr_frame), daemon=True).start()
+                    threading.Thread(
+                        target=_rtsp_infer,
+                        args=(small, qr_frame, hands_frame),
+                        daemon=True,
+                    ).start()
     finally:
         stop_event.set()
         ffmpeg_thread.join(timeout=10)
