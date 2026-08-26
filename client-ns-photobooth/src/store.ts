@@ -29,7 +29,6 @@ export const GIF_OPTIONS = {
   scuba: 'Scuba',
   ocfusion: 'OC Fusion',
   clown: 'Clown',
-  pig: 'Pig',
   pignose: 'Pig Nose',
   batears: 'Bat Ears',
 } as const
@@ -38,6 +37,17 @@ export type GifOption = keyof typeof GIF_OPTIONS
  * multiple can be on at once, all stacked on the same tracked person.
  * 'none' is never a member: an empty array means "no animation" instead. */
 export const selectedGifs = persistentAtom<GifOption[]>('selectedGifs', ['owl'], opts)
+// Self-heal once at load: a character removed from GIF_OPTIONS (e.g. Pig)
+// can still be sitting in an existing browser's persisted selection from
+// before the removal — silently dropping it here (rather than leaving it to
+// blow up wherever selectedGifs gets consumed) is what actually clears a
+// stuck "always loading" state for existing sessions, not just future ones.
+{
+  const validOptions = new Set<string>(Object.keys(GIF_OPTIONS))
+  const current = selectedGifs.get()
+  const cleaned = current.filter((g) => validOptions.has(g))
+  if (cleaned.length !== current.length) selectedGifs.set(cleaned)
+}
 export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
 // When on, the backend switches from pose/hand tracking to QR-code
@@ -51,12 +61,19 @@ export const qrModeEnabled = persistentAtom('qrModeEnabled', false, opts)
 // session shouldn't stay locked onto yesterday's guest), and otherwise only
 // clears via the "Reset Drone Lock" button in Settings.
 export const qrDroneLocked = atom(false)
-// True once the QR-triggered owl has locked onto a guest's arm — see
-// QR_OWL_PAYLOAD in Display.tsx. Unlike qrDroneLocked, this clears itself
-// automatically once the owl has fully faded out after that guest leaves
-// frame, so the next guest showing the code gets a fresh spawn without
-// needing a manual reset.
+// One of these per QR-triggerable character (see the matching QR_*_PAYLOAD
+// constants in Display.tsx) — true once that character has locked onto a
+// guest via their own QR code. Same "locked forever" philosophy as
+// qrDroneLocked: once acquired, a lock never releases itself, even if the
+// character's own visual fades out (e.g. a brief tracking hiccup) — only
+// the "Reset Animation" button in Settings hands it back to a new guest.
+// Not persisted: intentionally resets on reload.
 export const qrOwlLocked = atom(false)
+export const qrBatLocked = atom(false)
+export const qrGlobeLocked = atom(false)
+export const qrClownLocked = atom(false)
+export const qrPigNoseLocked = atom(false)
+export const qrBatEarsLocked = atom(false)
 
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)
