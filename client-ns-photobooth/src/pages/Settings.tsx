@@ -21,6 +21,7 @@ import {
   pictures,
   pointerEnabled,
   qrDroneLocked,
+  qrOwlLocked,
   qrModeEnabled,
   router,
   selectedGifs,
@@ -298,7 +299,10 @@ export default function Settings() {
             {qrMode && (
               <button
                 tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
-                onClick={() => qrDroneLocked.set(false)}
+                onClick={() => {
+                  qrDroneLocked.set(false)
+                  qrOwlLocked.set(false)
+                }}
               >
                 Reset Animation
               </button>

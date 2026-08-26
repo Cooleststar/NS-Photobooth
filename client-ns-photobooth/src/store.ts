@@ -51,6 +51,12 @@ export const qrModeEnabled = persistentAtom('qrModeEnabled', false, opts)
 // session shouldn't stay locked onto yesterday's guest), and otherwise only
 // clears via the "Reset Drone Lock" button in Settings.
 export const qrDroneLocked = atom(false)
+// True once the QR-triggered owl has locked onto a guest's arm — see
+// QR_OWL_PAYLOAD in Display.tsx. Unlike qrDroneLocked, this clears itself
+// automatically once the owl has fully faded out after that guest leaves
+// frame, so the next guest showing the code gets a fresh spawn without
+// needing a manual reset.
+export const qrOwlLocked = atom(false)
 
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)

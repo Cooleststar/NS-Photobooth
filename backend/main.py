@@ -593,7 +593,13 @@ _detection_mode: str = 'both'
 # always present — degrade to OpenCV (always available, ships with
 # opencv-python) rather than crash if it's missing.
 _qr_detector = cv2.QRCodeDetector()
-_QR_DOWNSCALE_WIDTH = 1280  # more pixels per QR module = more reliable decode at a distance, at some CPU cost
+# More pixels per QR module = more reliable decode at a distance, at some CPU
+# cost. Was 1280 — too aggressive a downscale once cameras started running
+# at 1440p+, small/distant codes were shrunk below a decodable module size
+# and needed to be held right up to the lens. QR decode is already throttled
+# to every 3rd processed frame (see _rtsp_reader's should_infer), so the
+# extra per-attempt cost here is easily affordable.
+_QR_DOWNSCALE_WIDTH = 1920
 
 _pyzbar_decode = None
 _pyzbar_symbol = None
@@ -680,6 +686,17 @@ _qr_attempt_count = 0
 _qr_last_attempt_ts: float = 0.0
 _qr_last_frame_shape: tuple = ()
 
+# QR decode runs on the same background thread as pose detection, and
+# Python's GIL means a slow decode call there steals CPU time from the
+# asyncio event loop that reads/distributes video frames — a heavier decode
+# (see _QR_DOWNSCALE_WIDTH) shows up as extra video latency, not just extra
+# QR-detection latency. A held-up code doesn't need re-decoding every single
+# processed frame to feel responsive (_QR_TRACK_TTL already absorbs gaps
+# between attempts), so cap how often the actual decode work runs,
+# independent of the pose pipeline's own every-3rd-frame cadence.
+_QR_MIN_DECODE_INTERVAL = 0.25  # seconds between actual decode attempts
+_qr_last_decode_ts: float = 0.0
+
 
 def _decode_qr_codes(frame: np.ndarray) -> list:
     """Every QR code visible in the frame, or seen within the last
@@ -687,9 +704,24 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
     flickering the overlay off every time a single frame fails to decode.
     Returns [{"payload": str, "x": float, "y": float}, ...], position being
     the code's center in normalised (0-1) frame coordinates."""
-    global _qr_attempt_count, _qr_last_attempt_ts, _qr_last_frame_shape
+    global _qr_attempt_count, _qr_last_attempt_ts, _qr_last_frame_shape, _qr_last_decode_ts
+    now = time.time()
+
+    if now - _qr_last_decode_ts < _QR_MIN_DECODE_INTERVAL:
+        # Too soon since the last real decode — reuse the TTL cache as-is
+        # (still pruning anything that's aged out) instead of paying for
+        # another resize+decode this frame.
+        stale = [text for text, (ts, *_r) in _qr_last_seen.items() if now - ts >= _QR_TRACK_TTL]
+        for text in stale:
+            del _qr_last_seen[text]
+        return [
+            {"payload": text, "x": cx, "y": cy}
+            for text, (_ts, cx, cy) in _qr_last_seen.items()
+        ]
+
+    _qr_last_decode_ts = now
     _qr_attempt_count += 1
-    _qr_last_attempt_ts = time.time()
+    _qr_last_attempt_ts = now
     _qr_last_frame_shape = frame.shape
 
     height, width = frame.shape[:2]
@@ -714,7 +746,7 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
         )
     decoded = _decode_qr_pyzbar(working) if _pyzbar_decode is not None else _decode_qr_opencv(working)
 
-    now = time.time()
+    now = time.time()  # re-fetch — decode above can take a few ms
     for text, cx, cy in decoded:
         _qr_last_seen[text] = (now, cx, cy)
 

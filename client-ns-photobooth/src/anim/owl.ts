@@ -118,6 +118,14 @@ export async function createOwlAnim(app: PIXI.Application) {
   /** time in seconds till idle animation */
   const toIdleTime = toLandTime + landSprite.duration / 1000
   let owlSize = 100
+  // Last landing spot the arm heuristic actually found — kept around so a
+  // person who's still clearly in frame (just not holding their arm in the
+  // exact ~horizontal pose calculateArmFromPose requires: mid-gesture,
+  // slightly different angle, momentary low landmark confidence) doesn't
+  // make the owl flicker away. Only losing the person's pose entirely
+  // (pose.length === 0) counts as actually gone.
+  let lastCoords: { x: number; y: number; angle: number; length: number } | undefined
+  let lastArm: 'left' | 'right' | undefined
   const animManager = new AnimStateManager()
   const update = (pose: NormalizedLandmarkList) => {
     // Determining size and location
@@ -131,12 +139,17 @@ export async function createOwlAnim(app: PIXI.Application) {
       }
       // adjust size only if pose detected
       owlSize = kf.owlSize.filter(calculateOwlSize(pose, height, width))
+      lastCoords = coords
+      lastArm = arm
     }
 
     // console.log(animState, coords)
 
-    // transform calculations
-    let { x, y } = coords ? calculateTarget(coords, arm!) : { x: 0, y: 0 }
+    // transform calculations — fall back to the last known perch so a
+    // momentary arm-angle miss doesn't snap the owl back to (0, 0)
+    const landingCoords = coords ?? lastCoords
+    const landingArm = arm ?? lastArm
+    let { x, y } = landingCoords ? calculateTarget(landingCoords, landingArm!) : { x: 0, y: 0 }
     y += owlSize * OWL_MARGIN_B //adjust owl downwards
 
     idleSprite.height =
@@ -147,7 +160,7 @@ export async function createOwlAnim(app: PIXI.Application) {
       landSprite.width =
         owlSize
 
-    animManager.tracking = !!coords
+    animManager.tracking = pose.length > 0
     const { time, state } = animManager
 
     // Actual animation logic
@@ -167,6 +180,13 @@ export async function createOwlAnim(app: PIXI.Application) {
             flySprite.alpha = lerpLinear(time, 0, ANIM.FADE)
             break
           case toLandTime <= time && time < toIdleTime:
+            // Done flying — stop it rather than just hiding it. Leaving it
+            // playing (even at alpha 0) meant it kept decoding/looping its
+            // full frame sequence in the background for the rest of the
+            // owl's lifetime, for no visible benefit — this is very likely
+            // why the owl carries a much higher steady-state render cost
+            // than the drone, which only ever has one sprite to begin with.
+            if (flySprite.playing) flySprite.stop()
             if (!landSprite.playing) landSprite.play()
             flySprite.alpha = 0
             landSprite.alpha = 1
@@ -178,6 +198,8 @@ export async function createOwlAnim(app: PIXI.Application) {
         }
         break
       case 'entered':
+        if (landSprite.playing) landSprite.stop()
+        if (flySprite.playing) flySprite.stop()
         if (!idleSprite.playing) idleSprite.play()
         owlContainer.alpha = idleSprite.alpha = 1
         landSprite.alpha = flySprite.alpha = 0
