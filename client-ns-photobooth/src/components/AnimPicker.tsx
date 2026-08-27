@@ -11,6 +11,11 @@ import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
 import batEarsThumb from '../assets/batears/batearsicon.png'
 import clownWigNoseThumb from '../assets/ClownWigNose/ClownWig.webp'
 
+// How many characters can be selected at once — past this, remaining
+// thumbnails are disabled rather than silently ignoring clicks, so it's
+// clear the limit was hit rather than the button being broken.
+const MAX_SELECTED = 5
+
 const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,
   bat: batThumb,
@@ -40,22 +45,22 @@ export function AnimPicker() {
         const option = key as GifOption
         const thumb = THUMBS[option]
         const active = option === 'none' ? current.length === 0 : current.includes(option)
+        const atLimit = option !== 'none' && !active && current.length >= MAX_SELECTED
         return (
           <button
             key={option}
-            title={label}
+            title={atLimit ? `${label} (limit of ${MAX_SELECTED} reached)` : label}
+            disabled={atLimit}
             onClick={() => {
               if (option === 'none') {
                 selectedGifs.set([])
-              } else {
-                selectedGifs.set(
-                  current.includes(option)
-                    ? current.filter((o) => o !== option)
-                    : [...current, option],
-                )
+              } else if (current.includes(option)) {
+                selectedGifs.set(current.filter((o) => o !== option))
+              } else if (current.length < MAX_SELECTED) {
+                selectedGifs.set([...current, option])
               }
             }}
-            tw='w-14 h-14 rounded-lg overflow-hidden border-2 flex items-center justify-center bg-gray-300 transition-all duration-150'
+            tw='w-14 h-14 rounded-lg overflow-hidden border-2 flex items-center justify-center bg-gray-300 transition-all duration-150 disabled:(opacity-25 cursor-not-allowed)'
             css={
               active
                 ? tw`border-blue-500 opacity-100`

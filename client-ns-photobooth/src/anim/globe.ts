@@ -188,7 +188,6 @@ export async function createGlobeAnim(
 
       case 'entered': {
         if (!sprite.playing) sprite.play()
-        sprite.alpha = 1
         container.alpha = 1
 
         bobTime += ticker.deltaMS / 1000
@@ -196,6 +195,7 @@ export async function createGlobeAnim(
 
         if (hands) {
           // Between-hands mode: globe moves to midpoint, scales with distance
+          sprite.alpha = 1
           const hx = kf.handX.filter(hands.x)
           const hy = kf.handY.filter(hands.y)
           const handGlobeSize = kf.handSize.filter(hands.distance * 0.4)
@@ -203,8 +203,16 @@ export async function createGlobeAnim(
           const hp = clampPos(hx, hy + bobOffset, handGlobeSize, bounds)
           container.position.set(hp.x, hp.y)
         } else {
-          // Orbit mode: circle around torso
+          // Orbit mode: sweeps back and forth across the front of the body
+          // (angle kept within [0, π), where sin >= 0) instead of
+          // continuing through a full circle — the back half would just be
+          // invisible dead travel time with no real occlusion to show for
+          // it anyway (no person-segmentation mask in this pipeline). At
+          // each end of the sweep it resets straight to the other side
+          // with no pause, reading as an instant reappearance rather than
+          // a delay.
           orbitAngle += ticker.deltaMS / 1000 * ORBIT_SPEED
+          if (orbitAngle >= Math.PI) orbitAngle -= Math.PI
           const orbitR = globeSize * ORBIT_RADIUS_FACTOR
           const op = clampPos(
             torsoX + Math.cos(orbitAngle) * orbitR,
@@ -212,12 +220,14 @@ export async function createGlobeAnim(
             globeSize, bounds,
           )
           container.position.set(op.x, op.y)
+          sprite.alpha = 1
         }
         break
       }
 
-      case 'lost':
+      case 'lost': {
         orbitAngle += ticker.deltaMS / 1000 * ORBIT_SPEED
+        if (orbitAngle >= Math.PI) orbitAngle -= Math.PI
         bobTime += ticker.deltaMS / 1000
         const bobOff = Math.sin(bobTime * BOB_SPEED) * globeSize * BOB_AMPLITUDE
         const orbitR = globeSize * ORBIT_RADIUS_FACTOR
@@ -227,8 +237,10 @@ export async function createGlobeAnim(
           globeSize, bounds,
         )
         container.position.set(lp.x, lp.y)
+        sprite.alpha = 1
         if (time >= ANIM.RETRACK) animManager.transition()
         break
+      }
 
       case 'exiting':
         container.alpha = 1 - lerpLinear(time, 0, ANIM.FADE)
