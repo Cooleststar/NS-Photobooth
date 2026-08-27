@@ -74,6 +74,10 @@ export const qrGlobeLocked = atom(false)
 export const qrClownLocked = atom(false)
 export const qrPigNoseLocked = atom(false)
 export const qrBatEarsLocked = atom(false)
+// QR-only, like the drone — ORDLO isn't a normal AnimPicker character
+// (see anim/ordlo.ts), so unlike the atoms above there's no matching
+// GifOption/CHARACTER_OPTIONS entry for it.
+export const qrOrdloLocked = atom(false)
 
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)

@@ -20,6 +20,7 @@ import { createConfettiBurst } from '../anim/confetti'
 import { createDroneAnim } from '../anim/drone'
 import { createGlobeAnim } from '../anim/globe'
 import { createOCFusionAnim } from '../anim/ocfusion'
+import { createOrdloAnim } from '../anim/ordlo'
 import { createOwlAnim } from '../anim/owl'
 import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
@@ -49,6 +50,7 @@ import {
   qrClownLocked,
   qrPigNoseLocked,
   qrBatEarsLocked,
+  qrOrdloLocked,
   qrModeEnabled,
   HIKVISION_IPS,
   RTSP_BASE,
@@ -80,6 +82,13 @@ import {
 // Fusion isn't here either — like the drone, it's hand-driven with its own
 // internal multi-hand tracking, not a single person's pose.
 const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
+// ORDLO is also its own special case, like the drone — a head-anchored
+// wordmark (anim/ordlo.ts) that isn't a GifOption/AnimPicker character, so
+// it can't go through createAnimForGif like QR_CHARACTERS entries do. Its
+// update() signature matches theirs exactly though (takes the locked
+// person's raw pose each frame), so once built it's pushed straight into
+// qrCharacterInstances below and rides the same generic lock/follow loop.
+const QR_ORDLO_PAYLOAD = 'BOOTH-ORDLO'
 const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLocked }[] = [
   { payload: 'BOOTH-OWL', gif: 'owl', locked: qrOwlLocked },
   { payload: 'BOOTH-BAT', gif: 'bat', locked: qrBatLocked },
@@ -872,6 +881,21 @@ export default function Display({
         wasLocked: boolean
       }[] = []
 
+      // Built ahead of the character setup below (rather than at its
+      // original spot right before the banner) so ordlo — which fires
+      // confetti itself, on a timer, rather than only once on lock — can
+      // receive the trigger function directly at construction. The
+      // container itself is still only added to the stage later, after
+      // everything else, so z-order (confetti drawn on top of every
+      // character) is unaffected by creating it earlier.
+      let burstConfetti: ((x: number, y: number) => void) | undefined
+      let confettiContainer: PIXI.Container | undefined
+      if (qrMode) {
+        const [c, trigger] = await createConfettiBurst(app)
+        confettiContainer = c
+        burstConfetti = trigger
+      }
+
       if (qrMode) {
         // Belt-and-suspenders alongside the trackId-undefined check further
         // below: force a clean "not locked" state on every fresh mount so a
@@ -899,6 +923,24 @@ export default function Display({
           qrCharacterInstances.push({
             payload: cfg.payload,
             locked: cfg.locked,
+            update,
+            lockedTrackId: undefined,
+            wasLocked: false,
+          })
+        }
+
+        // ORDLO: same generic lock/follow loop as QR_CHARACTERS above, just
+        // built directly instead of via createAnimForGif — see the comment
+        // on QR_ORDLO_PAYLOAD for why. Also gets burstConfetti so it can
+        // keep firing bursts on both sides for as long as it's on screen,
+        // on top of the one-time lock burst every QR character gets.
+        qrOrdloLocked.set(false)
+        {
+          const [container, update] = await createOrdloAnim(app, burstConfetti)
+          animLayer.addChild(container)
+          qrCharacterInstances.push({
+            payload: QR_ORDLO_PAYLOAD,
+            locked: qrOrdloLocked,
             update,
             lockedTrackId: undefined,
             wasLocked: false,
@@ -977,16 +1019,12 @@ export default function Display({
       app.stage.addChild(banner)
       bannerContainer = banner
 
-      // One-shot confetti burst, fired at the exact spot a QR code locks
-      // onto someone — see the "just locked" checks in the ticker below.
-      // Added to app.stage last (topmost) so it renders over every
-      // character, not just other QR-triggered ones.
-      let burstConfetti: ((x: number, y: number) => void) | undefined
-      if (qrMode) {
-        const [confettiContainer, trigger] = await createConfettiBurst(app)
-        app.stage.addChild(confettiContainer)
-        burstConfetti = trigger
-      }
+      // Added to app.stage last (topmost), now that everything else is on
+      // the stage too, so confetti renders over every character rather
+      // than being drawn under ones added afterward. See the burstConfetti
+      // creation earlier in this effect for why the object itself was
+      // built before the character setup instead of here.
+      if (confettiContainer) app.stage.addChild(confettiContainer)
 
       console.log('Animations added')
 
