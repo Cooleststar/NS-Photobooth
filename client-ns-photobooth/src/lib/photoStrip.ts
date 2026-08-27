@@ -165,7 +165,7 @@ async function drawFooter(
   ctx.fillText(
     `${BRAND_TEXT}   ${formatDateTime(timestamp)}`,
     FOOTER_TEXT_INSET,
-    canvasHeight - FOOTER_TEXT_INSET,
+    canvasHeight,
   )
 
   // Both logos sit beside the QR box, vertically centered on the same row
