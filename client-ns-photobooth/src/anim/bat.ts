@@ -24,10 +24,10 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 const BAT_MARGIN_B = 0.27
 // Resting pose rendered a bit smaller than the shared batSize, on request.
 const REST_SIZE_FACTOR = 0.75
-// MP-33 has no hand/finger landmarks, only the wrist joint (15/16) — so the
-// palm center is approximated by continuing a bit past the wrist along the
-// same elbow->wrist direction, rather than landing right on the joint.
-const PALM_EXTEND_RATIO = 0.3
+// Where along the forearm (elbow->wrist) the bat lands, as a fraction of
+// that segment — 0 would be the elbow, 1 the wrist itself. Kept short of 1 so
+// the bat perches on the forearm rather than on the hand.
+const FOREARM_LAND_RATIO = 0.75
 // Max allowed angle (degrees) between the upper arm (shoulder->elbow) and
 // forearm (elbow->wrist) before the arm no longer counts as "straight" —
 // the bat only lands/stays on a fully extended arm; bending the elbow past
@@ -36,16 +36,18 @@ const PALM_EXTEND_RATIO = 0.3
 const ARM_STRAIGHT_MAX_DEVIATION_DEG = 25
 
 /** target coords for the bat to land on, assuming a bottom-middle anchor —
- * approximates the palm from the wrist landmark (MP-33 indices 15/16),
- * picking whichever arm is tracked with higher confidence, and only if that
- * arm is straight (see ARM_STRAIGHT_MAX_DEVIATION_DEG). Deliberately not
- * using calculateArmFromPose's elbow+angle+length reconstruction: that angle
- * is computed with Math.atan (not atan2), which can't recover which side of
- * the elbow the wrist is actually on, so it only ever looked right for the
- * owl's halfway-point perch — reaching further toward the wrist/palm
- * regularly landed on the wrong side entirely. This uses plain vector
- * subtraction instead, which has no such sign ambiguity. */
-function getPalmTarget(
+ * a point along the forearm (elbow->wrist, MP-33 indices 13/14 and 15/16),
+ * short of the wrist so the bat perches on the forearm rather than the hand
+ * (see FOREARM_LAND_RATIO). Picks whichever arm is tracked with higher
+ * confidence, and only if that arm is straight (see
+ * ARM_STRAIGHT_MAX_DEVIATION_DEG). Deliberately not using
+ * calculateArmFromPose's elbow+angle+length reconstruction: that angle is
+ * computed with Math.atan (not atan2), which can't recover which side of the
+ * elbow the wrist is actually on, so it only ever looked right for the owl's
+ * halfway-point perch — reaching further toward the wrist regularly landed on
+ * the wrong side entirely. This uses plain vector subtraction instead, which
+ * has no such sign ambiguity. */
+function getForearmTarget(
   pose: NormalizedLandmarkList,
   height: number,
   width: number,
@@ -78,8 +80,8 @@ function getPalmTarget(
   if (cosDeviation < maxCos) return undefined
 
   return {
-    x: wrist.x + (wrist.x - elbow.x) * PALM_EXTEND_RATIO,
-    y: wrist.y + (wrist.y - elbow.y) * PALM_EXTEND_RATIO,
+    x: elbow.x + (wrist.x - elbow.x) * FOREARM_LAND_RATIO,
+    y: elbow.y + (wrist.y - elbow.y) * FOREARM_LAND_RATIO,
   }
 }
 
@@ -156,12 +158,12 @@ export async function createBatAnim(app: PIXI.Application) {
   const animManager = new AnimStateManager()
 
   const update = (pose: NormalizedLandmarkList) => {
-    const palm = getPalmTarget(pose, height, width)
+    const target = getForearmTarget(pose, height, width)
     let x = 0
     let y = 0
-    if (palm) {
-      x = kf.x.filter(palm.x)
-      y = kf.y.filter(palm.y)
+    if (target) {
+      x = kf.x.filter(target.x)
+      y = kf.y.filter(target.y)
       batSize = kf.batSize.filter(calculateBatSize(pose, height, width))
     }
 
@@ -178,7 +180,7 @@ export async function createBatAnim(app: PIXI.Application) {
       vanishSprite.width =
         batSize
 
-    animManager.tracking = !!palm
+    animManager.tracking = !!target
     const { time, state } = animManager
 
     switch (state) {

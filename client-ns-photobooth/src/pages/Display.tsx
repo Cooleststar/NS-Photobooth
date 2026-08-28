@@ -24,6 +24,8 @@ import { createOwlAnim } from '../anim/owl'
 import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
+import { createSunglassesAnim } from '../anim/sunglasses'
+import { createMustacheAnim } from '../anim/mustache'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
@@ -99,7 +101,7 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'none'>, string> = {
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'none'>, string> = {
   laptop: laptopGif,
 }
 
@@ -107,7 +109,7 @@ const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 's
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
   'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
-  'clownwignose',
+  'clownwignose', 'sunglasses', 'mustache',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
@@ -128,6 +130,8 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   pignose: 'pose',
   batears: 'pose',
   clownwignose: 'pose',
+  sunglasses: 'pose',
+  mustache: 'pose',
 }
 
 /** Multiple animations can be selected at once now, each possibly wanting a
@@ -816,6 +820,10 @@ export default function Display({
         return await createBatEarsAnim(app)
       } else if (option === 'clownwignose') {
         return await createClownWigNoseAnim(app)
+      } else if (option === 'sunglasses') {
+        return await createSunglassesAnim(app)
+      } else if (option === 'mustache') {
+        return await createMustacheAnim(app)
       }
       return null
     }
@@ -939,7 +947,7 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'none'>]
             // A stale option can still be sitting in the persisted
             // selectedGifs from before a character was removed from
             // GIF_OPTIONS (e.g. localStorage from an older session) — that's

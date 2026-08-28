@@ -31,6 +31,8 @@ export const GIF_OPTIONS = {
   pignose: 'Pig Nose & Ears',
   batears: 'Bat Ears',
   clownwignose: 'Clown Wig & Nose',
+  sunglasses: 'Sunglasses',
+  mustache: 'Mustache',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 /** Every currently-active pose/hand-tracked animation and/or corner-prop —

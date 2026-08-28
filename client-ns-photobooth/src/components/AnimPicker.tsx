@@ -10,6 +10,8 @@ import scubaThumb from '../assets/cat_anim/scuba.gif'
 import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
 import batEarsThumb from '../assets/batears/batearsicon.png'
 import clownWigNoseThumb from '../assets/ClownWigNose/ClownWig.webp'
+import sunglassesThumb from '../assets/Sunglasses/Sunglasses.png'
+import mustacheThumb from '../assets/Mustache/mustache.png'
 
 // How many characters can be selected at once — past this, remaining
 // thumbnails are disabled rather than silently ignoring clicks, so it's
@@ -26,6 +28,8 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   pignose: pigNoseThumb,
   batears: batEarsThumb,
   clownwignose: clownWigNoseThumb,
+  sunglasses: sunglassesThumb,
+  mustache: mustacheThumb,
 }
 
 /** side strip of thumbnail buttons for toggling active animations (multiple can
