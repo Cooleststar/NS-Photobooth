@@ -647,6 +647,19 @@ def _decode_qr_pyzbar(working: np.ndarray) -> list:
     return out
 
 
+def _enhance_for_qr(bgr: np.ndarray) -> np.ndarray:
+    """CLAHE-contrast-boosted, upscaled copy of a frame — a fallback pass
+    for codes the plain decode misses because they're too small, blurry, or
+    unevenly lit (glare, backlighting, a dim booth) to read at native
+    contrast. Only called when the plain decode already found nothing (see
+    _decode_qr_codes), since CLAHE + upscaling roughly doubles decode cost."""
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    enhanced = cv2.resize(enhanced, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+    return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+
 def _decode_qr_opencv(working: np.ndarray) -> list:
     """[(payload, cx, cy), ...] — cx/cy normalised 0-1."""
     h, w = working.shape[:2]
@@ -744,7 +757,16 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
             frame, (_QR_DOWNSCALE_WIDTH, max(1, int(round(height * scale)))),
             interpolation=cv2.INTER_AREA,
         )
-    decoded = _decode_qr_pyzbar(working) if _pyzbar_decode is not None else _decode_qr_opencv(working)
+    decode_fn = _decode_qr_pyzbar if _pyzbar_decode is not None else _decode_qr_opencv
+    decoded = decode_fn(working)
+    if not decoded:
+        # Plain decode found nothing — try again on a contrast-enhanced,
+        # upscaled copy before giving up on this frame. Codes at the edge
+        # of decodability (small, angled, glare, dim lighting) are the
+        # actual reason this was asked for; a code that's simply not in
+        # frame still fails both passes; costs an extra decode only on
+        # frames where the first one already came up empty.
+        decoded = decode_fn(_enhance_for_qr(working))
 
     now = time.time()  # re-fetch — decode above can take a few ms
     for text, cx, cy in decoded:

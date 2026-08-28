@@ -4,6 +4,8 @@ import tw from 'twin.macro'
 import { WritableAtom } from 'nanostores'
 import { useKeybind } from '../components'
 import {
+  BACKGROUND_OPTIONS,
+  BackgroundOption,
   GIF_OPTIONS,
   GifOption,
   bannerEnabled,
@@ -26,10 +28,13 @@ import {
   qrClownLocked,
   qrPigNoseLocked,
   qrBatEarsLocked,
+  qrOrdloLocked,
   qrModeEnabled,
   router,
+  selectedBackground,
   selectedGifs,
   textureCache,
+  virtualBackgroundEnabled,
 } from '../store'
 
 function Section({ title, children }: { title: string; children: any }) {
@@ -126,6 +131,37 @@ function AnimMultiSelect() {
   )
 }
 
+/** Horizontal strip of background thumbnails, one active at a time — plain
+ * radio-style buttons rather than a dropdown since (unlike the animation
+ * list) there's normally only a handful of these and picking one is the
+ * whole point of opening this row, not an occasional toggle. */
+function BackgroundPicker() {
+  const current = useStore(selectedBackground)
+  const options = Object.entries(BACKGROUND_OPTIONS)
+  return (
+    <div tw='flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>Background</span>
+      <div tw='flex flex-wrap gap-2'>
+        {options.map(([key, { label, url }]) => {
+          const option = key as BackgroundOption
+          const active = option === current
+          return (
+            <button
+              key={key}
+              title={label}
+              onClick={() => selectedBackground.set(option)}
+              tw='w-14 h-14 rounded-lg overflow-hidden border-2 flex-shrink-0 transition-all duration-150'
+              css={active ? tw`border-blue-500 opacity-100` : tw`border-transparent opacity-50 hover:opacity-90`}
+            >
+              <img src={url} tw='w-full h-full object-cover pointer-events-none' />
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ResRow({
   label,
   value,
@@ -214,6 +250,7 @@ export default function Settings() {
   const burstSec = useStore(burstIntervalSec)
   const countdownSec = useStore(photoCountdownSec)
   const qrMode = useStore(qrModeEnabled)
+  const virtualBg = useStore(virtualBackgroundEnabled)
 
   useKeybind('KeyD', () => debugEnabled.set(!debugEnabled.get()))
   useKeybind('KeyS', () => setShown((s) => !s))
@@ -305,11 +342,17 @@ export default function Settings() {
                   qrClownLocked.set(false)
                   qrPigNoseLocked.set(false)
                   qrBatEarsLocked.set(false)
+                  qrOrdloLocked.set(false)
                 }}
               >
                 Reset Animation
               </button>
             )}
+          </Section>
+
+          <Section title='Background'>
+            <SwitchRow label='Virtual Background' boolVar={virtualBackgroundEnabled} />
+            {virtualBg && <BackgroundPicker />}
           </Section>
 
           <Section title='Actions'>
