@@ -3,6 +3,7 @@ import { createRouter } from '@nanostores/router'
 import { atom, map } from 'nanostores'
 import { savePictures } from './lib/picturesDb'
 import * as PIXI from './pixi'
+import pulauTekongBg from './assets/pulautekongbackground/pulau_tekong.jpg'
 
 const opts = {
   encode: JSON.stringify,
@@ -50,6 +51,22 @@ export const selectedGifs = persistentAtom<GifOption[]>('selectedGifs', ['owl'],
 }
 export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
+
+// Discord-style virtual background: segments the guest out of the live feed
+// (see anim/virtualBackground.ts) and composites them over a chosen still
+// image instead of their real surroundings. Keyed object (not an array) so
+// adding a new background later is just one new entry + one new asset
+// import, same pattern as GIF_OPTIONS above.
+export const BACKGROUND_OPTIONS = {
+  pulau_tekong: { label: 'Pulau Tekong', url: pulauTekongBg },
+} as const
+export type BackgroundOption = keyof typeof BACKGROUND_OPTIONS
+export const virtualBackgroundEnabled = persistentAtom('virtualBackgroundEnabled', false, opts)
+export const selectedBackground = persistentAtom<BackgroundOption>(
+  'selectedBackground',
+  Object.keys(BACKGROUND_OPTIONS)[0] as BackgroundOption,
+  opts,
+)
 // When on, the backend switches from pose/hand tracking to QR-code
 // detection: a guest holding the drone QR code up to the camera triggers
 // the drone gif — see QR_DRONE_PAYLOAD in Display.tsx for the mapped text.

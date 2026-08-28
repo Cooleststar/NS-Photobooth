@@ -26,6 +26,7 @@ import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
+import { createVirtualBackground } from '../anim/virtualBackground'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
 import { convertPoint } from '../api/nicepipe/mpPose'
@@ -52,6 +53,8 @@ import {
   qrBatEarsLocked,
   qrOrdloLocked,
   qrModeEnabled,
+  virtualBackgroundEnabled,
+  selectedBackground,
   HIKVISION_IPS,
   RTSP_BASE,
   cameraSource,
@@ -274,6 +277,7 @@ function createReceivingCtx(
    * against Date.now() on arrival. Undefined outside RTSP mode, where the
    * generic /pose_out-staleness delay below is used instead. */
   videoDelayMsRef?: { current: number | undefined },
+  virtualBg?: ReturnType<typeof createVirtualBackground>,
 ) {
   const { width = 640, height = 480 } = size ?? {}
   const canvas = document.createElement('canvas')
@@ -334,7 +338,14 @@ function createReceivingCtx(
       const heightTarget = (widthTarget / imgWidth) * imgHeight
       const yMargin = height - heightTarget - btmMargin
 
-      ctx.drawImage(bitmap ?? img, xMargin, yMargin, widthTarget, heightTarget)
+      const frameSource = bitmap ?? img
+      if (virtualBg && virtualBackgroundEnabled.get()) {
+        virtualBg.setBackground(selectedBackground.get())
+        virtualBg.requestSegmentation(frameSource)
+        virtualBg.drawComposited(ctx, frameSource, xMargin, yMargin, widthTarget, heightTarget)
+      } else {
+        ctx.drawImage(frameSource, xMargin, yMargin, widthTarget, heightTarget)
+      }
       ctx.restore()
 
       // recalculate pose coordinates
@@ -750,10 +761,18 @@ export default function Display({
     divElm.replaceChildren()
     divElm.appendChild(app.view)
 
+    // Memoized module-level singleton (see virtualBackground.ts) — this
+    // call is cheap on every remount after the first (just returns the
+    // same instance), and must NOT be closed/recreated per mount, since
+    // this effect remounts on plenty of unrelated changes (AnimPicker
+    // selection, QR Code Mode) and the underlying model doesn't tolerate
+    // being torn down and rebuilt like that.
+    const virtualBg = createVirtualBackground()
+
     let [canvas, update] = createReceivingCtx(activeRef, dataRef, {
       width,
       height,
-    }, isRtspMode ? rtspBitmapRef : undefined, isRtspMode ? rtspDelayMsRef : undefined)
+    }, isRtspMode ? rtspBitmapRef : undefined, isRtspMode ? rtspDelayMsRef : undefined, virtualBg)
 
     attachStream2Pixi(app, canvas)
     // Feed the video into the canvas immediately, independent of animation
@@ -1286,6 +1305,10 @@ export default function Display({
         console.warn(e)
       }
       canvas.remove()
+      // virtualBg is NOT closed here — it's a page-lifetime singleton (see
+      // the comment where it's created above), and this effect remounts
+      // far more often than the segmentation model should ever be torn
+      // down.
     }
   }, [height, width, gifOptionsKey, isRtspMode, isMulti, qrMode]) // including the ref currents here triggers an unnecessary rerender
   return (
