@@ -36,12 +36,16 @@ function clampPos(x: number, y: number, size: number, b: FeedBounds) {
   }
 }
 
+// How far a slot may reach to claim a hand, as a fraction of screen width.
+// Mirrors drone.ts's MAX_CLAIM_DISTANCE_FACTOR — see there for the reasoning.
+const MAX_CLAIM_DISTANCE_FACTOR = 0.25
+
 // Assign palm-up hand screen positions to slots by proximity — identical
 // approach to drone.ts's assignHandsToDrones, so each instance sticks to
 // the hand it's already near rather than swapping when sort order jitters.
 function assignHandsToSlots(
   hands: HandData[],
-  trackedPositions: Array<{ x: number; y: number }>,
+  trackedPositions: Array<{ x: number; y: number; active: boolean }>,
   height: number,
   width: number,
 ): Array<{ x: number; y: number } | undefined> {
@@ -51,17 +55,40 @@ function assignHandsToSlots(
 
   const result: Array<{ x: number; y: number } | undefined> = trackedPositions.map(() => undefined)
   const claimed = new Set<number>()
+  const maxClaim = width * MAX_CLAIM_DISTANCE_FACTOR
 
+  // Nearest pair first, rather than slot 0 first: slot order is arbitrary, so
+  // letting an early slot take a hand that is a much better match for a later
+  // one is what made instances trade places with each other.
+  const pairs: Array<{ slot: number; hand: number; d: number }> = []
   for (let i = 0; i < trackedPositions.length; i++) {
     const pos = trackedPositions[i]
-    let bestDist = Infinity
-    let bestIdx = -1
     for (let j = 0; j < available.length; j++) {
-      if (claimed.has(j)) continue
       const d = Math.hypot(available[j].x - pos.x, available[j].y - pos.y)
-      if (d < bestDist) { bestDist = d; bestIdx = j }
+      if (d <= maxClaim) pairs.push({ slot: i, hand: j, d })
     }
-    if (bestIdx >= 0) { result[i] = available[bestIdx]; claimed.add(bestIdx) }
+  }
+  pairs.sort((a, b) => a.d - b.d)
+
+  const usedSlot = new Set<number>()
+  for (const { slot, hand } of pairs) {
+    if (usedSlot.has(slot) || claimed.has(hand)) continue
+    result[slot] = available[hand]
+    usedSlot.add(slot)
+    claimed.add(hand)
+  }
+
+  // Leftover hands go to IDLE slots only, at any distance — an idle slot is
+  // not on screen, so there is nothing to teleport. Active slots are excluded
+  // so a visible sprite never jumps across to a stranger's hand.
+  const idleSlots = result
+    .map((r, i) => (r === undefined && !trackedPositions[i].active ? i : -1))
+    .filter(i => i >= 0)
+  for (let j = 0; j < available.length && idleSlots.length; j++) {
+    if (claimed.has(j)) continue
+    const slot = idleSlots.shift()!
+    result[slot] = available[j]
+    claimed.add(j)
   }
   return result
 }
@@ -102,7 +129,9 @@ async function createOCFusionSprite(
   let palmConfirmTimer = 0
   const animManager = new AnimStateManager()
 
-  const getTrackedPos = () => ({ x: wristX, y: wristY })
+  // `active` lets the assigner tell a visible slot from an idle one: only an
+  // idle slot may acquire a hand at any distance.
+  const getTrackedPos = () => ({ x: wristX, y: wristY, active: animManager.tracking })
 
   const update = (rawWrist: { x: number; y: number } | undefined) => {
     if (rawWrist) {
@@ -192,8 +221,9 @@ export async function createOCFusionAnim(
   // Loaded once, shared texture across all slots (see createOCFusionSprite).
   const { texture } = await PIXI.ensureLoaded(app.loader, ocFusionImg)
 
-  // Matches drone.ts's DRONE_SLOTS — same backend num_hands=4 ceiling.
-  const OC_FUSION_SLOTS = 4
+  // Matches drone.ts's DRONE_SLOTS — same WILOR_MAX_HANDS ceiling, raised
+  // from 4 to 8 so a group of four does not run out of slots.
+  const OC_FUSION_SLOTS = 8
   const instances = await Promise.all(
     Array.from({ length: OC_FUSION_SLOTS }, () =>
       createOCFusionSprite(app, texture!, size, hoverOffset, bobAmplitude, bounds),

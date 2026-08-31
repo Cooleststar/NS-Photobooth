@@ -45,7 +45,8 @@ PERFORMANCE (RTX A5000, 960x540 input, measured)
     total          31.6 ms         -> 31.7 fps with one hand
 
 Reconstruction cost scales with the number of hands, unlike MediaPipe's fixed
-cost — four hands in shot is roughly 92 ms/frame. WILOR_MAX_HANDS caps that.
+cost — four hands in shot is roughly 92 ms/frame, eight roughly 175 ms.
+WILOR_MAX_HANDS caps that; see its comment for the full curve.
 
 fp16 was verified against fp32 over 204 hands: median difference 0.00008,
 worst 0.00231, and zero sign disagreements. It is enabled by default because
@@ -77,7 +78,28 @@ WILOR_FP16 = os.environ.get('WILOR_FP16', '1') != '0'
 WILOR_DET_CONF = float(os.environ.get('WILOR_DET_CONF', '0.3'))
 # Reconstruction is per-hand, so a crowd is what threatens the frame rate.
 # Hands are kept in detector-confidence order, so the clearest ones survive.
-WILOR_MAX_HANDS = int(os.environ.get('WILOR_MAX_HANDS', '4'))
+#
+# Raised from 4 to 8. At 4 this cap WAS the "more than four hands and drones
+# stop deploying" bug, and it caused a second, subtler problem: with five or
+# more hands present, which four survived the confidence sort changed from
+# frame to frame, so the set of tracked hands churned constantly and drones
+# were reassigned on nearly every update. Four people is two hands each, a
+# perfectly ordinary group at a photo booth, so the ceiling sat right in the
+# middle of normal use.
+#
+# The cost is real and linear - roughly 7.7 ms + 20.9 ms per hand:
+#
+#     hands      1      2      4      6      8
+#     ms/frame  29     50     92    133    175
+#     updates/s 34     20     11    7.5    5.7
+#
+# 8 is affordable only because drone.ts now eases its rendered position toward
+# the tracked one every render frame (FOLLOW_RATE) rather than snapping on
+# each backend sample. Before that change a 5.7/s update rate would have
+# looked like a drone teleporting; now it reads as smooth following with
+# slightly more lag. Lower this if the lag becomes noticeable, or raise it if
+# a bigger group needs covering and the extra latency is acceptable.
+WILOR_MAX_HANDS = int(os.environ.get('WILOR_MAX_HANDS', '8'))
 
 # Threshold on the vertical component of the palm normal. Same convention as
 # the MediaPipe path: negative is skyward. WiLoR's readings sit near +/-0.9 on
