@@ -160,16 +160,40 @@ export function createVirtualBackground(): VirtualBackgroundController {
   const personCanvas = document.createElement('canvas')
   const personCtx = personCanvas.getContext('2d')!
 
+  // In RTSP mode `source` is an ImageBitmap owned by Display.tsx's own
+  // frame loop, which closes the previous one (rtspBitmapRef.current?.close())
+  // the instant a new frame arrives — often faster than the segmentation
+  // model gets around to actually reading it, since send() doesn't consume
+  // its input synchronously. That raced a `createImageBitmap` call inside
+  // the model's own pipeline against our close(), throwing "width is 0"
+  // whenever the source got closed first. Copying the frame into this
+  // scratch canvas synchronously (drawImage always reads current pixel
+  // data immediately) decouples the segmentation input from whatever
+  // happens to the original source afterward.
+  const sendCanvas = document.createElement('canvas')
+  const sendCtx = sendCanvas.getContext('2d')!
+
+  function getSourceSize(source: CanvasImageSource): { width: number; height: number } {
+    if (source instanceof HTMLVideoElement) return { width: source.videoWidth, height: source.videoHeight }
+    if (source instanceof HTMLImageElement) return { width: source.naturalWidth, height: source.naturalHeight }
+    return { width: source.width as number, height: source.height as number }
+  }
+
   singleton = {
     setBackground: (option) => { currentBg = option },
 
     requestSegmentation: (source) => {
       if (!segmenter || pending) return
+      const { width, height } = getSourceSize(source)
+      if (width === 0 || height === 0) return
+      if (sendCanvas.width !== width || sendCanvas.height !== height) {
+        sendCanvas.width = width
+        sendCanvas.height = height
+      }
+      sendCtx.drawImage(source, 0, 0, width, height)
+
       pending = true
-      // send()'s input type is narrower than CanvasImageSource (no
-      // ImageBitmap, which the RTSP path uses) — the underlying graph just
-      // draws whatever it's given, so this is safe at runtime.
-      segmenter.send({ image: source as never }).catch((e) => {
+      segmenter.send({ image: sendCanvas }).catch((e) => {
         pending = false
         console.warn('Virtual background: segmentation send() failed', e)
       })

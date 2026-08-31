@@ -57,6 +57,19 @@ const EAR_VISIBLE_SIZE_FACTOR = 0.56
 const CROWN_OFFSET_FACTOR = 0.45
 const EAR_SPREAD_FACTOR = 0.55
 
+// The crown-derived position above only reads as correct while roughly
+// facing the camera — in profile it's built from a frozen pre-turn
+// earDist/angle combined with the *current*, moving nose, which visibly
+// drifts the ear away from the person's actual head. In profile there's no
+// such ambiguity to design around (only one ear is ever visible, and its
+// landmark is a confident, direct detection rather than the noisy "anchor
+// point" the frontal headband approach was avoiding — see the note at the
+// top of this file), so the visible ear is anchored straight to its own
+// detected landmark instead of the crown point. Lifted slightly along the
+// head's own "up" direction so the art reads as sitting on/above the ear
+// rather than centered on the ear canal itself.
+const PROFILE_EAR_LIFT_FACTOR = 0.15
+
 // Extra rotation on top of head-tilt — applying the same +40° to both ears
 // last time only visibly rotated one of them, since they're mirror-image
 // art: adding the same signed offset to both moves them toward opposite
@@ -149,6 +162,8 @@ function getHeadGeometry(pose: NormalizedLandmarkList, height: number, width: nu
 
   return {
     nose: n,
+    leftEar: le,
+    rightEar: re,
     earDist,
     angle,
     leftVisible: (leftEar.visibility ?? 1) >= EAR_VISIBILITY_MIN,
@@ -248,8 +263,20 @@ export async function createBatEarsAnim(app: PIXI.Application) {
       const angle = (profileTurn && lastGoodAngle !== undefined) ? lastGoodAngle : geo.angle
       const { leftCrown, rightCrown } = crownPointsFrom(geo.nose, earDist, angle)
 
-      leftEar.applyTarget({ x: leftCrown.x, y: leftCrown.y, size: earDist * EAR_VISIBLE_SIZE_FACTOR, angle: angle - EAR_ROTATION_OFFSET })
-      rightEar.applyTarget({ x: rightCrown.x, y: rightCrown.y, size: earDist * EAR_VISIBLE_SIZE_FACTOR, angle: angle + EAR_ROTATION_OFFSET })
+      // "up" direction along the head, same basis crownPointsFrom uses —
+      // needed here too for the profile lift below.
+      const upX = Math.sin(angle)
+      const upY = -Math.cos(angle)
+      const lift = earDist * PROFILE_EAR_LIFT_FACTOR
+      const leftTarget = (profileTurn && geo.leftVisible)
+        ? { x: geo.leftEar.x + upX * lift, y: geo.leftEar.y + upY * lift }
+        : leftCrown
+      const rightTarget = (profileTurn && geo.rightVisible)
+        ? { x: geo.rightEar.x + upX * lift, y: geo.rightEar.y + upY * lift }
+        : rightCrown
+
+      leftEar.applyTarget({ x: leftTarget.x, y: leftTarget.y, size: earDist * EAR_VISIBLE_SIZE_FACTOR, angle: angle - EAR_ROTATION_OFFSET })
+      rightEar.applyTarget({ x: rightTarget.x, y: rightTarget.y, size: earDist * EAR_VISIBLE_SIZE_FACTOR, angle: angle + EAR_ROTATION_OFFSET })
 
       // Hide whichever ear is actually occluded during a profile turn,
       // rather than rendering it collapsed near the visible one/the nose.
