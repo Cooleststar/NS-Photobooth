@@ -25,6 +25,25 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 
 const OWL_MARGIN_B = 0.27
 
+/** How long the owl keeps its perch after the arm heuristic stops finding an
+ * arm, in seconds.
+ *
+ * calculateArmFromPose is strict - it needs elbow AND wrist above 0.5
+ * visibility, the elbow in frame, and the forearm within 30 degrees of
+ * horizontal - so it drops out constantly mid-gesture. Without a grace window
+ * the owl flickers away on every brief miss; that is why the lastCoords
+ * fallback was added in the first place.
+ *
+ * The bug was that the fallback had no expiry, so an owl whose person simply
+ * lowered their arm stayed pinned to a stale perch forever, only leaving when
+ * the person walked out of frame entirely.
+ *
+ * Total time from lowering the arm to the owl being gone is this plus the
+ * shared VITE_ANIM_RETRACK (1s) and VITE_ANIM_FADE (0.3s) - about 1.9s.
+ * Raise this if the owl leaves during normal gesturing; lower it if it
+ * overstays. */
+const ARM_GRACE_SEC = 0.6
+
 /** target coords for owl to land assuming bottom-middle anchor */
 function calculateTarget(
   {
@@ -122,10 +141,26 @@ export async function createOwlAnim(app: PIXI.Application) {
   // person who's still clearly in frame (just not holding their arm in the
   // exact ~horizontal pose calculateArmFromPose requires: mid-gesture,
   // slightly different angle, momentary low landmark confidence) doesn't
-  // make the owl flicker away. Only losing the person's pose entirely
-  // (pose.length === 0) counts as actually gone.
+  // make the owl flicker away. Expires after ARM_GRACE_SEC, which is what
+  // stops a lowered arm from leaving the owl pinned to a stale perch.
   let lastCoords: { x: number; y: number; angle: number; length: number } | undefined
   let lastArm: 'left' | 'right' | undefined
+  /** seconds since the arm heuristic last succeeded */
+  let armLostFor = 0
+
+  /** Forget the remembered perch, so an owl that exits and is re-triggered
+   * later does not fly to wherever the previous person's arm happened to be.
+   *
+   * Deliberately NOT part of initialState(): that is called during setup,
+   * before these `let` bindings exist, and touching them from there throws a
+   * ReferenceError through the temporal dead zone — which silently prevents
+   * the whole animation from being constructed, so the owl never appears at
+   * all. Same trap that drone.ts documents on resetEasing(). */
+  const resetPerch = () => {
+    lastCoords = undefined
+    lastArm = undefined
+    armLostFor = 0
+  }
   const animManager = new AnimStateManager()
   const update = (pose: NormalizedLandmarkList) => {
     // Determining size and location
@@ -141,6 +176,16 @@ export async function createOwlAnim(app: PIXI.Application) {
       owlSize = kf.owlSize.filter(calculateOwlSize(pose, height, width))
       lastCoords = coords
       lastArm = arm
+      armLostFor = 0
+    } else {
+      armLostFor += ticker.deltaMS / 1000
+      if (armLostFor >= ARM_GRACE_SEC) {
+        // Grace spent: stop pretending we still know where the arm is. The
+        // perch is dropped here rather than only on exit so the owl cannot
+        // resume from a stale position if the arm reappears elsewhere.
+        lastCoords = undefined
+        lastArm = undefined
+      }
     }
 
     // console.log(animState, coords)
@@ -160,13 +205,21 @@ export async function createOwlAnim(app: PIXI.Application) {
       landSprite.width =
         owlSize
 
-    animManager.tracking = pose.length > 0
+    // Tracking now means "this person is in frame AND we know where their
+    // arm is (or knew, recently)". It used to mean only the former, so
+    // lowering an arm was not a loss at all and the owl sat frozen on its
+    // last perch until the person left the shot.
+    //
+    // pose.length is still part of it: losing the person entirely should end
+    // the owl immediately, without waiting out the arm grace as well.
+    animManager.tracking = pose.length > 0 && landingCoords !== undefined
     const { time, state } = animManager
 
     // Actual animation logic
     switch (state) {
       case 'exited':
         initialState()
+        resetPerch()
         break
       case 'entering':
         owlContainer.alpha = 1
@@ -222,6 +275,7 @@ export async function createOwlAnim(app: PIXI.Application) {
             // if redetected on next frame, case 'exited' might never get to run
             // hence reset here too
             initialState()
+            resetPerch()
             animManager.transition()
         }
         break
