@@ -43,11 +43,12 @@ const VISIBLE_SIZE_FACTOR = 0.5
 
 /** How far below the nose tip the mustache sits, as a fraction of ear-to-ear
  * distance. The nose landmark (MP-33 index 0) lands at the tip itself, well
- * above the upper lip, so this needs to be a real drop (comparable to
- * sunglasses.ts's EYE_LIFT_FACTOR, not a token nudge) to clear the nose
- * entirely and land on the lip. Was 0.03, which barely moved it off the
- * nose. Tune this if it sits too high/low. */
-const NOSE_DROP_FACTOR = 0.18
+ * above the upper lip, so this needs a real drop (comparable to
+ * sunglasses.ts's EYE_LIFT_FACTOR, not a token nudge) to clear the nose at
+ * all — 0.03 barely moved it. 0.18 then overshot the other way and sat down
+ * on the lip, so this splits the difference and parks it in the gap between
+ * nose and mouth. Tune this if it sits too high/low. */
+const NOSE_DROP_FACTOR = 0.14
 
 // A jump larger than this (in ear-to-ear distances) means this animation slot
 // has been handed to a different person, not that someone moved quickly. Snap
