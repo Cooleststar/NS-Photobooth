@@ -32,7 +32,7 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   mustache: mustacheThumb,
 }
 
-/** side strip of thumbnail buttons for toggling active animations (multiple can
+/** top strip of thumbnail buttons for toggling active animations (multiple can
  * be on at once, all stacked on the same tracked person) without opening settings */
 export function AnimPicker() {
   const current = useStore(selectedGifs)
@@ -44,7 +44,7 @@ export function AnimPicker() {
   if (qrMode) return null
 
   return (
-    <div tw='fixed right-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2'>
+    <div tw='fixed top-3 left-1/2 -translate-x-1/2 z-40 flex flex-row flex-wrap justify-center gap-2 max-w-[95vw]'>
       {Object.entries(GIF_OPTIONS).map(([key, label]) => {
         const option = key as GifOption
         const thumb = THUMBS[option]
