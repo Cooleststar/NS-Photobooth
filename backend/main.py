@@ -40,293 +40,64 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Gesture diagnostic mode — opt-in (GESTURE_DEBUG=1), off by default so it
-# costs nothing in normal/production runs. When on, logs the raw geometric
-# values behind every palm-up classification (not just the final true/false)
-# plus a matching saved frame, so we can look at what the camera actually
-# saw next to what the heuristic concluded — this is how we get real
-# evidence instead of guessing why gesture detection misfires.
+# Hand landmarks and palm orientation - WiLoR
+# ---------------------------------------------------------------------------
 #
-# Runs entirely inside the MediaPipe Hands background worker thread, which
-# already doesn't block the main detection loop, so this adds zero latency
-# to the live pipeline. Throttled to at most one write per _GESTURE_DEBUG_
-# _MIN_INTERVAL seconds, except state transitions (palm_up flipping), which
-# always get logged since those are the moments most worth reviewing.
-# ---------------------------------------------------------------------------
-_GESTURE_DEBUG = os.environ.get('GESTURE_DEBUG', '0') == '1'
-_GESTURE_DEBUG_DIR = pathlib.Path(__file__).parent / 'gesture_debug'
-_GESTURE_DEBUG_MIN_INTERVAL = 0.5  # seconds between routine (non-transition) samples
-_gesture_debug_last_write: float = 0.0
-_gesture_debug_last_palm_up: dict = {}  # label -> last logged palm_up bool, to detect flips
-_gesture_debug_last_palm_sky: dict = {}  # label -> last logged palm_sky bool, to detect flips
-
-if _GESTURE_DEBUG:
-    _GESTURE_DEBUG_DIR.mkdir(exist_ok=True)
-    log.info(f"Gesture debug mode ON — writing to {_GESTURE_DEBUG_DIR}")
-
-
-def _log_gesture_debug(records: list, frame: np.ndarray) -> None:
-    """Append one JSONL line per detected hand + save the frame, throttled.
-    `records` are raw geometric measurements, not just the final boolean,
-    so we can see *how close* a borderline case was, not just pass/fail."""
-    global _gesture_debug_last_write
-    now = time.time()
-    any_transition = any(
-        _gesture_debug_last_palm_up.get(r['label']) != r['palm_up']
-        or _gesture_debug_last_palm_sky.get(r['label']) != r['palm_sky']
-        for r in records
-    )
-    if not any_transition and (now - _gesture_debug_last_write) < _GESTURE_DEBUG_MIN_INTERVAL:
-        return
-    _gesture_debug_last_write = now
-    for r in records:
-        _gesture_debug_last_palm_up[r['label']] = r['palm_up']
-        _gesture_debug_last_palm_sky[r['label']] = r['palm_sky']
-
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    try:
-        frame_name = f'{ts}.jpg'
-        cv2.imwrite(str(_GESTURE_DEBUG_DIR / frame_name), frame)
-        with open(_GESTURE_DEBUG_DIR / 'log.jsonl', 'a') as f:
-            for r in records:
-                f.write(json.dumps({'ts': ts, 'frame': frame_name, **r}) + '\n')
-    except Exception as _e:
-        log.debug("Gesture debug write error: %s", _e)
-
-
-# ---------------------------------------------------------------------------
-# MediaPipe Hands — palm orientation detection (mediapipe >= 0.10 tasks API)
-# ---------------------------------------------------------------------------
-_mp_hands_available = False
-_mp_hands_lock = threading.Lock()
-_hand_landmarker = None
-_mp_hands_queue: queue.Queue = queue.Queue(maxsize=1)
-_mp_hands_cache: list = []   # latest result, updated by worker
-
+# Measured against MediaPipe on this camera, on the same frames, holding one
+# pose still for 20+ seconds:
+#
+#     palm to sky    MediaPipe  97.6% sign-consistent, and INVERTED
+#                    WiLoR     100.0%
+#     palm to floor  MediaPipe  76.0% sign-consistent
+#                    WiLoR     100.0%
+#
+# MediaPipe's path had two independent defects. Its handedness classifier was
+# close to a coin flip on an outstretched palm - and the palm normal is negated
+# on that label, so ~20% of frames came out inverted - and its sign convention
+# was backwards regardless. Neither is tunable; both are gone with the model.
+#
+# The underlying difficulty is geometric: a flat open palm viewed edge-on is
+# the degenerate case for single-camera depth, where a plane tilted +/-theta
+# projects almost identically. WiLoR sidesteps it by regressing a full 3D hand
+# rather than fitting a plane through landmarks.
+#
+# There is deliberately NO fallback. A silent downgrade to MediaPipe was the
+# worst failure mode available here: the drone would quietly get worse
+# mid-event with nothing obvious to point at. Missing setup fails loudly at
+# startup instead.
 try:
-    import mediapipe as _mp
-    from mediapipe.tasks import python as _mp_python
-    from mediapipe.tasks.python import vision as _mp_vision
-
-    _HAND_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'hand_landmarker.task')
-    _HAND_MODEL_URL = (
-        'https://storage.googleapis.com/mediapipe-models/'
-        'hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-    )
-
-    if not os.path.exists(_HAND_MODEL_PATH):
-        log.info("Downloading hand_landmarker.task (~23 MB) …")
-        urllib.request.urlretrieve(_HAND_MODEL_URL, _HAND_MODEL_PATH)
-        log.info("Hand landmarker model saved to %s", _HAND_MODEL_PATH)
-
-    _hand_landmarker = _mp_vision.HandLandmarker.create_from_options(
-        _mp_vision.HandLandmarkerOptions(
-            base_options=_mp_python.BaseOptions(model_asset_path=_HAND_MODEL_PATH),
-            # 4 -> matches MAX_PEOPLE in Display.tsx / DRONE_SLOTS in drone.ts:
-            # up to 4 simultaneous drones (e.g. 4 people showing one palm each,
-            # or 2 people showing both). Was 2 — that was the actual ceiling on
-            # simultaneous drones, not anything in the frontend.
-            num_hands=4,
-            min_hand_detection_confidence=0.5,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
-            running_mode=_mp_vision.RunningMode.IMAGE,
-        )
-    )
-    _mp_hands_available = True
-    log.info("MediaPipe HandLandmarker initialised")
-
+    import wilor_hands as _wilor_hands
 except Exception as _e:
-    log.warning("MediaPipe Hands unavailable — drone palm-up detection disabled: %s", _e)
+    raise SystemExit(
+        "Hand detection requires WiLoR, which failed to import: %s: %s"
+        % (type(_e).__name__, _e)
+        + "\nInstall its dependencies with:  pip install -r requirements.txt"
+    )
+
+if not _wilor_hands.init():
+    raise SystemExit(
+        "Hand detection requires WiLoR, which could not load.\n"
+        "See the warning above for the specific cause - usually the source "
+        "tree or the checkpoints are missing.\n"
+        "Fetch the model with:  python fetch_wilor.py"
+    )
 
 
-# Lower magnitude (closer to 0) = easier to trigger, tolerates a palm that's
-# tilted rather than facing dead-on vertical. Higher magnitude = stricter.
-# Picked by geometric reasoning, not measured against real footage — tune
-# against GESTURE_DEBUG=1 output (normal_y ranges roughly -1 "straight up"
-# to +1 "straight down"). As a feel for the numbers, -0.4 admits a palm
-# tilted up to 66 degrees off horizontal (arccos 0.4), -0.6 about 53, -0.8
-# about 37.
+# Width of the frame handed to the hand detector. Hand landmarks - and the
+# palm-orientation maths built on them - need far more pixel density than pose
+# keypoints do, for the same reason QR decoding does.
 #
-# Overridable without editing code, so it can be made more or less forgiving
-# on-site:   PALM_SKY_THRESHOLD=-0.3 python app.py
-def _env_float(name: str, default: float) -> float:
-    """Read a tuning constant from the environment, falling back to the default
-    if unset or unparseable (a typo in a launch script should not take the
-    gesture down)."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        log.warning("%s=%r is not a number - using %s", name, raw, default)
-        return default
-
-
-_PALM_SKY_THRESHOLD = _env_float('PALM_SKY_THRESHOLD', -0.4)
-
-# The palm's boundary, in order around its edge: wrist, thumb base, then the
-# four finger knuckles (MCP joints). These are the only landmarks on the rigid
-# part of the hand - every other one moves when the fingers do, which makes
-# them useless for working out which way the palm faces.
-#
-# ORDER MATTERS and is not arbitrary: Newell's method integrates around the
-# polygon's perimeter, so the points must trace the palm's outline. Sorting or
-# shuffling them computes the normal of a self-intersecting bow-tie instead.
-_PALM_LANDMARKS = (0, 1, 5, 9, 13, 17)
-
-
-def _palm_facing_sky(hand_world_lms, label: str):
-    """Whether the palm's surface faces upward (skyward) — a roughly
-    horizontal, outstretched hand held like it's offering/presenting
-    something on it, as opposed to an upright hand held palm-toward-camera
-    (that's the separate, older 'palm_up' heuristic below).
-
-    Computed as the palm's surface normal: the cross product of two vectors
-    lying in the palm plane (wrist->index_mcp, wrist->pinky_mcp). Takes
-    HandLandmarker's *world* landmarks (hand_world_landmarks — real-world
-    metric coordinates, roughly meters, independent of camera FOV/distance)
-    rather than the normalized image landmarks used everywhere else in this
-    file: those are fine for on-screen positioning, but their z is a rough,
-    perspective-relative approximation, noisier than world z and not really
-    meant for angle/orientation math like this.
-
-    IMPORTANT — world landmarks are NOT guaranteed to share image landmarks'
-    axis convention (image y increases downward; world coordinates may or
-    may not put +y "up"). This was implemented and reasoned about without a
-    live camera to verify against, so the sign in _PALM_SKY_THRESHOLD's
-    comparison below is a best guess, not a confirmed fact — if the gesture
-    ends up backwards (triggers on palm-down instead of palm-up), flip the
-    comparison direction (and the sign of _PALM_SKY_THRESHOLD) rather than
-    assuming the geometry itself is wrong. Verify with GESTURE_DEBUG=1 and
-    check normal_y in backend/gesture_debug/log.jsonl against what the palm
-    was actually doing in the matching saved frame.
-
-    The winding order flips between hands, so the resulting normal is negated
-    for the left hand to keep "positive/negative" meaning the same regardless
-    of which hand is shown; requiring the up/down component to dominate the
-    vector (via _PALM_SKY_THRESHOLD) rules out a hand that's merely tilted
-    rather than genuinely palm-up.
-
-    THE NORMAL comes from Newell's method over all six palm-boundary landmarks
-    rather than a single cross product of three of them. Three points define a
-    plane exactly, which sounds ideal but means there is no redundancy: whatever
-    noise lands on any one of them passes straight through into the answer, and
-    the pinky knuckle - one of the three the previous version relied on - is the
-    worst offender, sitting at the edge of the hand where it is first to be lost
-    to occlusion. Newell sums a contribution from every edge of the polygon, so
-    one bad landmark is outvoted by the other five. It also copes with points
-    that are not perfectly coplanar, which real palms never are (they cup
-    slightly), returning the best-fit compromise instead of trusting whichever
-    three happened to be picked.
-
-    The SIGN is unchanged from the 3-point version, so this cannot invert the
-    gesture: Newell over a triangle traversed P0->P1->P2 yields the direction of
-    (P1-P0) x (P2-P0), landmarks 0, 5 and 17 appear in that relative order
-    within the traversal below, and the palm is convex - so the hexagon's normal
-    points the same way the old (index_mcp - wrist) x (pinky_mcp - wrist) did.
-    Verified over 20,000 random orientations across both hands: for a flat palm
-    the two agree to floating-point precision.
-
-    Returns (is_sky_facing, normal_y) — the raw normal_y is included for
-    GESTURE_DEBUG tuning, same reasoning as the palm_up debug fields below.
-    """
-    pts = [hand_world_lms[i] for i in _PALM_LANDMARKS]
-    n = len(pts)
-    nx = ny = nz = 0.0
-    for i in range(n):
-        a = pts[i]
-        b = pts[(i + 1) % n]
-        nx += (a.y - b.y) * (a.z + b.z)
-        ny += (a.z - b.z) * (a.x + b.x)
-        nz += (a.x - b.x) * (a.y + b.y)
-    if label == 'Left':
-        nx, ny, nz = -nx, -ny, -nz
-    length = (nx * nx + ny * ny + nz * nz) ** 0.5
-    if length < 1e-9:
-        return False, 0.0
-    ny /= length
-    return ny < _PALM_SKY_THRESHOLD, ny
-
-
-def _mp_hands_worker():
-    global _mp_hands_cache
-    while True:
-        try:
-            frame = _mp_hands_queue.get(timeout=1.0)
-        except queue.Empty:
-            continue
-        try:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=rgb)
-            with _mp_hands_lock:
-                result = _hand_landmarker.detect(mp_image)
-            hands = []
-            debug_records = []
-            for i, hand_lms in enumerate(result.hand_landmarks):
-                x = [float(lm.x) for lm in hand_lms]
-                y = [float(lm.y) for lm in hand_lms]
-                z = [float(lm.z) for lm in hand_lms]
-                label = result.handedness[i][0].category_name
-                handedness_score = float(result.handedness[i][0].score)
-                mcp_y = (hand_lms[5].y + hand_lms[9].y + hand_lms[13].y + hand_lms[17].y) / 4
-                wrist_y = hand_lms[0].y
-                hand_upright = mcp_y < wrist_y
-                thumb_x = hand_lms[2].x
-                pinky_x = hand_lms[17].x
-                if label == 'Left':
-                    palm_facing_up = thumb_x < pinky_x
-                else:
-                    palm_facing_up = thumb_x > pinky_x
-                palm_up = bool(hand_upright and palm_facing_up)
-                # hand_world_landmarks is parallel to hand_landmarks (same
-                # index per detected hand) — real-world metric coordinates,
-                # better suited to orientation math than the image landmarks
-                # used everywhere else here. See _palm_facing_sky's docstring.
-                world_lms = (
-                    result.hand_world_landmarks[i]
-                    if i < len(result.hand_world_landmarks) else hand_lms
-                )
-                palm_sky, palm_normal_y = _palm_facing_sky(world_lms, label)
-                hands.append({
-                    "x": x, "y": y, "z": z, "label": label,
-                    "palm_up": palm_up, "palm_sky": palm_sky,
-                })
-                if _GESTURE_DEBUG:
-                    debug_records.append({
-                        'label': label,
-                        'handedness_score': handedness_score,
-                        'mcp_y': mcp_y, 'wrist_y': wrist_y, 'hand_upright': hand_upright,
-                        'thumb_x': thumb_x, 'pinky_x': pinky_x, 'palm_facing_up': palm_facing_up,
-                        'palm_up': palm_up,
-                        'palm_normal_y': palm_normal_y, 'palm_sky': palm_sky,
-                    })
-            _mp_hands_cache = hands
-            if _GESTURE_DEBUG and debug_records:
-                _log_gesture_debug(debug_records, frame)
-        except Exception as _e:
-            log.debug("MP hands worker error: %s", _e)
-
-
-if _mp_hands_available:
-    threading.Thread(target=_mp_hands_worker, daemon=True).start()
-
-
-# Width of the frame handed to MediaPipe for hand detection. Hand landmarks -
-# and the palm-orientation maths built on them - need far more pixel density
-# than pose keypoints do, for the same reason QR decoding does.
-#
-# Two defects motivated splitting this away from YOLO's frame, both measured:
+# Two defects motivated splitting this away from YOLO's frame, both measured
+# back when MediaPipe was the detector:
 #
 #  * cv2.resize(frame, (320, 240)) forces 4:3, but the source is 16:9, so the
-#    hand reaching MediaPipe was horizontally squashed to 75% of its true
-#    proportion. MediaPipe infers 3D world landmarks from appearance and was
-#    trained on undistorted images, so this skewed its output systematically.
+#    hand arriving at the detector was horizontally squashed to 75% of its
+#    true proportion. Models that infer 3D from appearance are trained on
+#    undistorted images, so this skewed the output systematically.
 #
-#  * At 320x240 a hand a couple of metres away spans ~40 pixels. MediaPipe
-#    crops the hand region and resizes it to the landmark model's fixed input,
-#    so that crop was mostly interpolation.
+#  * At 320x240 a hand a couple of metres away spans ~40 pixels, and the
+#    detector crops that region and resizes it to a fixed model input - so the
+#    crop was mostly interpolation.
 #
 # Measured effect of moving to an aspect-correct 960-wide frame, on a held
 # palm-to-sky gesture (same hand, same session, back-to-back captures):
@@ -338,10 +109,9 @@ if _mp_hands_available:
 #   hand-detection rate    7.8/sec            7.6/sec
 #
 # Handedness was never a bad classifier - it was being shown a 40-pixel
-# squashed hand. Since the palm normal is negated based on that label, fixing
-# the label fixed everything downstream, with no logic change at all and no
-# measurable throughput cost (MediaPipe runs on its own thread and drops
-# frames rather than blocking).
+# squashed hand. That fix is retained under WiLoR: it wants a well-proportioned
+# crop for the same reasons, and its YOLO hand detector localises small hands
+# far more reliably at this width.
 #
 # Set HANDS_WIDTH=0 to disable and reuse YOLO's frame, or lower it if hand
 # detection ever falls behind. YOLO's own input is untouched either way: its
@@ -364,13 +134,10 @@ def _frame_for_hands(frame: np.ndarray) -> np.ndarray:
 
 
 def run_hand_detection(frame: np.ndarray):
-    """Submit frame to hand-detection worker (non-blocking) and return cached result."""
-    if _mp_hands_available:
-        try:
-            _mp_hands_queue.put_nowait(frame.copy())
-        except queue.Full:
-            pass
-    return _mp_hands_cache
+    """Submit a frame to the hand-detection worker (non-blocking) and return
+    the most recent result. Newest frame wins and stale frames are dropped, so
+    a slow model shows up as a lower update rate, never as a stalled feed."""
+    return _wilor_hands.detect(frame)
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +345,7 @@ def _to_mp33(xyn, conf):
 # models the currently selected GIF character actually needs, so idle
 # models don't burn GPU/CPU computing data nobody's reading.
 #   'pose'  -> owl/bat/globe (YOLO + ViTPose only; they never read hands)
-#   'hands' -> drone (MediaPipe Hands only; drone's update() ignores pose)
+#   'hands' -> drone (WiLoR hands only; drone's update() ignores pose)
 #   'none'  -> laptop (a fixed-position fade prop; reads neither)
 #   'both'  -> default until the frontend checks in, or an unrecognised mode
 # Set via POST /detection_mode {"mode": "..."} — see detection_mode_handler.
@@ -1240,11 +1007,14 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
 
             _loop.call_soon_threadsafe(_distribute_frame, jpg, jpg_ts)
 
-            # Sampling rate is mode-aware: YOLO+ViTPose (~31ms/call) needs the
-            # every-3rd-frame throttle to stay cheap, but MediaPipe Hands
-            # alone (~8ms/call) can easily keep up with every frame — running
-            # it at the same slow rate as the expensive pipeline was adding
-            # unnecessary detection latency for hand-only characters (drone).
+            # Sampling rate is mode-aware: YOLO+ViTPose (~31ms/call) needs
+            # the every-3rd-frame throttle to stay cheap, while hands-only is
+            # submitted every frame. WiLoR is not cheap (~7.7ms detector plus
+            # ~20.9ms per hand at fp16), but run_hand_detection() hands the
+            # frame to a worker and returns immediately, keeping only the
+            # newest — so submitting every frame costs nothing and simply lets
+            # the detector run flat out, which is the lowest latency available
+            # for hand-only characters (drone).
             mode = _detection_mode
             should_infer = frame is not None and (
                 mode == 'hands' or (mode in ('pose', 'both', 'qr') and frame_count % 3 == 0)

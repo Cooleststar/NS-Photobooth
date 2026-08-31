@@ -1,1 +1,4 @@
-gesture_debug/
+# Model weights: ~2.5 GB, fetched by fetch_wilor.py. Git keeps every version
+# forever and cannot delta-compress dense binaries, so committing them would be
+# paid for by every clone permanently.
+wilor_models/
