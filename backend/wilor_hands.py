@@ -116,6 +116,14 @@ _device = 'cpu'
 _queue: queue.Queue = queue.Queue(maxsize=1)
 _cache: list = []
 
+# Load state, so the model can be brought up on demand rather than at import.
+# Loading takes several seconds and ~2.5 GB of VRAM, and only two characters
+# (drone, ocfusion) need hands at all - so paying for it at startup taxed every
+# session, including ones that never select them.
+_loading = False
+_load_error: str = ''
+_load_lock = threading.Lock()
+
 
 def _stub_unused_modules():
     """Block the rendering stack before WiLoR's package __init__ imports it.
@@ -170,6 +178,66 @@ def _stub_mano():
             return out
 
     wmod.MANO = _MANOStub
+
+
+def preflight() -> str:
+    """Check everything init() needs is present, WITHOUT importing torch or
+    reading 2.5 GB off disk. Returns an error message, or '' if all is well.
+
+    This exists so startup can still fail loudly on a broken install now that
+    the model itself loads lazily. Discovering missing weights at boot is
+    cheap; discovering them when a guest picks the drone mid-event is not.
+    """
+    if not os.path.isdir(WILOR_DIR):
+        return "WiLoR source not found at %s - set WILOR_DIR" % WILOR_DIR
+    for name in ('wilor_final.ckpt', 'detector.pt'):
+        path = os.path.join(WILOR_CKPT_DIR, name)
+        if not os.path.isfile(path):
+            return ("WiLoR checkpoint missing: %s\n"
+                    "Fetch the weights with:  python backend/fetch_wilor.py" % path)
+    return ''
+
+
+def ensure_loading() -> None:
+    """Start loading the model in the background if it is not already loaded
+    or loading. Returns immediately - callers must tolerate detect() returning
+    [] until the load finishes.
+
+    Idempotent and safe to call on every mode change. A previous failure is
+    NOT retried: it would almost certainly fail the same way, and retrying on
+    every mode switch would stall the request thread repeatedly.
+    """
+    global _loading, _load_error
+    with _load_lock:
+        if _available or _loading or _load_error:
+            return
+        _loading = True
+
+    def _load():
+        global _loading, _load_error
+        try:
+            if not init():
+                _load_error = 'WiLoR failed to load - see the warning above'
+        except Exception as e:
+            _load_error = '%s: %s' % (type(e).__name__, e)
+            log.warning("WiLoR load failed: %s", _load_error)
+        finally:
+            _loading = False
+
+    threading.Thread(target=_load, daemon=True, name='wilor-load').start()
+    log.info("WiLoR loading in background (hands requested)")
+
+
+def status() -> str:
+    """'ready' | 'loading' | 'failed' | 'idle' - for the diagnostic endpoint,
+    and so a stalled load is visible rather than looking like a dead drone."""
+    if _available:
+        return 'ready'
+    if _loading:
+        return 'loading'
+    if _load_error:
+        return 'failed'
+    return 'idle'
 
 
 def init() -> bool:

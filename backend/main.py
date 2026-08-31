@@ -74,13 +74,19 @@ except Exception as _e:
         + "\nInstall its dependencies with:  pip install -r requirements.txt"
     )
 
-if not _wilor_hands.init():
-    raise SystemExit(
-        "Hand detection requires WiLoR, which could not load.\n"
-        "See the warning above for the specific cause - usually the source "
-        "tree or the checkpoints are missing.\n"
-        "Fetch the model with:  python fetch_wilor.py"
-    )
+# The model is NOT loaded here. It takes several seconds and ~2.5 GB of VRAM,
+# and only two characters (drone, ocfusion) read hands at all - so loading at
+# startup taxed every session, including the many that never select them.
+# detection_mode_handler starts the load when a character that needs hands is
+# picked, the same way the other models have a load pause when selected.
+#
+# What DOES happen here is a preflight: a cheap existence check on the source
+# tree and the checkpoints, so a broken install still fails loudly at boot.
+# Finding out the weights are missing when a guest picks the drone mid-event
+# would be much worse than refusing to start.
+_wilor_problem = _wilor_hands.preflight()
+if _wilor_problem:
+    raise SystemExit("Hand detection requires WiLoR.\n" + _wilor_problem)
 
 
 # Width of the frame handed to the hand detector. Hand landmarks - and the
@@ -1380,6 +1386,17 @@ async def detection_mode_handler(request: web.Request) -> web.Response:
             return web.Response(status=400, text='Invalid mode', headers=_CORS)
         _detection_mode = mode
         log.info(f"Detection mode set to: {mode}")
+        # Bring WiLoR up the moment a character that reads hands is selected.
+        # Non-blocking, so this response is not held for the several seconds
+        # the load takes; detect() returns [] until it finishes, which reads
+        # as the drone taking a moment to appear rather than as a hang.
+        #
+        # Deliberately keyed off this POST rather than off _detection_mode
+        # itself: 'both' is also the boot default before the frontend checks
+        # in, and triggering on that would load the model on every start -
+        # exactly what this defers. Reaching here means a real selection.
+        if mode in ('hands', 'both'):
+            _wilor_hands.ensure_loading()
         return web.Response(text='ok', headers=_CORS)
     except Exception as e:
         log.error(f"Detection mode error: {e}")
@@ -1392,6 +1409,10 @@ async def qr_debug_handler(request: web.Request) -> web.Response:
     GET /qr_debug — no auth, dev-only convenience for troubleshooting."""
     return web.json_response({
         'detection_mode': _detection_mode,
+        # 'idle' until a hands character is picked, then 'loading' -> 'ready'.
+        # Surfaced so a stalled or failed load is visible instead of looking
+        # like a drone that simply refuses to appear.
+        'wilor': _wilor_hands.status(),
         'backend': 'pyzbar' if _pyzbar_decode is not None else 'opencv',
         'attempts': _qr_attempt_count,
         'last_attempt_age_seconds': (
