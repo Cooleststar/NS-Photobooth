@@ -45,10 +45,6 @@ accelerate==1.14.0
 # ---------------------------------------------------------------------------
 # WiLoR hand detection (replaced MediaPipe Hands)
 # ---------------------------------------------------------------------------
-# MediaPipe was removed: on this camera its palm orientation was 76-98%
-# sign-consistent on a held pose and its sign convention was inverted, versus
-# 100% for WiLoR. See backend/wilor_hands.py for the measurements.
-#
 # The MANO hand model is deliberately NOT required. It is licensed separately
 # (non-commercial research, registration) and its loader needs chumpy, which
 # cannot install on Python 3.11 - it calls inspect.getargspec, removed in that
