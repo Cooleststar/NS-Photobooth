@@ -7,7 +7,8 @@ An interactive photobooth application for events. It captures photos via a webca
 | Part | Tech | Port |
 |---|---|---|
 | Frontend (`client-ns-photobooth`) | Vite + Preact + PixiJS + TypeScript | 3000 |
-| Backend (`backend`) | Python + MediaPipe + WebSockets | 8081 (HTTP/WS), 9091 (rosbridge) |
+| Backend (`backend`) | Python + WiLoR/Ultralytics + WebSockets | 8081 (HTTP/WS), 9091 (rosbridge) |
+| Gallery (`gallery`) | Vite + Preact | 5173 |
 
 ## Features
 
@@ -35,21 +36,23 @@ That's it. Docker handles Python, Node, and all dependencies inside containers.
 | **fnm** | Latest | Node version manager — installs and switches Node versions |
 | **Node.js** | 18.x | Installed via fnm — newer versions will break the project |
 | **Yarn** | 3.2.3+ | Comes with Node 18 via fnm |
-| **Python** | 3.10.x | Required by the backend — see note below |
-| **pip** | Latest | Comes bundled with Python 3.10+ |
+| **Python** | 3.11.x | Required by the backend — see note below |
+| **pip** | Latest | Comes bundled with Python 3.11+ |
 | **FFmpeg** | Latest | System binary (not a pip package) — required for RTSP camera streaming. `winget install Gyan.FFmpeg`, then reopen your terminal so `ffmpeg` is on `PATH` |
 
-> **Why Python 3.10 specifically:** `numpy==1.24.4` (pinned in `backend/requirements.txt`) has no prebuilt wheel for Python 3.12, and building it from source fails outright — Python 3.12 removed an API (`pkgutil.ImpImporter`) that the old `setuptools`/`pkg_resources` shim bundled in numpy's build process depends on. There's no workaround short of using Python 3.10.
+> **Why Python 3.11 specifically:** that's the version `backend/requirements.txt` is pinned and tested against. Earlier revisions of this project required 3.10 (numpy had no prebuilt wheel for 3.12 under the old pins), but that constraint no longer applies with the current pins — 3.11 is simply what's verified.
 
 Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt` (see step 7 below). A couple of things worth knowing if you're setting this up for the first time:
-- `mediapipe` (used for hand-gesture/drone detection) is a runtime dependency of `backend/main.py` — make sure your `requirements.txt` includes it; if you're working from an older checkout that predates this note, add `mediapipe==0.10.8` manually.
-- Installing `requirements.txt` pulls in **three different OpenCV packages** side-by-side (`opencv-python-headless`, pinned directly, plus `opencv-python` and `opencv-contrib-python`, pulled in transitively by `mediapipe`/`ultralytics`) — they all provide the same `cv2` module. This works in practice (whichever installs last wins in `site-packages`), but if `cv2` ever behaves unexpectedly, this is why.
-- **If you have an NVIDIA GPU, `pip install -r backend/requirements.txt` alone will NOT use it.** `ultralytics` pulls in `torch` with no pinned index, so on Windows `pip` installs the CPU-only build (`torch.cuda.is_available()` returns `False` even with a GPU present) — pose detection (and ViTPose++, see `ENABLE_VITPOSE` in `main.py`) then silently runs on CPU, which is dramatically slower and directly hurts live-feed latency. After the normal install, reinstall `torch`/`torchvision` from the CUDA build explicitly:
-  ```powershell
-  pip uninstall torch torchvision -y
-  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-  ```
-  Verify it worked with `python -c "import torch; print(torch.cuda.is_available())"` — this should print `True`.
+- Hand detection uses **WiLoR**, not MediaPipe (MediaPipe was removed). The WiLoR source is vendored at `backend/wilor_src/`; its model weights (~2.5 GB) are not pip-installable and are not committed to git — fetch them once per machine with `python backend/fetch_wilor.py` (see step 7 below). The MANO hand mesh model is deliberately not required — it's licensed separately and its loader (`chumpy`) doesn't install on modern Python, so that layer is stubbed out; this pipeline never renders a mesh anyway.
+- **If you have an NVIDIA GPU, `pip install -r backend/requirements.txt` alone will NOT use it.** `torch`/`torchvision` are deliberately left unpinned in `requirements.txt` — the correct wheel depends on your CUDA version, and the default PyPI wheel on Windows is CPU-only (`torch.cuda.is_available()` returns `False` even with a GPU present), silently making pose detection (and ViTPose++, see `ENABLE_VITPOSE` in `main.py`) run 20-50x slower. **Install torch FIRST, before the rest of `requirements.txt`:**
+  1. Check your driver's supported CUDA version: `nvidia-smi` (top-right of the output, e.g. `CUDA Version: 12.6`).
+  2. Pick the newest `cuXXX` PyTorch index your driver supports (e.g. CUDA 12.6 → `cu124`; CUDA 12.2 → `cu118`) and install:
+     ```powershell
+     pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+     ```
+  3. Verify with `python -c "import torch; print(torch.cuda.is_available())"` — this should print `True`.
+
+  Then run `pip install -r backend/requirements.txt` as normal — it will see torch already satisfied and won't overwrite it with a CPU build.
 
   Docker users aren't automatically better off here: on Linux, PyPI's plain `torch` wheel *is* the CUDA-enabled build (unlike Windows), so the backend image's `torch` is already CUDA-capable — but `docker-compose.yml` has no GPU device reservation configured (no `deploy.resources.reservations.devices`), so the container has no access to the host GPU regardless. `torch.cuda.is_available()` returns `False` inside the container too unless you add a GPU reservation to the `backend` service and have Docker Desktop's GPU support enabled.
 - **Once CUDA is working, the very first startup can hang for a very long time (10+ minutes) with the camera showing nothing.** `main.py` auto-enables ViTPose++ (a ~900MB Hugging Face model) whenever a GPU is detected (`ENABLE_VITPOSE` defaults to on when `torch.cuda.is_available()`). Loading it calls `from_pretrained()`, which re-validates every file over the network against Hugging Face **on every single startup**, even once the model is fully cached locally — and without an `HF_TOKEN`, those requests are rate-limited and can take many minutes. This blocks the entire backend from binding its ports (RTSP/camera included) until it finishes, which looks exactly like a dead camera feed. Once the model has fully downloaded and cached once, skip the revalidation on every future run:
@@ -129,18 +132,19 @@ If not found:
 npm install -g yarn
 ```
 
-### 3. Install Python 3.10
-
-1. Download the **Windows installer (64-bit)** from https://www.python.org/downloads/release/python-31011/
-2. **Check "Add Python to PATH"** before clicking Install
-3. Click **Install Now**
-4. Close and reopen PowerShell, then verify:
+### 3. Install Python 3.11
 
 ```powershell
-python --version
+winget install --id Python.Python.3.11 -e --source winget
 ```
 
-> Python 3.10 specifically is required — other versions (3.11, 3.12) may cause compatibility issues with MediaPipe (and will hard-fail installing `numpy==1.24.4` — see note above).
+Close and reopen PowerShell, then verify:
+
+```powershell
+py -3.11 --version
+```
+
+> Python 3.11 specifically is required — see note above. If you already have other Python versions installed (e.g. 3.10, 3.12), use the `py -3.11` launcher (as in step 7) to make sure the venv is created with the right one.
 
 ### 4. Install FFmpeg
 
@@ -179,17 +183,30 @@ cd ../..
 
 > **Required every time `client-ns-photobooth/.yarnrc.yml` or `yarn.lock` changes**, not just on first setup — `app.py` (below) starts the frontend with `yarn dev` directly and never runs `yarn install` itself, so a stale `node_modules`/Yarn state will make `localhost:3000` fail to boot with `Usage Error: Couldn't find the node_modules state file`, even if you'd already run this before. In particular, this project switched from Yarn's PnP linker to the classic `node_modules` linker (`nodeLinker: node-modules` in `.yarnrc.yml`) — if you're pulling into a checkout that predates that change, you must re-run `yarn install` here or the frontend won't start.
 
+There is a second, separate frontend for browsing/downloading saved photos after an event:
+
+```powershell
+cd photobooth/gallery
+yarn install
+cd ../..
+```
+
+> Same reasoning as above — `app.py` also starts `gallery` with `yarn dev` directly, with no install step of its own. `gallery` pins its own Yarn version via `packageManager` in `gallery/package.json` (`yarn@4.16.0`, vs. `3.2.3+` for `client-ns-photobooth`) — Corepack switches automatically per-directory, so no extra setup is needed for that, just run `yarn install` from inside `gallery/`.
+
 ### 7. Run the App
 
 ```powershell
 cd photobooth
-python -m venv venv
-venv\Scripts\Activate
+py -3.11 -m venv backend/venv
+backend\venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
+python backend/fetch_wilor.py
 python app.py
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+> `fetch_wilor.py` downloads the WiLoR model weights (~2.5 GB) into `backend/wilor_models/` — only needed once per machine; it skips files that are already present, so it's safe to re-run.
+
+`app.py` starts all three services (backend, frontend, gallery) together. Open [http://localhost:3000](http://localhost:3000) for the booth itself, or [http://localhost:5173](http://localhost:5173) for the photo gallery.
 
 ---
 
