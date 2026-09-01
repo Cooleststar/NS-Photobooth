@@ -114,7 +114,7 @@ def main():
 
     print()
     if ok:
-        print('Done. Start the app normally:  python app.py')
+        print('Done. Start the app normally:  python main.py')
     else:
         print('Some files are missing - the backend will refuse to start.')
         print('If both sources are unreachable, restore from an archived copy.')

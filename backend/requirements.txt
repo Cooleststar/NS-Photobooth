@@ -16,9 +16,15 @@
 # are CPU-only - installing those silently gives you a backend that runs, just
 # 20-50x slower, which is a miserable thing to debug at an event.
 #
-# This machine runs torch 2.6.0+cu124 / torchvision 0.21.0+cu124 on CUDA 12.4:
+# This machine's driver (537.70) only advertises CUDA 12.2 support (check with
+# `nvidia-smi`, not a guess) - a cu124 wheel needs a driver built against
+# CUDA >=12.4, so it needs cu118 instead, the newest variant this driver
+# actually supports. Found running CPU-only torch once already (cause
+# unknown - possibly a plain `pip install torch` with no index at all, which
+# defaults to PyPI's CPU wheel) - re-verified working here as of 2026-09-01:
+# torch 2.6.0+cu118 / torchvision 0.21.0+cu118.
 #
-#     pip install torch==2.6.0 torchvision==0.21.0 #         --index-url https://download.pytorch.org/whl/cu124
+#     pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu118
 #
 # Check it took with:  python -c "import torch; print(torch.cuda.is_available())"
 
