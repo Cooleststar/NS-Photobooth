@@ -3,7 +3,7 @@ import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
-import { calculateArmFromPose, convertPoint } from '../api/nicepipe/mpPose'
+import { calculateArmFromPose } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
 
 import owlIdleGif from '../assets/owl_anim/owl_idle_new.gif'
@@ -68,18 +68,10 @@ function calculateTarget(
   }
 }
 
-function calculateOwlSize(
-  pose: NormalizedLandmarkList,
-  height: number,
-  width: number,
-) {
-  //owl_size = Math.max(100, coords ? coords.length * 1.2 : owl_size)
-  const leftEar = pose[7]
-  const rightEar = pose[8]
-  const x1 = convertPoint(leftEar, height, width).x
-  const x2 = convertPoint(rightEar, height, width).x
-  return Math.max(300, Math.abs(x2 - x1) * 3)
-}
+// Was scaled off ear-to-ear distance (min 300, roughly earDist * 3) so the
+// owl grew/shrunk with how close the person stood to the camera. Fixed per
+// feedback — tune this if the owl reads too big/small on your setup.
+const OWL_FIXED_SIZE = 550
 
 /* TODO: should a ref really be used for the pose?
  * using context would make the function impure
@@ -128,7 +120,6 @@ export async function createOwlAnim(app: PIXI.Application) {
     y: new KalmanFilter(KF_PARAMS),
     length: new KalmanFilter(KF_PARAMS),
     angle: new KalmanFilter(KF_PARAMS),
-    owlSize: new KalmanFilter(KF_PARAMS),
   }
 
   // NOTE: last fly loop included in landing animation
@@ -136,7 +127,7 @@ export async function createOwlAnim(app: PIXI.Application) {
   const toLandTime = (flySprite.duration * ANIM.FLY_LOOPS) / 1000
   /** time in seconds till idle animation */
   const toIdleTime = toLandTime + landSprite.duration / 1000
-  let owlSize = 100
+  const owlSize = OWL_FIXED_SIZE
   // Last landing spot the arm heuristic actually found — kept around so a
   // person who's still clearly in frame (just not holding their arm in the
   // exact ~horizontal pose calculateArmFromPose requires: mid-gesture,
@@ -172,8 +163,6 @@ export async function createOwlAnim(app: PIXI.Application) {
         angle: kf.angle.filter(coords.angle),
         length: kf.length.filter(coords.length),
       }
-      // adjust size only if pose detected
-      owlSize = kf.owlSize.filter(calculateOwlSize(pose, height, width))
       lastCoords = coords
       lastArm = arm
       armLostFor = 0

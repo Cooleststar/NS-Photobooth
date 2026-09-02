@@ -207,6 +207,69 @@ def _box_iou(a, b) -> float:
     union = area_a + area_b - inter
     return float(inter / union) if union > 0 else 0.0
 
+
+def _box_overlap_ratio(a, b) -> float:
+    """Intersection area over the SMALLER of the two boxes' areas, not the
+    union like _box_iou. IoU is blind to containment: a small box sitting
+    entirely inside a big one can score near 0 on IoU (the big box's area
+    dominates the union) while still being 100% overlapped. That's exactly
+    the shape of the duplicate-detection bug this is for — close/large
+    people occasionally get a second, differently-sized box from the pose
+    model that YOLO's own NMS (iou=0.45 in run_pose_detection) doesn't
+    catch because the two boxes' IoU stays under its threshold even though
+    one is basically sitting inside the other."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    smaller = min(area_a, area_b)
+    return float(inter / smaller) if smaller > 0 else 0.0
+
+
+# How much one detection's box has to sit inside another's (see
+# _box_overlap_ratio) before they're treated as the same physical person
+# seen twice, rather than two people who happen to be standing close
+# together. Duplicate detections of a close/large person tend to overlap
+# almost completely (0.8+); two distinct people standing shoulder to
+# shoulder still each keep most of their own box to themselves.
+_DUPLICATE_OVERLAP_THRESH = 0.75
+
+
+def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
+    """Indices (into boxes_xyxy) to keep after dropping near-duplicate
+    detections of the same physical person — the lower-confidence box of
+    any pair overlapping past _DUPLICATE_OVERLAP_THRESH is dropped.
+
+    Symptom this fixes: with multi-person tracking on, a person close/large
+    enough in frame can occasionally get detected twice in one frame under
+    two different track IDs (see the comment on _box_overlap_ratio for why
+    YOLO's own NMS doesn't already catch it). Each ID looks like a distinct
+    person downstream, so every multi-person character assigns it its own
+    slot — which is why e.g. several owls have been seen landing on the
+    same one person's arm at once instead of on separate people."""
+    n = len(boxes_xyxy)
+    order = keep_indices if keep_indices is not None else list(range(n))
+    dropped = set()
+    # Highest confidence first, so when a pair overlaps, the box being
+    # compared against is always the more-trusted one of the two.
+    by_conf = sorted(order, key=lambda i: -box_conf[i])
+    for a_pos in range(len(by_conf)):
+        i = by_conf[a_pos]
+        if i in dropped:
+            continue
+        for b_pos in range(a_pos + 1, len(by_conf)):
+            j = by_conf[b_pos]
+            if j in dropped:
+                continue
+            if _box_overlap_ratio(boxes_xyxy[i], boxes_xyxy[j]) >= _DUPLICATE_OVERLAP_THRESH:
+                dropped.add(j)
+    return [i for i in order if i not in dropped]
+
+
 if not _ENABLE_VITPOSE:
     log.info("ViTPose++ disabled — set ENABLE_VITPOSE=1 to re-enable (GPU recommended)")
 elif _transformers_available:
@@ -616,15 +679,28 @@ def run_pose_detection(
                 # never collide with real ones.
                 ids = [-(i + 1) for i in range(len(kps_xyn))]
 
-            # Single-target: keep only highest-confidence detection
-            if not _multi_target and len(kps_xyn) > 1:
+            if len(kps_xyn) > 1:
                 box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
                             else np.ones(len(kps_xyn)))
-                best     = int(np.argmax(box_conf))
-                kps_xyn  = kps_xyn[best:best + 1]
-                kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
-                ids      = [ids[best]]
-                boxes_xyxy = boxes_xyxy[best:best + 1]
+
+                if not _multi_target:
+                    # Single-target: keep only highest-confidence detection
+                    best     = int(np.argmax(box_conf))
+                    kps_xyn  = kps_xyn[best:best + 1]
+                    kps_conf = kps_conf[best:best + 1] if kps_conf is not None else None
+                    ids      = [ids[best]]
+                    boxes_xyxy = boxes_xyxy[best:best + 1]
+                else:
+                    # Multi-target: drop near-duplicate detections of the same
+                    # physical person (see _dedupe_detections) before anything
+                    # downstream gets a chance to hand each one its own
+                    # animation slot.
+                    keep = _dedupe_detections(boxes_xyxy, box_conf)
+                    if len(keep) != len(kps_xyn):
+                        kps_xyn    = kps_xyn[keep]
+                        kps_conf   = kps_conf[keep] if kps_conf is not None else None
+                        ids        = [ids[i] for i in keep]
+                        boxes_xyxy = boxes_xyxy[keep]
 
             # Submit frame to ViTPose++ worker (non-blocking: drops if busy)
             if _vitpose_model is not None:

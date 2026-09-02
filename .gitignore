@@ -46,7 +46,3 @@ __pycache__/
 
 # Generated photobooth gallery (QR/photo-save path)
 /photos/
-
-# Local station config - contains camera credentials.
-# Copy config.example.json to config.json and fill in your own values.
-/config.json

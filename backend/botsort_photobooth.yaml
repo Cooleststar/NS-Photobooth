@@ -1,6 +1,7 @@
 # BoT-SORT tuned for the photobooth's close-range, multi-person case.
 # Copied from ultralytics' botsort.yaml (8.4.90) so the schema matches the
-# installed version exactly; only the two values below differ from stock.
+# installed version exactly; only track_buffer, match_thresh, and with_reid
+# differ from stock (each explained at its own line below).
 #
 # Why: when someone stands close enough to fill much of the frame, their box
 # grows fast between frames and detection gets marginal at the edges. The
@@ -29,8 +30,10 @@ fuse_score: True
 gmc_method: sparseOptFlow
 proximity_thresh: 0.5
 appearance_thresh: 0.8
-# ReID would help further with identity swaps but needs extra compute; the
-# codebase deliberately keeps the CPU path light, so it stays off. Flip to
-# True (model: auto reuses detector features) if swaps persist on a GPU box.
-with_reid: False
+# ReID helps further with identity swaps/churn (the "id churn -> duplicate
+# owl" bug — see the file header) but needs extra compute, so it stayed off
+# while this box ran CPU-only torch. Flipped on now that it runs
+# torch+cu118 on a real GPU (see backend/requirements.txt) — re-disable if
+# it turns out to add noticeable per-frame latency on this hardware.
+with_reid: True
 model: auto

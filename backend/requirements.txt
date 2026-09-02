@@ -1,13 +1,40 @@
-# Backend dependencies. Requires Python 3.11 (numpy, scipy and scikit-image
-# below all declare requires-python >=3.11). Verified on 3.11.0.
+# Backend dependencies. Python 3.11.
 #
-#     pip install -r backend/requirements.txt
+# Versions below are the ones this backend is actually running and verified
+# against, not aspirational minimums. The previous file had drifted badly - it
+# pinned numpy==1.24.4 while the working venv had 2.4.6, a major version and
+# an ABI break apart - so a clean `pip install -r requirements.txt` built an
+# environment meaningfully different from the tested one.
 #
-# torch is NOT listed here on purpose - the right wheel depends on your CUDA
-# version, and PyPI's default is CPU-only. Install it first, separately. Setup
-# steps, including the model-weight download, are in the README.
+#     pip install -r requirements.txt
+#
+# ---------------------------------------------------------------------------
+# PyTorch - install FIRST, and NOT from PyPI
+# ---------------------------------------------------------------------------
+# torch/torchvision are deliberately not pinned below. The wheel that belongs
+# on a given machine depends on its CUDA version, and the default PyPI wheels
+# are CPU-only - installing those silently gives you a backend that runs, just
+# 20-50x slower, which is a miserable thing to debug at an event.
+#
+# Pick the wheel index by what your driver actually supports - check with
+# `nvidia-smi` (its "CUDA Version" field is the max the driver was built
+# against), not a guess: a cu124 wheel needs a driver built against CUDA
+# >=12.4, so a driver that only advertises 12.2 needs cu118 instead, the
+# newest variant it actually supports. Found running CPU-only torch once
+# already (cause unknown - possibly a plain `pip install torch` with no index
+# at all, which defaults to PyPI's CPU wheel), so always verify explicitly
+# after installing. Two machines re-verified working as of 2026-09-01:
+#   - driver 537.70 (CUDA 12.2 max)  -> torch 2.6.0+cu118 / torchvision 0.21.0+cu118
+#   - driver 560.70 (CUDA 12.6 max)  -> torch 2.6.0+cu124 / torchvision 0.21.0+cu124
+#
+#     pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu118
+#     (swap cu118 for cu124, etc., to match your driver)
+#
+# Check it took with:  python -c "import torch; print(torch.cuda.is_available())"
 
-# --- vision pipeline --------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Vision pipeline
+# ---------------------------------------------------------------------------
 ultralytics==8.4.90
 opencv-python==4.11.0.86
 numpy==2.4.6
@@ -15,12 +42,21 @@ scipy==1.17.1
 Pillow==12.3.0
 lap==0.5.13
 
-# --- ViTPose++ keypoint refinement -----------------------------------------
+# ViTPose++ keypoint refinement
 transformers==5.14.1
 accelerate==1.14.0
 
-# --- WiLoR hand detection ---------------------------------------------------
-# Weights are not pip-installable: python backend/fetch_wilor.py
+# ---------------------------------------------------------------------------
+# WiLoR hand detection (replaced MediaPipe Hands)
+# ---------------------------------------------------------------------------
+# The MANO hand model is deliberately NOT required. It is licensed separately
+# (non-commercial research, registration) and its loader needs chumpy, which
+# cannot install on Python 3.11 - it calls inspect.getargspec, removed in that
+# version. MANO only converts model parameters into a mesh, which this
+# pipeline never renders, so the layer is stubbed out instead.
+#
+# The model weights are not pip-installable. Fetch them once per machine:
+#     python backend/fetch_wilor.py
 timm==1.0.28
 einops==0.8.2
 smplx==0.1.28
@@ -29,12 +65,20 @@ yacs==0.1.8
 scikit-image==0.26.0
 dill==0.4.1
 
-# --- web / IO ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Web / IO
+# ---------------------------------------------------------------------------
 websockets==11.0.3
 aiohttp==3.9.3
 requests==2.34.2
 
-# --- optional ---------------------------------------------------------------
-# Better QR decoding at distance, but needs the zbar DLL on Windows. main.py
-# falls back to OpenCV's detector when absent.
+# ---------------------------------------------------------------------------
+# Optional
+# ---------------------------------------------------------------------------
+# pyzbar decodes small, angled and partially-blurred QR codes noticeably
+# better than OpenCV's built-in detector, but it needs the zbar DLL, which is
+# not always present on Windows. main.py detects it at import and falls back
+# to OpenCV, so this is safe to skip - and is currently NOT installed here,
+# meaning QR mode is running on the weaker detector. Install it if QR
+# recognition at distance matters.
 # pyzbar==0.1.9
