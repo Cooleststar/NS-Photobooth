@@ -197,8 +197,8 @@ cd ../..
 
 ```powershell
 cd photobooth
-py -3.11 -m venv backend/venv
-backend\venv\Scripts\Activate.ps1
+py -3.11 -m venv venv
+venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 python backend/fetch_wilor.py
 python app.py
