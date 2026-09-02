@@ -44,5 +44,8 @@ backend/photos/
 __pycache__/
 *.pyc
 
+# Auto-downloaded Ultralytics YOLO weights (re-fetched on first run)
+*.pt
+
 # Generated photobooth gallery (QR/photo-save path)
 /photos/
