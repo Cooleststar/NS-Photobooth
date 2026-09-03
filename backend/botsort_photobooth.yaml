@@ -31,9 +31,27 @@ gmc_method: sparseOptFlow
 proximity_thresh: 0.5
 appearance_thresh: 0.8
 # ReID helps further with identity swaps/churn (the "id churn -> duplicate
-# owl" bug — see the file header) but needs extra compute, so it stayed off
-# while this box ran CPU-only torch. Flipped on now that it runs
-# torch+cu118 on a real GPU (see backend/requirements.txt) — re-disable if
-# it turns out to add noticeable per-frame latency on this hardware.
-with_reid: True
+# owl" bug — see the file header) but it is not free, and it was turned back
+# off after measuring rather than reasoning.
+#
+# Measured on this machine, 3 people in frame, median over 60 calls:
+#
+#     with_reid: False   11.0 ms
+#     with_reid: True    17.0 ms     (+55%)
+#
+# The cost is per detected person - on an empty frame the two are identical
+# (12.0 vs 12.3 ms) - so it grows with exactly the group sizes this booth is
+# for. And it lands badly: YOLO runs SYNCHRONOUSLY under _yolo_lock in
+# run_pose_detection, unlike WiLoR which hands frames to a worker and drops
+# stale ones. Time added here delays the whole pipeline, not just one model's
+# update rate.
+#
+# Note `model: auto` does NOT reuse the detector's features, despite what the
+# previous comment here claimed - it downloads yolo26n-cls.pt and runs a
+# separate classification network over every box. That is where the cost is.
+#
+# track_buffer: 90 and match_thresh: 0.9 above were already addressing identity
+# churn. Turn this back on only if swaps demonstrably persist with those in
+# place, and re-measure with a real group when you do.
+with_reid: False
 model: auto
