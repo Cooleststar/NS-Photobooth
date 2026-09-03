@@ -1,12 +1,7 @@
 import tw from 'twin.macro'
 import { useStore } from '@nanostores/preact'
-import { GIF_OPTIONS, qrModeEnabled, selectedGifs } from '../store'
+import { GIF_OPTIONS, MAX_SELECTED, canSelect, qrModeEnabled, selectedGifs } from '../store'
 import ocfusionThumb from '../assets/OC_Fusion/OC_FUSION.png'
-
-// Kept in sync with AnimPicker's own MAX_SELECTED — both pickers toggle the
-// same selectedGifs list, so the limit has to agree or one picker could
-// allow a selection the other would refuse.
-const MAX_SELECTED = 5
 
 const OPTION = 'ocfusion' as const
 const LABEL = GIF_OPTIONS[OPTION]
@@ -21,7 +16,10 @@ export function OcFusionPicker() {
   if (qrMode) return null
 
   const active = current.includes(OPTION)
-  const atLimit = !active && current.length >= MAX_SELECTED
+  // Shared with every other picker via the store, so no two of them can
+  // disagree about what is selectable. OC Fusion is in no exclusive group
+  // today, but going through canSelect means it stays correct if that changes.
+  const atLimit = !canSelect(current, OPTION)
 
   return (
     <div tw='fixed bottom-3 right-3 z-40'>
@@ -31,7 +29,7 @@ export function OcFusionPicker() {
         onClick={() => {
           if (current.includes(OPTION)) {
             selectedGifs.set(current.filter((o) => o !== OPTION))
-          } else if (current.length < MAX_SELECTED) {
+          } else if (canSelect(current, OPTION)) {
             selectedGifs.set([...current, OPTION])
           }
         }}

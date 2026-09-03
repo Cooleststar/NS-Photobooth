@@ -1,6 +1,14 @@
 import tw from 'twin.macro'
 import { useStore } from '@nanostores/preact'
-import { GIF_OPTIONS, GifOption, qrModeEnabled, selectedGifs } from '../store'
+import {
+  GIF_OPTIONS,
+  GifOption,
+  MAX_SELECTED,
+  canSelect,
+  conflictingWith,
+  qrModeEnabled,
+  selectedGifs,
+} from '../store'
 import owlThumb from '../assets/owl_anim/owl_idle_new.gif'
 import batThumb from '../assets/Bat_anim/Bat_rest.png'
 import globeThumb from '../assets/globe_anim/globe.gif'
@@ -12,11 +20,6 @@ import batEarsThumb from '../assets/batears/batearsicon.png'
 import clownWigNoseThumb from '../assets/ClownWigNose/ClownWig.webp'
 import sunglassesThumb from '../assets/Sunglasses/Sunglasses.png'
 import mustacheThumb from '../assets/Mustache/mustache.png'
-
-// How many characters can be selected at once — past this, remaining
-// thumbnails are disabled rather than silently ignoring clicks, so it's
-// clear the limit was hit rather than the button being broken.
-const MAX_SELECTED = 5
 
 const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,
@@ -50,18 +53,26 @@ export function AnimPicker() {
         const option = key as GifOption
         const thumb = THUMBS[option]
         const active = option === 'none' ? current.length === 0 : current.includes(option)
-        const atLimit = option !== 'none' && !active && current.length >= MAX_SELECTED
+        // 'none' is a clear-all, never itself selectable, so it is exempt.
+        const blocked = option !== 'none' && !canSelect(current, option)
+        // Say WHICH rule blocked it: a greyed-out button with no explanation
+        // reads as broken. Conflicts are named, since "limit reached" would be
+        // actively misleading when only two characters are on.
+        const clash = option === 'none' ? undefined : conflictingWith(current, option)
+        const why = clash
+          ? `${label} (cannot be used with ${GIF_OPTIONS[clash]})`
+          : `${label} (limit of ${MAX_SELECTED} reached)`
         return (
           <button
             key={option}
-            title={atLimit ? `${label} (limit of ${MAX_SELECTED} reached)` : label}
-            disabled={atLimit}
+            title={blocked ? why : label}
+            disabled={blocked}
             onClick={() => {
               if (option === 'none') {
                 selectedGifs.set([])
               } else if (current.includes(option)) {
                 selectedGifs.set(current.filter((o) => o !== option))
-              } else if (current.length < MAX_SELECTED) {
+              } else if (canSelect(current, option)) {
                 selectedGifs.set([...current, option])
               }
             }}

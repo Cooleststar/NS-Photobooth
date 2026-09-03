@@ -50,6 +50,66 @@ export const selectedGifs = persistentAtom<GifOption[]>('selectedGifs', ['owl'],
   const cleaned = current.filter((g) => validOptions.has(g))
   if (cleaned.length !== current.length) selectedGifs.set(cleaned)
 }
+/** How many characters can be selected at once. Lives here rather than in a
+ * picker because three separate components write selectedGifs (AnimPicker,
+ * OcFusionPicker, the Settings dropdown) and a per-component copy drifts —
+ * this constant was already duplicated across two of them, and Settings
+ * enforced no limit at all. */
+export const MAX_SELECTED = 5
+
+/** Sets of characters that cannot be active together.
+ *
+ * owl + bat: both perch on the forearm, between elbow and wrist, on the same
+ * tracked arm — see calculateArmFromPose in api/nicepipe/mpPose. Selecting
+ * both puts two creatures in one spot, overlapping and fighting for the same
+ * few pixels rather than reading as two characters.
+ *
+ * Add further groups here; nothing else needs changing. */
+export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
+  ['owl', 'bat'],
+]
+
+/** Which already-selected option, if any, blocks `option` from being added.
+ * Returns undefined when the selection is allowed. Callers use this both to
+ * disable the control and to explain why in its tooltip — a disabled button
+ * with no reason reads as broken. */
+export function conflictingWith(
+  current: readonly GifOption[],
+  option: GifOption,
+): GifOption | undefined {
+  for (const group of EXCLUSIVE_GROUPS) {
+    if (!group.includes(option)) continue
+    const clash = group.find((o) => o !== option && current.includes(o))
+    if (clash) return clash
+  }
+  return undefined
+}
+
+/** Whether `option` can be added to `current`: under the count limit and not
+ * conflicting. Already-selected options always pass, so deselecting is never
+ * blocked. */
+export function canSelect(
+  current: readonly GifOption[],
+  option: GifOption,
+): boolean {
+  if (current.includes(option)) return true
+  if (current.length >= MAX_SELECTED) return false
+  return conflictingWith(current, option) === undefined
+}
+
+// Self-heal, same reasoning as the GIF_OPTIONS cleanup above: a browser can
+// hold a persisted selection made before a rule existed — owl and bat both on,
+// from before they became mutually exclusive. Drop the later member rather
+// than leaving an impossible state that the UI can express but not produce.
+{
+  const current = selectedGifs.get()
+  const kept: GifOption[] = []
+  for (const option of current) {
+    if (conflictingWith(kept, option) === undefined) kept.push(option)
+  }
+  if (kept.length !== current.length) selectedGifs.set(kept)
+}
+
 export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
 

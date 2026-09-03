@@ -30,6 +30,9 @@ import {
   qrModeEnabled,
   router,
   selectedGifs,
+  MAX_SELECTED,
+  canSelect,
+  conflictingWith,
   textureCache,
 } from '../store'
 
@@ -101,6 +104,8 @@ function AnimMultiSelect() {
           {options.map(([key, label]) => {
             const option = key as GifOption
             const checked = gifOptions.includes(option)
+            const blocked = !canSelect(gifOptions, option)
+            const clash = conflictingWith(gifOptions, option)
             return (
               <label
                 key={key}
@@ -109,6 +114,10 @@ function AnimMultiSelect() {
                 <input
                   type='checkbox'
                   checked={checked}
+                  // This dropdown previously enforced neither the count limit
+                  // nor exclusivity, so it could produce selections the
+                  // thumbnail pickers refuse to make. Same shared rule now.
+                  disabled={blocked}
                   onChange={() =>
                     selectedGifs.set(
                       checked
@@ -118,6 +127,13 @@ function AnimMultiSelect() {
                   }
                 />
                 {label}
+                {blocked && (
+                  <span tw='text-xs text-gray-500'>
+                    {clash
+                      ? `— not with ${GIF_OPTIONS[clash]}`
+                      : `— limit of ${MAX_SELECTED}`}
+                  </span>
+                )}
               </label>
             )
           })}
