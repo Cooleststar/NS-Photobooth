@@ -45,7 +45,8 @@ export function AnimPicker() {
 
   return (
     <div tw='fixed top-3 left-1/2 -translate-x-1/2 z-40 flex flex-row flex-wrap justify-center gap-2 max-w-[95vw]'>
-      {Object.entries(GIF_OPTIONS).map(([key, label]) => {
+      {/* OC Fusion has its own standalone picker (OcFusionPicker, bottom-right) — skip it here. */}
+      {Object.entries(GIF_OPTIONS).filter(([key]) => key !== 'ocfusion').map(([key, label]) => {
         const option = key as GifOption
         const thumb = THUMBS[option]
         const active = option === 'none' ? current.length === 0 : current.includes(option)

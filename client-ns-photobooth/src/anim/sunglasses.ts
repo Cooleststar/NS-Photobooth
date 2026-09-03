@@ -17,20 +17,21 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 
 // ---------------------------------------------------------------------------
 // Art geometry — measured from Sunglasses.png's alpha channel, not guessed.
-// 640x255 pixel-art frames, front-facing and bbox-centred (content spans x
-// 0.102..0.898, y 0.282..0.737 — centre sits at 0.500, 0.510), so a plain
-// centre anchor lines the frame up with the face without needing a custom
-// anchor point the way the wig/ear props do.
+// 494x505 canvas; the frame spans the full width edge-to-edge (arms are
+// cropped right at the image border, no side padding) but only a thin
+// horizontal band vertically (content y 0.398..0.592). Content is
+// bbox-centred at (0.499, 0.496), so a plain centre anchor still lines the
+// frame up with the face without needing a custom anchor point the way the
+// wig/ear props do.
 //
-// Note the aspect: this art is 2.51:1 where the previous photo-real pair was
-// 2:1, so the frames render proportionally shorter for the same width. That
-// falls out of the texture aspect automatically below — nothing to tune.
+// The height PIXI renders comes out of the texture's own aspect ratio
+// (~1:1) automatically below — nothing to tune there.
 // ---------------------------------------------------------------------------
 
 /** How much of the image's width the visible frame occupies. Used to convert
  * a *desired visible width* (relative to ear-to-ear distance) into the full
  * sprite width PIXI needs to be told. */
-const CONTENT_WIDTH_FRACTION = 0.797
+const CONTENT_WIDTH_FRACTION = 1.0
 
 /** Desired *visible* width of the glasses, relative to ear-to-ear distance.
  * Real frames span most of the face's width at eye level, which is a touch

@@ -33,40 +33,61 @@ const FOREARM_LAND_RATIO = 0.75
 // the bat only lands/stays on a fully extended arm; bending the elbow past
 // this makes getPalmTarget return undefined, which reads as tracking lost
 // and sends the bat flying off (see the 'lost'/'exiting' states below).
-const ARM_STRAIGHT_MAX_DEVIATION_DEG = 25
+// Widened 25 -> 40 on request, to make the bat easier to summon — a
+// slightly bent elbow now still counts as "straight enough."
+const ARM_STRAIGHT_MAX_DEVIATION_DEG = 40
 
-/** target coords for the bat to land on, assuming a bottom-middle anchor —
- * a point along the forearm (elbow->wrist, MP-33 indices 13/14 and 15/16),
- * short of the wrist so the bat perches on the forearm rather than the hand
- * (see FOREARM_LAND_RATIO). Picks whichever arm is tracked with higher
- * confidence, and only if that arm is straight (see
- * ARM_STRAIGHT_MAX_DEVIATION_DEG). Deliberately not using
- * calculateArmFromPose's elbow+angle+length reconstruction: that angle is
- * computed with Math.atan (not atan2), which can't recover which side of the
- * elbow the wrist is actually on, so it only ever looked right for the owl's
- * halfway-point perch — reaching further toward the wrist regularly landed on
- * the wrong side entirely. This uses plain vector subtraction instead, which
- * has no such sign ambiguity. */
-function getForearmTarget(
+// Allowed range (degrees) for the angle between the upper arm (shoulder->elbow)
+// and the torso (shoulder->hip, same side) — this is "how far the arm is held
+// away from the body," not the elbow bend above. 90 degrees is a horizontal,
+// T-pose-style arm; the arm must land in [MIN, MAX] around that, so a straight
+// arm hanging down at the side (~0 degrees) or raised straight overhead
+// (~180 degrees) no longer qualifies, only one held out roughly level.
+// Widened 80-100 -> 60-120, then narrowed to 70-110 on request, alongside
+// the straightness tolerance above, so the arm doesn't need to be held at
+// as precise an angle.
+const ARM_AWAY_FROM_BODY_MIN_DEG = 70
+const ARM_AWAY_FROM_BODY_MAX_DEG = 120
+
+// Debounce for the raw per-frame arm qualification above, same pattern as
+// drone.ts's PALM_HOLD_TIME/PALM_CONFIRM_TIME. Without this, a bat that's
+// already 'entered' dropped straight to 'lost' (then 'exiting'/'entering'
+// again on requalifying) the instant any single frame's pose estimate
+// nudged one landmark's visibility or one angle a hair past its threshold —
+// which reads as bats repeatedly appearing and disappearing on an arm that
+// never actually moved. Adding the hip-dependent away-from-body check made
+// this much more visible: hip tracking is noisier than shoulder/elbow/wrist
+// at typical photobooth range, and it's now a 4-landmark, 3-threshold
+// condition that all has to hold on the very same frame.
+const ARM_HOLD_TIME = 0.4
+const ARM_CONFIRM_TIME = 0.15
+
+type ArmSide = 'left' | 'right'
+
+/** Evaluates ONE specific arm (not "whichever is more confident") against
+ * every qualification check — visibility, elbow straightness, and away-from-
+ * body angle. Split out from getForearmTarget so a caller can pin down which
+ * side to check, rather than always re-picking by confidence every frame. */
+function evaluateArm(
   pose: NormalizedLandmarkList,
   height: number,
   width: number,
+  side: ArmSide,
 ) {
-  if (pose.length === 0) return undefined
-  const ls = pose[11]
-  const rs = pose[12]
-  const le = pose[13]
-  const re = pose[14]
-  const lw = pose[15]
-  const rw = pose[16]
-  const leftVis = Math.min(ls?.visibility ?? 0, le?.visibility ?? 0, lw?.visibility ?? 0)
-  const rightVis = Math.min(rs?.visibility ?? 0, re?.visibility ?? 0, rw?.visibility ?? 0)
-  if (leftVis < 0.5 && rightVis < 0.5) return undefined
+  const useLeft = side === 'left'
+  const s = pose[useLeft ? 11 : 12]
+  const e = pose[useLeft ? 13 : 14]
+  const w = pose[useLeft ? 15 : 16]
+  const h = pose[useLeft ? 23 : 24]
+  // 0.5 -> 0.35 on request, alongside the angle tolerances below, so a
+  // slightly-occluded or edge-of-frame arm still qualifies.
+  const vis = Math.min(s?.visibility ?? 0, e?.visibility ?? 0, w?.visibility ?? 0, h?.visibility ?? 0)
+  if (vis < 0.35) return undefined
 
-  const useLeft = leftVis >= rightVis
-  const shoulder = convertPoint(useLeft ? ls : rs, height, width)
-  const elbow = convertPoint(useLeft ? le : re, height, width)
-  const wrist = convertPoint(useLeft ? lw : rw, height, width)
+  const shoulder = convertPoint(s, height, width)
+  const elbow = convertPoint(e, height, width)
+  const wrist = convertPoint(w, height, width)
+  const hip = convertPoint(h, height, width)
 
   const upperArm = { x: elbow.x - shoulder.x, y: elbow.y - shoulder.y }
   const forearm = { x: wrist.x - elbow.x, y: wrist.y - elbow.y }
@@ -79,10 +100,69 @@ function getForearmTarget(
   const maxCos = Math.cos((ARM_STRAIGHT_MAX_DEVIATION_DEG * Math.PI) / 180)
   if (cosDeviation < maxCos) return undefined
 
+  // "Away from the body" — angle between the upper arm and the torso
+  // (shoulder->hip, same side), not the elbow-straightness check above.
+  const torso = { x: hip.x - shoulder.x, y: hip.y - shoulder.y }
+  const torsoLen = Math.hypot(torso.x, torso.y)
+  if (torsoLen < 1) return undefined
+  const cosArmTorso =
+    (upperArm.x * torso.x + upperArm.y * torso.y) / (upperArmLen * torsoLen)
+  const armTorsoDeg = (Math.acos(Math.min(1, Math.max(-1, cosArmTorso))) * 180) / Math.PI
+  if (armTorsoDeg < ARM_AWAY_FROM_BODY_MIN_DEG || armTorsoDeg > ARM_AWAY_FROM_BODY_MAX_DEG) {
+    return undefined
+  }
+
   return {
     x: elbow.x + (wrist.x - elbow.x) * FOREARM_LAND_RATIO,
     y: elbow.y + (wrist.y - elbow.y) * FOREARM_LAND_RATIO,
+    side,
+    vis,
   }
+}
+
+/** target coords for the bat to land on, assuming a bottom-middle anchor —
+ * a point along the forearm (elbow->wrist, MP-33 indices 13/14 and 15/16),
+ * short of the wrist so the bat perches on the forearm rather than the hand
+ * (see FOREARM_LAND_RATIO), on whichever arm is straight (see
+ * ARM_STRAIGHT_MAX_DEVIATION_DEG) and held away from the body at roughly a
+ * right angle (see ARM_AWAY_FROM_BODY_MIN_DEG/MAX_DEG) — an arm hanging at
+ * the side or raised straight up no longer qualifies. Deliberately not using
+ * calculateArmFromPose's elbow+angle+length reconstruction: that angle is
+ * computed with Math.atan (not atan2), which can't recover which side of the
+ * elbow the wrist is actually on, so it only ever looked right for the owl's
+ * halfway-point perch — reaching further toward the wrist regularly landed on
+ * the wrong side entirely. This uses plain vector subtraction instead, which
+ * has no such sign ambiguity.
+ *
+ * `lockedSide`, if given, is tried FIRST and used as long as it still
+ * qualifies — even if the other arm is now more confidently tracked. Without
+ * this, raising both arms (both qualifying) left the choice up to whichever
+ * side edged out the other on leftVis/rightVis that particular frame, which
+ * flips back and forth from ordinary tracking noise — the bat visibly
+ * hopping between arms rather than settling on the one it first landed on.
+ * Only falls back to confidence-based picking once the locked side actually
+ * stops qualifying (arm lowered, bent, turned away, etc). */
+function getForearmTarget(
+  pose: NormalizedLandmarkList,
+  height: number,
+  width: number,
+  lockedSide?: ArmSide,
+) {
+  if (pose.length === 0) return undefined
+
+  if (lockedSide) {
+    const locked = evaluateArm(pose, height, width, lockedSide)
+    if (locked) return locked
+  }
+
+  // No locked side, or it stopped qualifying — fall back to picking by
+  // confidence between whichever arm(s) currently qualify.
+  const left = evaluateArm(pose, height, width, 'left')
+  const right = evaluateArm(pose, height, width, 'right')
+  if (!left && !right) return undefined
+  if (!left) return right
+  if (!right) return left
+  return left.vis >= right.vis ? left : right
 }
 
 function calculateBatSize(
@@ -157,17 +237,38 @@ export async function createBatAnim(app: PIXI.Application) {
   let batSize = 150
   const animManager = new AnimStateManager()
 
+  // Persisted across calls (like drone.ts's wristX/wristY), NOT reset to 0
+  // every frame — so a gap covered by the hold timer below leaves the bat
+  // right where it was instead of snapping to the corner.
+  let wristX = 0
+  let wristY = 0
+  let holdTimer = 0
+  let confirmTimer = 0
+  // Which arm the bat is currently committed to, if any — see getForearmTarget's
+  // lockedSide param. Reset to undefined once the bat fully exits, so the next
+  // spawn picks fresh by confidence rather than favouring whatever arm it used
+  // last time.
+  let lockedSide: ArmSide | undefined
+
   const update = (pose: NormalizedLandmarkList) => {
-    const target = getForearmTarget(pose, height, width)
-    let x = 0
-    let y = 0
+    const target = getForearmTarget(pose, height, width, lockedSide)
+
     if (target) {
-      x = kf.x.filter(target.x)
-      y = kf.y.filter(target.y)
+      lockedSide = target.side
+      holdTimer = ARM_HOLD_TIME
+      confirmTimer = Math.min(ARM_CONFIRM_TIME, confirmTimer + ticker.deltaMS / 1000)
+      wristX = kf.x.filter(target.x)
+      wristY = kf.y.filter(target.y)
       batSize = kf.batSize.filter(calculateBatSize(pose, height, width))
+    } else {
+      holdTimer = Math.max(0, holdTimer - ticker.deltaMS / 1000)
+      // Reset on any gap — confirmation must be one continuous qualifying
+      // stretch, not accumulated flickers, or this stops filtering noise.
+      confirmTimer = 0
     }
 
-    y += batSize * BAT_MARGIN_B
+    const x = wristX
+    const y = wristY + batSize * BAT_MARGIN_B
 
     restSprite.height = batSize * REST_SIZE_FACTOR
     restSprite.width = batSize * REST_SIZE_FACTOR * restAspect
@@ -180,12 +281,20 @@ export async function createBatAnim(app: PIXI.Application) {
       vanishSprite.width =
         batSize
 
-    animManager.tracking = !!target
+    // Already-tracking: tolerate brief gaps via the hold timer, no need to
+    // re-confirm every tiny flicker. Not yet tracking: require the full
+    // confirm duration first, so a single stray frame can't trigger it.
+    const hasArm = animManager.tracking
+      ? target !== undefined || holdTimer > 0
+      : confirmTimer >= ARM_CONFIRM_TIME
+
+    animManager.tracking = hasArm
     const { time, state } = animManager
 
     switch (state) {
       case 'exited':
         initialState()
+        lockedSide = undefined
         break
       case 'entering':
         batContainer.alpha = 1

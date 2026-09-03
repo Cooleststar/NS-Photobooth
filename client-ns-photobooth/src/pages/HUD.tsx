@@ -3,7 +3,7 @@ import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
 import { uploadImage } from '../api/imgbb'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
-import { AnimPicker, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
+import { AnimPicker, OcFusionPicker, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
 import {
   addQrToStrip,
   chunkArray,
@@ -240,6 +240,7 @@ export default function HUD({ photographerRef }: HUDProps) {
             <img tw='h-full w-full' src={cameraURI} />
           </KeybindBtn>
           <AnimPicker />
+          <OcFusionPicker />
         </>
       )
     case 'timing':
