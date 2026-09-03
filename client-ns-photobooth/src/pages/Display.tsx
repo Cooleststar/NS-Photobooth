@@ -133,7 +133,13 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   bat: 'pose',
   globe: 'pose',
   drone: 'hands',
-  laptop: 'none',
+  // 'pose', not 'none'. The laptop tracks nobody, so 'none' looked right - but
+  // it is presence-GATED: it fades in only while a person is in frame, and
+  // hasPerson is derived from pose data. 'none' stops the backend inferring at
+  // all, so no poses arrive, hasPerson is permanently false and the laptop
+  // never appears. It only worked when paired with another character, whose
+  // mode unioned back up to 'pose'.
+  laptop: 'pose',
   scuba: 'pose',
   ocfusion: 'hands',
   pignose: 'pose',
