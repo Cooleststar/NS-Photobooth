@@ -546,13 +546,41 @@ _qr_last_frame_shape: tuple = ()
 _QR_MIN_DECODE_INTERVAL = 0.25  # seconds between actual decode attempts
 _qr_last_decode_ts: float = 0.0
 
+# A phone screen's refresh sweep and the camera's rolling shutter aren't
+# synced, so a single captured frame can have a dark band cut across the
+# code — decodable in principle, just not in *this* frame. RTSP mode has a
+# live "latest frame" (_current_frame, updated continuously by the ffmpeg
+# reader thread below) it can go back to for a few more tries on a miss,
+# since the band's position shifts frame to frame; webcam mode (handle_video)
+# has no equivalent to re-read from, so it doesn't get this retry — see
+# allow_live_retry below.
+_QR_LIVE_RETRY_ATTEMPTS = 3
+_QR_LIVE_RETRY_TIMEOUT = 0.2  # give up waiting for a new frame after this long
 
-def _decode_qr_codes(frame: np.ndarray) -> list:
+
+def _qr_downscale(frame: np.ndarray) -> np.ndarray:
+    """Shrink to _QR_DOWNSCALE_WIDTH if wider — see _decode_qr_codes for why
+    the resulting fractional coordinates need no further conversion."""
+    height, width = frame.shape[:2]
+    if width <= _QR_DOWNSCALE_WIDTH:
+        return frame
+    scale = _QR_DOWNSCALE_WIDTH / float(width)
+    return cv2.resize(
+        frame, (_QR_DOWNSCALE_WIDTH, max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
+def _decode_qr_codes(frame: np.ndarray, allow_live_retry: bool = False) -> list:
     """Every QR code visible in the frame, or seen within the last
     _QR_TRACK_TTL seconds — absorbs brief decode dropouts instead of
     flickering the overlay off every time a single frame fails to decode.
     Returns [{"payload": str, "x": float, "y": float}, ...], position being
-    the code's center in normalised (0-1) frame coordinates."""
+    the code's center in normalised (0-1) frame coordinates.
+
+    allow_live_retry: RTSP mode only (see _QR_LIVE_RETRY_ATTEMPTS above) —
+    on a miss, goes back to the live feed for a few more frames before
+    giving up on this call."""
     global _qr_attempt_count, _qr_last_attempt_ts, _qr_last_frame_shape, _qr_last_decode_ts
     now = time.time()
 
@@ -573,26 +601,19 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
     _qr_last_attempt_ts = now
     _qr_last_frame_shape = frame.shape
 
-    height, width = frame.shape[:2]
-    working = frame
-    if width > _QR_DOWNSCALE_WIDTH:
-        # Decoding a smaller image is cheaper, and detection runs on every
-        # processed frame — that cost matters more than the (negligible)
-        # accuracy loss from downscaling something as high-contrast as a QR
-        # code. _decode_qr_pyzbar/_decode_qr_opencv report each code's
-        # center as a fraction (0-1) of *this* (downscaled) frame's own
-        # dimensions, which is exactly equivalent to detecting on the small
-        # copy, multiplying the corner points back up by the scale factor,
-        # then dividing by the original full-resolution dimensions — just
-        # without the intermediate pixel-space step, since the resize below
-        # preserves aspect ratio uniformly (same factor on both axes).
-        # Downstream code (Display.tsx) always works with these normalised
-        # fractions, so it never needs to know downscaling happened at all.
-        scale = _QR_DOWNSCALE_WIDTH / float(width)
-        working = cv2.resize(
-            frame, (_QR_DOWNSCALE_WIDTH, max(1, int(round(height * scale)))),
-            interpolation=cv2.INTER_AREA,
-        )
+    # Decoding a smaller image is cheaper, and detection runs on every
+    # processed frame — that cost matters more than the (negligible)
+    # accuracy loss from downscaling something as high-contrast as a QR
+    # code. _decode_qr_pyzbar/_decode_qr_opencv report each code's center as
+    # a fraction (0-1) of *this* (downscaled) frame's own dimensions, which
+    # is exactly equivalent to detecting on the small copy, multiplying the
+    # corner points back up by the scale factor, then dividing by the
+    # original full-resolution dimensions — just without the intermediate
+    # pixel-space step, since the resize preserves aspect ratio uniformly
+    # (same factor on both axes). Downstream code (Display.tsx) always works
+    # with these normalised fractions, so it never needs to know
+    # downscaling happened at all.
+    working = _qr_downscale(frame)
     decode_fn = _decode_qr_pyzbar if _pyzbar_decode is not None else _decode_qr_opencv
     decoded = decode_fn(working)
     if not decoded:
@@ -603,6 +624,34 @@ def _decode_qr_codes(frame: np.ndarray) -> list:
         # frame still fails both passes; costs an extra decode only on
         # frames where the first one already came up empty.
         decoded = decode_fn(_enhance_for_qr(working))
+
+    if not decoded and allow_live_retry:
+        # Still nothing — likely a phone screen's refresh band, not a code
+        # that's genuinely absent (a genuinely absent code would also fail
+        # every one of these). Go back to the live RTSP feed for a few more
+        # frames, waiting for _frame_id to actually change each time so we
+        # don't decode the same stale frame twice.
+        _frame_rwlock.read_acquire()
+        prev_fid = _frame_id
+        _frame_rwlock.read_release()
+        for _ in range(_QR_LIVE_RETRY_ATTEMPTS):
+            deadline = time.time() + _QR_LIVE_RETRY_TIMEOUT
+            live_frame = None
+            while time.time() < deadline:
+                _frame_rwlock.read_acquire()
+                fid = _frame_id
+                cf = _current_frame
+                _frame_rwlock.read_release()
+                if fid != prev_fid and cf is not None:
+                    prev_fid = fid
+                    live_frame = cf
+                    break
+                time.sleep(0.01)
+            if live_frame is None:
+                break  # feed stalled — no point burning more attempts
+            decoded = decode_fn(_qr_downscale(live_frame))
+            if decoded:
+                break
 
     now = time.time()  # re-fetch — decode above can take a few ms
     for text, cx, cy in decoded:
@@ -735,7 +784,15 @@ def run_pose_detection(
     if mode in ('hands', 'both'):
         hands = run_hand_detection(hands_frame if hands_frame is not None else frame)
 
-    qr_codes = _decode_qr_codes(qr_frame if qr_frame is not None else frame) if mode == 'qr' else []
+    # qr_frame is only ever passed explicitly by the RTSP reader (see
+    # _rtsp_reader) — handle_video's webcam path calls this without it, so
+    # qr_frame is not None is also how we know it's safe to fall back to
+    # _current_frame (the RTSP live feed) on a miss; webcam mode has no such
+    # global to retry against.
+    qr_codes = (
+        _decode_qr_codes(qr_frame, allow_live_retry=True) if qr_frame is not None
+        else _decode_qr_codes(frame)
+    ) if mode == 'qr' else []
 
     return {"poses": poses, "hands": hands, "qr_codes": qr_codes}
 
