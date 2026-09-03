@@ -49,3 +49,11 @@ __pycache__/
 
 # Generated photobooth gallery (QR/photo-save path)
 /photos/
+
+# Per-station config: holds the RTSP camera's admin password in plaintext,
+# plus the station hostname and an internal camera IP list. Nothing in this
+# repo reads it - it is written by tooling outside this codebase - so it has
+# no business being tracked. Ignored rather than merely untracked because
+# `git add .` will happily re-stage an untracked file, which is how it got
+# committed in dc6f917 in the first place.
+/config.json
