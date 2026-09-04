@@ -1,0 +1,16 @@
+67 animation
+battalion logo
+coy logo
+oc face
+
+guidelines for what the users can do for the photobooth (e.g bat and owl not compatible) send to sir jared
+
+fix bat ears
+
+next week 7th sept:above stuff
+
+week after: stress test (multiple people) 12 ppl etc
+
+week after after: work on stress test and fix broken anims
+
+week after after: outside testing (light etc)
