@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
@@ -8,7 +6,23 @@ services:
       - "8081:8081"
     volumes:
       - ./photos:/app/photos
+      # Without this, weights fetched via `fetch_wilor.py` (see
+      # backend/Dockerfile) live only in the container's writable layer and
+      # vanish the next time the image is rebuilt - a ~2.5 GB re-download
+      # every rebuild, and a backend that exits at startup until it finishes.
+      - wilor_models:/app/wilor_models
     restart: unless-stopped
+    # Passes the host GPU through (confirmed working via `docker run --gpus
+    # all ... nvidia-smi`) - without this the container's torch install
+    # would see no CUDA device and silently fall back to CPU regardless of
+    # which torch wheel was installed.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   frontend:
     build: ./client-ns-photobooth
@@ -23,3 +37,6 @@ services:
     ports:
       - "5173:5173"
     restart: unless-stopped
+
+volumes:
+  wilor_models:

@@ -16,11 +16,24 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# torch/torchvision are deliberately not in requirements.txt (see its header
+# comment) - the right wheel depends on the host's CUDA driver, and a plain
+# `pip install -r requirements.txt` would let ultralytics pull in the
+# default CPU-only PyPI wheel as a transitive dependency instead, which
+# still runs but 20-50x slower with no error to indicate it. Installed
+# explicitly, first, from the CUDA-specific index, matching what
+# requirements.txt documents as verified for a driver reporting CUDA 12.2
+# (`nvidia-smi`) - swap cu118 for cu124 etc. if this image ever needs to
+# target a different host driver.
+RUN pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0 \
+    --index-url https://download.pytorch.org/whl/cu118
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 COPY gallery.html .
+COPY botsort_photobooth.yaml .
 
 # Hand detection. wilor_src is the vendored model source (718 KB); without it
 # the backend exits at startup by design, since there is no fallback model.
