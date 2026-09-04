@@ -13,7 +13,7 @@ An interactive photobooth application for events. It captures photos via a webca
 ## Features
 
 - **Camera selection page** — choose a preset RTSP IP camera, enter a custom RTSP URL, or use a local USB/built-in webcam
-- **Pose-reactive animations** — Owl, Globe, Parrot, Laptop, and V15 Drone overlays that respond to body movement
+- **Pose-reactive animations** — Owl, Globe, Parrot, and V15 Drone overlays that respond to body movement
 - **Photo capture flow** — countdown timer, confirm/cancel preview, automatic save
 - **QR code sharing** — scan to download or share captured photos
 - **Configurable settings** — resolution, save folder, animation toggles, debug overlay, and more

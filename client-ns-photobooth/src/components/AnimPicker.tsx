@@ -12,7 +12,6 @@ import {
 import owlThumb from '../assets/owl_anim/owl_idle_new.gif'
 import batThumb from '../assets/Bat_anim/Bat_rest.png'
 import globeThumb from '../assets/globe_anim/globe.gif'
-import laptopThumb from '../assets/laptop_anim/laptop.gif'
 import droneThumb from '../assets/drone_anim/drone.gif'
 import scubaThumb from '../assets/cat_anim/scuba.gif'
 import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
@@ -25,7 +24,6 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,
   bat: batThumb,
   globe: globeThumb,
-  laptop: laptopThumb,
   drone: droneThumb,
   scuba: scubaThumb,
   pignose: pigNoseThumb,
