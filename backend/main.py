@@ -88,6 +88,13 @@ _wilor_problem = _wilor_hands.preflight()
 if _wilor_problem:
     raise SystemExit("Hand detection requires WiLoR.\n" + _wilor_problem)
 
+# 67 Mode only - see mediapipe_pose.py's module docstring for why it's kept
+# independent of the YOLO/ViTPose/WiLoR pipeline above. Unlike WiLoR this
+# import is cheap and never fails at boot: mediapipe_pose.py doesn't import
+# the `mediapipe` package itself until ensure_loading() actually runs, so a
+# missing/broken install only disables 67 Mode, not the whole backend.
+import mediapipe_pose
+
 
 # Width of the frame handed to the hand detector. Hand landmarks - and the
 # palm-orientation maths built on them - need far more pixel density than pose
@@ -417,6 +424,8 @@ def _to_mp33(xyn, conf):
 #   'hands' -> drone (WiLoR hands only; drone's update() ignores pose)
 #   'none'  -> a fixed-position fade prop (reads neither)
 #   'both'  -> default until the frontend checks in, or an unrecognised mode
+#   'challenge67' -> 67 Mode's own MediaPipe Pose Landmarker (mediapipe_pose.py),
+#                    entirely independent of YOLO/ViTPose - see that file's docstring
 # Set via POST /detection_mode {"mode": "..."} — see detection_mode_handler.
 # ---------------------------------------------------------------------------
 _detection_mode: str = 'both'
@@ -698,7 +707,12 @@ def run_pose_detection(
     # sticky drone lock-on — once a guest shows the QR code, the drone
     # locks onto their face/head and keeps following it, so pose detection
     # has to keep running even after the code itself is put away.
-    if mode in ('pose', 'both', 'qr'):
+    if mode == 'challenge67':
+        # 67 Mode's own pose source - independent of the YOLO/ViTPose branch
+        # below (see mediapipe_pose.py). Not additive with it: this mode
+        # never needs YOLO's tracker/hands/QR.
+        poses = mediapipe_pose.detect(frame)
+    elif mode in ('pose', 'both', 'qr'):
         with _yolo_lock:
             results = _yolo.track(
                 frame,
@@ -795,6 +809,76 @@ def run_pose_detection(
     ) if mode == 'qr' else []
 
     return {"poses": poses, "hands": hands, "qr_codes": qr_codes}
+
+# ---------------------------------------------------------------------------
+# 67 Mode leaderboard - a single local JSON file, no database. This is a
+# single trusted kiosk (see challenge67_submit_handler), not a public
+# service, so there's no session-token/anti-cheat heartbeat like the
+# original project this was adapted from - just a sane score range check.
+# ---------------------------------------------------------------------------
+_CHALLENGE67_FILE = pathlib.Path(__file__).parent / 'challenge67_leaderboard.json'
+_CHALLENGE67_MAX_SCORE = 400  # sanity cap against a clearly-bogus submission
+_CHALLENGE67_MAX_ENTRIES = 100  # keep the file bounded
+_challenge67_lock: asyncio.Lock | None = None  # initialised inside main(), same reason as clients_lock below
+
+
+def _load_challenge67() -> list:
+    if not _CHALLENGE67_FILE.exists():
+        return []
+    try:
+        return json.loads(_CHALLENGE67_FILE.read_text())
+    except Exception:
+        log.error("Corrupt challenge67 leaderboard file, starting fresh")
+        return []
+
+
+def _save_challenge67(entries: list) -> None:
+    _CHALLENGE67_FILE.write_text(json.dumps(entries))
+
+
+async def challenge67_submit_handler(request: web.Request) -> web.Response:
+    """POST {"score": number} - validates range, appends to the leaderboard
+    file, and returns this submission's rank. No nickname, no auth: the
+    booth is single-player and anonymous by design (see the plan this was
+    built from)."""
+    try:
+        data = await request.json()
+        score = data.get('score')
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            return web.Response(status=400, text='Invalid score', headers=_CORS)
+        score = int(score)
+        if not (0 <= score <= _CHALLENGE67_MAX_SCORE):
+            return web.Response(status=400, text='Score out of range', headers=_CORS)
+
+        async with _challenge67_lock:
+            entries = _load_challenge67()
+            ts = time.time()
+            entries.append({"score": score, "ts": ts})
+            entries.sort(key=lambda e: e['score'], reverse=True)
+            entries = entries[:_CHALLENGE67_MAX_ENTRIES]
+            _save_challenge67(entries)
+            # Matches on ts (not just score) so a tie with an existing entry
+            # doesn't always report the better-ranked one's position.
+            rank = next((i for i, e in enumerate(entries) if e['ts'] == ts), len(entries)) + 1
+
+        return web.json_response(
+            {"rank": rank, "total": len(entries), "top": entries[:10]}, headers=_CORS,
+        )
+    except Exception as e:
+        log.error(f"67 Mode submit error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
+async def challenge67_leaderboard_handler(request: web.Request) -> web.Response:
+    """GET: current top-10 scores, for the results screen and any idle
+    leaderboard display."""
+    try:
+        entries = _load_challenge67()
+        return web.json_response({"top": entries[:10]}, headers=_CORS)
+    except Exception as e:
+        log.error(f"67 Mode leaderboard error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
 
 # ---------------------------------------------------------------------------
 # Rosbridge state
@@ -1156,7 +1240,7 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             # for hand-only characters (drone).
             mode = _detection_mode
             should_infer = frame is not None and (
-                mode == 'hands' or (mode in ('pose', 'both', 'qr') and frame_count % 3 == 0)
+                mode == 'hands' or (mode in ('pose', 'both', 'qr', 'challenge67') and frame_count % 3 == 0)
             )
             if should_infer:
                 global _rtsp_pose_busy
@@ -1167,6 +1251,11 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                 # decode, so QR mode passes the full-resolution frame
                 # separately, only for QR decoding — never into YOLO.
                 small = cv2.resize(frame, (320, 240))
+                # 67 Mode's MediaPipe Pose Landmarker has no such size-lock
+                # (no persistent tracker state between calls, unlike YOLO's
+                # BoT-SORT) and tracks much better at native resolution, so
+                # it gets the untouched frame instead of the 320x240 one.
+                pose_frame = frame if mode == 'challenge67' else small
                 qr_frame = frame if mode == 'qr' else None
                 # Hands get their own aspect-correct, higher-resolution frame;
                 # see _HANDS_WIDTH for the measurements that motivated it.
@@ -1187,7 +1276,7 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                             _rtsp_pose_busy = False
                     threading.Thread(
                         target=_rtsp_infer,
-                        args=(small, qr_frame, hands_frame),
+                        args=(pose_frame, qr_frame, hands_frame),
                         daemon=True,
                     ).start()
     finally:
@@ -1515,7 +1604,7 @@ async def detection_mode_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
         mode = data.get('mode', 'both')
-        if mode not in ('pose', 'hands', 'none', 'both', 'qr'):
+        if mode not in ('pose', 'hands', 'none', 'both', 'qr', 'challenge67'):
             return web.Response(status=400, text='Invalid mode', headers=_CORS)
         _detection_mode = mode
         log.info(f"Detection mode set to: {mode}")
@@ -1530,6 +1619,8 @@ async def detection_mode_handler(request: web.Request) -> web.Response:
         # exactly what this defers. Reaching here means a real selection.
         if mode in ('hands', 'both'):
             _wilor_hands.ensure_loading()
+        if mode == 'challenge67':
+            mediapipe_pose.ensure_loading()
         return web.Response(text='ok', headers=_CORS)
     except Exception as e:
         log.error(f"Detection mode error: {e}")
@@ -1655,6 +1746,8 @@ def make_http_app() -> web.Application:
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
     app.router.add_route('*', '/detection_mode', detection_mode_handler)
     app.router.add_get('/qr_debug', qr_debug_handler)
+    app.router.add_post('/challenge67/submit', challenge67_submit_handler)
+    app.router.add_get('/challenge67/leaderboard', challenge67_leaderboard_handler)
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)
@@ -1695,10 +1788,11 @@ async def _rtsp_keepfresh_loop(interval_s: int = 300):
 
 
 async def main():
-    global _loop, _rtsp_lock, clients_lock
+    global _loop, _rtsp_lock, clients_lock, _challenge67_lock
     _loop = asyncio.get_running_loop()
     _rtsp_lock = asyncio.Lock()
     clients_lock = asyncio.Lock()  # must be created inside the running loop
+    _challenge67_lock = asyncio.Lock()
 
     log.info("Photobooth backend starting...")
 

@@ -40,6 +40,13 @@ CHANGES.md
 # Generated photobooth output
 backend/photos/
 
+# 67 Mode leaderboard - runtime data, not source (same treatment as photos/)
+backend/challenge67_leaderboard.json
+
+# 67 Mode's MediaPipe Pose Landmarker model - downloaded on first use, same
+# treatment as wilor_models/ and *.pt above
+backend/mediapipe_models/
+
 # Python bytecode
 __pycache__/
 *.pyc
