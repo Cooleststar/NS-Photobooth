@@ -28,6 +28,8 @@ import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { createSunglassesAnim } from '../anim/sunglasses'
 import { createMustacheAnim } from '../anim/mustache'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
+import { createRepCounter } from '../anim/challenge67/repCounter'
+import { drawChallenge67ArmLines } from '../anim/challenge67/drawArmLines'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
 import { convertPoint } from '../api/nicepipe/mpPose'
@@ -38,6 +40,8 @@ import {
   GifOption,
   bannerEnabled,
   camSize,
+  challenge67Enabled,
+  challenge67Game,
   debugEnabled,
   detectionCamSize,
   getBackendHttpUrl,
@@ -414,6 +418,12 @@ function createReceivingCtx(
           : data.lastUpdateTs !== undefined ? performance.now() - data.lastUpdateTs : undefined
         drawDebug(ctx, debugPose, propDets, fps, delayMs)
       }
+
+      // 67 Mode's own arm-tracking lines - independent of Debug Animation
+      // above, so they show during every round regardless of that toggle.
+      if (challenge67Enabled.get()) {
+        drawChallenge67ArmLines(ctx, pose, width, height)
+      }
     },
   ] as const
 }
@@ -456,6 +466,7 @@ export default function Display({
   const gifOptions = useStore(selectedGifs)
   const gifOptionsKey = gifOptions.join(',')
   const qrMode = useStore(qrModeEnabled)
+  const challenge67On = useStore(challenge67Enabled)
   const debugOn = useStore(debugEnabled)
   const { rosState } = useNiceConnState()
   const camSource = useStore(cameraSource)
@@ -521,7 +532,15 @@ export default function Display({
         })
     }
 
-    if (qrMode) {
+    if (challenge67On) {
+      // 67 Mode runs on its own MediaPipe Pose Landmarker instance on the
+      // backend (see backend/mediapipe_pose.py), independent of the
+      // YOLO/ViTPose pipeline every other character uses - 'challenge67' is
+      // a distinct detection_mode value specifically so main.py can route
+      // to that instead of YOLO. Sent unconditionally, no duty-cycling
+      // needed (this isn't an expensive detector to leave on).
+      send('challenge67')
+    } else if (qrMode) {
       // Two earlier approaches to "stop paying for QR decode once nothing
       // needs it" both had real problems: switching to 'pose' the instant
       // *anything* locked meant a second code — same guest wanting another
@@ -561,7 +580,7 @@ export default function Display({
       if (retryTimer) clearTimeout(retryTimer)
       if (cycleTimer) clearTimeout(cycleTimer)
     }
-  }, [gifOptionsKey, qrMode, rosState, debugOn])
+  }, [gifOptionsKey, qrMode, challenge67On, rosState, debugOn])
 
   const setVideo = useCallback((stream: MediaStream) => {
     if (!videoRef.current) return
@@ -853,6 +872,27 @@ export default function Display({
         assign: (allPoses: { [id: number]: NormalizedLandmarkList }) => (NormalizedLandmarkList | undefined)[]
       }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
+      // 67 Mode state - see the ticker below and store.ts's challenge67Game
+      // for why the timer/rep-counting lives here rather than in
+      // Challenge67UI (this is where the per-frame pose data and a running
+      // clock already are).
+      const repCounter67 = createRepCounter()
+      let challenge67PhaseElapsed = 0
+      const submitChallenge67Score = (score: number) => {
+        fetch(`${getBackendHttpUrl()}/challenge67/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ score }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            challenge67Game.set({
+              ...challenge67Game.get(),
+              lastResult: { score, rank: data.rank, total: data.total },
+            })
+          })
+          .catch((e) => console.warn('Failed to submit 67 Mode score:', e))
+      }
       // QR mode: a single fade-prop instance (drone gif). Before lock-on, it
       // fades in and follows the code's own live on-screen position (from
       // the backend's decoded QR center) while QR_DRONE_PAYLOAD is visible.
@@ -949,6 +989,13 @@ export default function Display({
             wasLocked: false,
           })
         }
+      } else if (challenge67On) {
+        // 67 Mode builds no character/corner-prop instances at all - it
+        // has its own full-screen UI (Challenge67UI, rendered by HUD.tsx)
+        // and its own per-frame logic in the ticker below. animGroups and
+        // cornerAnims stay empty, leaving only the raw camera feed visible
+        // underneath (attachStream2Pixi runs unconditionally above,
+        // independent of gifOptions/qrMode/challenge67).
       } else {
         // Multiple animations can be selected at once, and each one
         // independently follows every detected person when Multi-Person
@@ -1032,6 +1079,29 @@ export default function Display({
       console.log('Animations added')
 
       app.ticker.add(() => {
+        if (challenge67On) {
+          const game = challenge67Game.get()
+          if (game.phase === 'countdown') {
+            challenge67PhaseElapsed += app.ticker.deltaMS / 1000
+            if (challenge67PhaseElapsed >= 3) {
+              challenge67PhaseElapsed = 0
+              repCounter67.reset()
+              challenge67Game.set({ phase: 'playing', timeLeft: 20, reps: 0 })
+            }
+          } else if (game.phase === 'playing') {
+            const pose = dataRef.current.mp_pose?.pose
+            const gained = repCounter67.processFrame(pose, performance.now())
+            const timeLeft = game.timeLeft - app.ticker.deltaMS / 1000
+            const reps = game.reps + gained
+            if (timeLeft <= 0) {
+              challenge67Game.set({ phase: 'finished', timeLeft: 0, reps })
+              submitChallenge67Score(reps)
+            } else {
+              challenge67Game.set({ phase: 'playing', timeLeft, reps })
+            }
+          }
+        }
+
         for (const group of animGroups) {
           if (isMulti && group.instances.length > 1) {
             // Multi-person: each person holds their own slot within this
@@ -1290,7 +1360,7 @@ export default function Display({
       }
       canvas.remove()
     }
-  }, [height, width, gifOptionsKey, isRtspMode, isMulti, qrMode]) // including the ref currents here triggers an unnecessary rerender
+  }, [height, width, gifOptionsKey, isRtspMode, isMulti, qrMode, challenge67On]) // including the ref currents here triggers an unnecessary rerender
   return (
     <>
       <div ref={divRef} {...props}></div>

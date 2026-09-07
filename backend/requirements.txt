@@ -66,6 +66,17 @@ scikit-image==0.26.0
 dill==0.4.1
 
 # ---------------------------------------------------------------------------
+# 67 Mode pose source (mediapipe_pose.py) - independent of everything above
+# ---------------------------------------------------------------------------
+# Used only for 67 Mode's single-player Pose Landmarker, kept deliberately
+# separate from the YOLO/ViTPose/WiLoR pipeline above (see that file's
+# module docstring for why). Pinned to the version this was verified
+# against; despite listing opencv-contrib-python as its own dependency, it
+# installs cleanly alongside opencv-python (already required by ultralytics
+# above) without conflict - both just provide the same `cv2` import name.
+mediapipe==0.10.35
+
+# ---------------------------------------------------------------------------
 # Web / IO
 # ---------------------------------------------------------------------------
 websockets==11.0.3

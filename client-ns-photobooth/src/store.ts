@@ -141,6 +141,29 @@ export const qrBatEarsLocked = atom(false)
 // GifOption/CHARACTER_OPTIONS entry for it.
 export const qrOrdloLocked = atom(false)
 
+// When on, replaces the normal character picker and QR mode entirely with
+// a single-player "wave your arms as fast as possible for 20s" mini-game
+// (see pages/Challenge67UI.tsx) - mutually exclusive with qrModeEnabled,
+// enforced in Settings.tsx (each switch clears the other on click).
+export const challenge67Enabled = persistentAtom('challenge67Enabled', false, opts)
+
+export interface Challenge67State {
+  phase: 'waiting' | 'countdown' | 'playing' | 'finished'
+  timeLeft: number
+  reps: number
+  lastResult?: { score: number; rank: number; total: number }
+}
+// Ephemeral, like pointerEnabled/freezePosition below - Display.tsx's ticker
+// owns the timer/phase transitions/rep counting (it already has the per-
+// frame pose data and a running clock) and writes progress here every
+// frame; Challenge67UI just reads it and writes 'waiting' -> 'countdown' to
+// kick off a round. Not persisted: a reload shouldn't resume mid-round.
+export const challenge67Game = atom<Challenge67State>({
+  phase: 'waiting',
+  timeLeft: 0,
+  reps: 0,
+})
+
 // new backend requires video be sent to backend rather than the other way around
 export const selectedDevice = atom<string | undefined>(undefined)
 

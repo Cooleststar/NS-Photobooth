@@ -12,6 +12,7 @@ import {
   burstModeEnabled,
   camSize,
   canvasSize,
+  challenge67Enabled,
   debugEnabled,
   multiTarget,
   offlineOnly,
@@ -45,7 +46,18 @@ function Section({ title, children }: { title: string; children: any }) {
   )
 }
 
-function SwitchRow({ label, boolVar }: { label: string; boolVar: WritableAtom }) {
+function SwitchRow({
+  label,
+  boolVar,
+  onToggle,
+}: {
+  label: string
+  boolVar: WritableAtom
+  /** fired after boolVar is set, with the new value - lets two switches
+   * clear each other on click (see 67 Mode / QR Code Mode below) without
+   * SwitchRow needing to know about that relationship itself. */
+  onToggle?: (next: boolean) => void
+}) {
   const value = useStore(boolVar)
   return (
     <div tw='flex items-center justify-between py-0.5'>
@@ -55,7 +67,11 @@ function SwitchRow({ label, boolVar }: { label: string; boolVar: WritableAtom })
         aria-checked={value}
         tw='relative w-10 h-[22px] rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0'
         css={value ? tw`bg-blue-600` : tw`bg-gray-600`}
-        onClick={() => boolVar.set(!value)}
+        onClick={() => {
+          const next = !value
+          boolVar.set(next)
+          onToggle?.(next)
+        }}
       >
         <span
           tw='absolute top-[3px] left-[3px] w-4 h-4 bg-white rounded-full shadow transition-transform duration-200'
@@ -231,6 +247,7 @@ export default function Settings() {
   const burstSec = useStore(burstIntervalSec)
   const countdownSec = useStore(photoCountdownSec)
   const qrMode = useStore(qrModeEnabled)
+  const challenge67 = useStore(challenge67Enabled)
 
   useKeybind('KeyD', () => debugEnabled.set(!debugEnabled.get()))
   useKeybind('KeyS', () => setShown((s) => !s))
@@ -305,12 +322,31 @@ export default function Settings() {
           </Section>
 
           <Section title='Animation'>
-            {!qrMode && <AnimMultiSelect />}
-            {!qrMode && <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />}
+            {!qrMode && !challenge67 && <AnimMultiSelect />}
+            {!qrMode && !challenge67 && (
+              <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
+            )}
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
-            <SwitchRow label='QR Code Mode' boolVar={qrModeEnabled} />
+            {!challenge67 && (
+              <SwitchRow
+                label='QR Code Mode'
+                boolVar={qrModeEnabled}
+                onToggle={(next) => {
+                  if (next) challenge67Enabled.set(false)
+                }}
+              />
+            )}
+            {!qrMode && (
+              <SwitchRow
+                label='Enable 67 Mode'
+                boolVar={challenge67Enabled}
+                onToggle={(next) => {
+                  if (next) qrModeEnabled.set(false)
+                }}
+              />
+            )}
             {qrMode && (
               <button
                 tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'

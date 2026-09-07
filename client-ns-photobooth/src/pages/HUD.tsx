@@ -4,6 +4,7 @@ import 'twin.macro'
 import { uploadImage } from '../api/imgbb'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
 import { AnimPicker, OcFusionPicker, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
+import Challenge67UI from './Challenge67UI'
 import {
   addQrToStrip,
   chunkArray,
@@ -15,6 +16,7 @@ import {
   burstCount,
   burstIntervalSec,
   burstModeEnabled,
+  challenge67Enabled,
   freezePosition,
   getBackendHttpUrl,
   offlineOnly,
@@ -52,6 +54,7 @@ export interface HUDProps {
 }
 
 export default function HUD({ photographerRef }: HUDProps) {
+  const challenge67On = useStore(challenge67Enabled)
   const countdown = useStore(photoCountdownSec)
   const [error, setError] = useState('')
   const [state, setState] = useState<CamState>('ready')
@@ -227,6 +230,12 @@ export default function HUD({ photographerRef }: HUDProps) {
     if (!['ready', 'timing'].includes(state)) return
     poseInd.set(poseInd.get() + 1)
   })
+
+  // 67 Mode replaces the entire normal capture/AnimPicker flow rather than
+  // adding a case to the switch below - photo capture and character
+  // animations don't make sense while a round is in progress, so this is
+  // simpler than threading a check into every case.
+  if (challenge67On) return <Challenge67UI />
 
   switch (state) {
     case 'ready':
