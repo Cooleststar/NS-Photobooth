@@ -341,12 +341,17 @@ def _palm_normal_y(R: np.ndarray, is_right: bool) -> float:
 # separately licensed and its loader needs chumpy, which will not install on
 # 3.11), so there are no real fingertip positions to check against.
 #
-# It is therefore an env var rather than a hardcoded guess. Run once with
-# WILOR_GESTURE_DEBUG=1, hold an open palm facing the camera with fingertips
-# up, and the log prints the y-component of all four candidates: the correct
-# one reads close to -1 (camera y points down, so up is negative). Set this to
-# it and the debug flag can go off again.
-WILOR_FINGER_AXIS = os.environ.get('WILOR_FINGER_AXIS', '+x')
+# It is therefore an env var rather than a hardcoded guess, and the default was
+# corrected by observation rather than reasoning: with '+x' the gesture fired
+# on a palm facing the camera with fingertips pointing DOWN. The axis was
+# right and its sign was not - +x runs fingertips->wrist, so 'up' and 'down'
+# were swapped. -x is wrist->fingertips.
+#
+# To re-derive it on other hardware: run with WILOR_GESTURE_DEBUG=1, hold an
+# open palm facing the camera with fingertips up, and the log prints the
+# y-component of all four candidates. The correct one reads close to -1
+# (camera y points down, so up is negative).
+WILOR_FINGER_AXIS = os.environ.get('WILOR_FINGER_AXIS', '-x')
 
 # When set, logs the candidate axes once every few seconds so the value above
 # can be confirmed against a held pose. Off by default; costs nothing when off.
