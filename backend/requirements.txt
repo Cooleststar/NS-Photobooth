@@ -1,17 +1,25 @@
 # Backend dependencies. Python 3.11.
 #
-# Versions below are the ones this backend is actually running and verified
-# against, not aspirational minimums. The previous file had drifted badly - it
-# pinned numpy==1.24.4 while the working venv had 2.4.6, a major version and
-# an ABI break apart - so a clean `pip install -r requirements.txt` built an
-# environment meaningfully different from the tested one.
+# ---------------------------------------------------------------------------
+# INSTALL IN THIS ORDER
+# ---------------------------------------------------------------------------
+#     python backend/install_torch.py        <- FIRST. GPU build of torch.
+#     pip install -r backend/requirements.txt
+#     python backend/fetch_wilor.py          <- hand model, ~2.5 GB, once
 #
-#     pip install -r requirements.txt
+# Running pip before install_torch.py gets you a CPU-only torch, which is
+# 20-50x slower. The backend refuses to start in that state and tells you to
+# run install_torch.py, so the mistake costs a wasted download, not a bad
+# event. Check at any time with:
+#
+#     python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#
+# A version with no +cuXXX suffix, or False, means the CPU build.
 #
 # ---------------------------------------------------------------------------
-# PyTorch - install FIRST, and NOT from PyPI
+# Why torch needs its own step
 # ---------------------------------------------------------------------------
-# torch and torchvision ARE pinned below, but WITHOUT an index. That is a
+# torch and torchvision are pinned below, but WITHOUT an index. That is a
 # version pin only: PEP 440 ignores the local version segment, so 2.6.0+cu124
 # and 2.6.0+cu118 both satisfy `torch==2.6.0`. What that buys:
 #
@@ -21,35 +29,33 @@
 #   * Without it, pip resolved torch transitively to 2.14.0 / torchvision
 #     0.29.0 - versions nothing here has been tested against.
 #
-# What the pin cannot do is choose the CUDA wheel, because the right one
-# depends on the driver. Pointing this file at a CUDA index would hardcode one
-# choice and break the other machine; pointing it at the CPU index would
-# guarantee a wasted 2.5 GB re-download every time. So install the wheel first,
-# and these pins then resolve to it rather than to CPU builds.
+# What a pin cannot do is choose the CUDA wheel, because the right one depends
+# on the driver. A cuXXX wheel needs a driver built against at least that CUDA
+# version, and `nvidia-smi`'s "CUDA Version" field is that maximum - a ceiling,
+# not a target. Two machines, both verified working as of 2026-09-01:
 #
-# Pick the wheel index by what your driver actually supports - check with
-# `nvidia-smi` (its "CUDA Version" field is the max the driver was built
-# against), not a guess: a cu124 wheel needs a driver built against CUDA
-# >=12.4, so a driver that only advertises 12.2 needs cu118 instead, the
-# newest variant it actually supports. Found running CPU-only torch once
-# already (cause unknown - possibly a plain `pip install torch` with no index
-# at all, which defaults to PyPI's CPU wheel), so always verify explicitly
-# after installing. Two machines re-verified working as of 2026-09-01:
-#   - driver 537.70 (CUDA 12.2 max)  -> torch 2.6.0+cu118 / torchvision 0.21.0+cu118
-#   - driver 560.70 (CUDA 12.6 max)  -> torch 2.6.0+cu124 / torchvision 0.21.0+cu124
+#     driver 537.70 (max CUDA 12.2)  ->  cu118
+#     driver 560.70 (max CUDA 12.6)  ->  cu124
 #
-#     python backend/install_torch.py
+# install_torch.py reads that and picks the wheel. By hand, if you prefer:
 #
-# which reads the driver's max CUDA from nvidia-smi and picks the wheel, or by
-# hand if you prefer:
+#     pip install torch==2.6.0 torchvision==0.21.0 #         --index-url https://download.pytorch.org/whl/cu118 #         --extra-index-url https://pypi.org/simple
 #
-#     pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu118
-#     (swap cu118 for cu124, etc., to match your driver)
+# (swap cu118 for what your driver supports; the second index is required, or
+# torch's own dependencies cannot be resolved on a clean machine.)
 #
-# main.py refuses to start on a CPU-only build, so getting this wrong is loud
-# rather than a silent 20-50x slowdown.
+# Putting an index in THIS file would not work: a CUDA index hardcodes one
+# choice and breaks the other machine, and the CPU index guarantees a wasted
+# 2.5 GB re-download on every correct setup.
 #
-# Check it took with:  python -c "import torch; print(torch.cuda.is_available())"
+# ---------------------------------------------------------------------------
+# About the pins
+# ---------------------------------------------------------------------------
+# These are the versions this backend actually runs, not aspirational
+# minimums. The file had drifted badly once - it pinned numpy==1.24.4 while
+# the working venv had 2.4.6, a major version and an ABI break apart - so a
+# clean install built an environment meaningfully different from the tested
+# one.
 
 # ---------------------------------------------------------------------------
 # Vision pipeline
