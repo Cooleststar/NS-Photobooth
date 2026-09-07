@@ -27,8 +27,16 @@
 #   - driver 537.70 (CUDA 12.2 max)  -> torch 2.6.0+cu118 / torchvision 0.21.0+cu118
 #   - driver 560.70 (CUDA 12.6 max)  -> torch 2.6.0+cu124 / torchvision 0.21.0+cu124
 #
+#     python backend/install_torch.py
+#
+# which reads the driver's max CUDA from nvidia-smi and picks the wheel, or by
+# hand if you prefer:
+#
 #     pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu118
 #     (swap cu118 for cu124, etc., to match your driver)
+#
+# main.py refuses to start on a CPU-only build, so getting this wrong is loud
+# rather than a silent 20-50x slowdown.
 #
 # Check it took with:  python -c "import torch; print(torch.cuda.is_available())"
 

@@ -52,7 +52,7 @@ Python packages are pinned in [`backend/requirements.txt`](backend/requirements.
      ```
   3. Verify with `python -c "import torch; print(torch.cuda.is_available())"` — this should print `True`.
 
-  Then run `pip install -r backend/requirements.txt` as normal — it will see torch already satisfied and won't overwrite it with a CPU build.
+  Or just run `python backend/install_torch.py`, which detects the right wheel for your driver and does this for you. Either way, do it **before** `pip install -r backend/requirements.txt` — pip then sees torch already satisfied and won't overwrite it with a CPU build. `main.py` refuses to start on a CPU build, so a mistake here is loud rather than silent.
 
   Docker users aren't automatically better off here: on Linux, PyPI's plain `torch` wheel *is* the CUDA-enabled build (unlike Windows), so the backend image's `torch` is already CUDA-capable — but `docker-compose.yml` has no GPU device reservation configured (no `deploy.resources.reservations.devices`), so the container has no access to the host GPU regardless. `torch.cuda.is_available()` returns `False` inside the container too unless you add a GPU reservation to the `backend` service and have Docker Desktop's GPU support enabled.
 - **Once CUDA is working, the very first startup can hang for a very long time (10+ minutes) with the camera showing nothing.** `main.py` auto-enables ViTPose++ (a ~900MB Hugging Face model) whenever a GPU is detected (`ENABLE_VITPOSE` defaults to on when `torch.cuda.is_available()`). Loading it calls `from_pretrained()`, which re-validates every file over the network against Hugging Face **on every single startup**, even once the model is fully cached locally — and without an `HF_TOKEN`, those requests are rate-limited and can take many minutes. This blocks the entire backend from binding its ports (RTSP/camera included) until it finishes, which looks exactly like a dead camera feed. Once the model has fully downloaded and cached once, skip the revalidation on every future run:
@@ -199,10 +199,13 @@ cd ../..
 cd photobooth
 py -3.11 -m venv venv
 venv\Scripts\Activate.ps1
+python backend/install_torch.py          # CUDA torch — do this FIRST
 pip install -r backend/requirements.txt
 python backend/fetch_wilor.py
 python app.py
 ```
+
+> **`install_torch.py` must run before `pip install -r`.** It reads your driver's maximum CUDA version from `nvidia-smi`, picks the matching wheel (cu124 or cu118) and installs it from the PyTorch index. Run the other order and pip pulls torch in transitively — via ultralytics, pytorch-lightning and mediapipe — and PyPI's default wheel is **CPU-only**, which is 20–50× slower with no error to indicate it. `main.py` refuses to start on a CPU build rather than let that pass unnoticed; set `REQUIRE_CUDA=0` only if you genuinely have no NVIDIA GPU.
 
 > `fetch_wilor.py` downloads the WiLoR model weights (~2.5 GB) into `backend/wilor_models/` — only needed once per machine; it skips files that are already present, so it's safe to re-run.
 

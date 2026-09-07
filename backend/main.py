@@ -40,6 +40,39 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# CUDA is required
+# ---------------------------------------------------------------------------
+# PyPI's default torch wheels are CPU-only, and ultralytics, pytorch-lightning
+# and mediapipe all pull torch transitively - so `pip install -r
+# requirements.txt` on a clean machine installs the CPU build unless the CUDA
+# one is already there. Nothing then errors. YOLO, ViTPose++ and WiLoR each
+# check torch.cuda.is_available() and quietly fall back:
+#
+#   ViTPose++   disables itself entirely, so keypoint refinement is gone and
+#               arm/wrist tracking degrades - the owl and bat perch on the
+#               forearm, so this is visible
+#   WiLoR       ~21 ms/hand becomes an order of magnitude worse; the drone and
+#               OC Fusion stop being usable
+#   YOLO        runs on the synchronous path, so its slowdown is latency for
+#               everything
+#
+# The result is a booth that starts fine and feels broken, with no error to
+# point at - the same failure mode the WiLoR path refuses to allow. So this
+# refuses too. Set REQUIRE_CUDA=0 to run CPU-only deliberately (a laptop with
+# no NVIDIA GPU, say); it is never the right setting on booth hardware.
+if os.environ.get('REQUIRE_CUDA', '1') != '0' and not torch.cuda.is_available():
+    raise SystemExit(
+        "torch cannot see a GPU - torch.cuda.is_available() is False.\n\n"
+        "Installed: torch %s\n\n"
+        "A version with no +cuXXX suffix is the CPU-only build from PyPI.\n"
+        "Install the CUDA build matching your driver (its max CUDA version is\n"
+        "the one nvidia-smi reports):\n\n"
+        "    python backend/install_torch.py\n\n"
+        "Set REQUIRE_CUDA=0 to run on CPU deliberately - much slower, and\n"
+        "ViTPose++ will not run at all." % torch.__version__
+    )
+
+# ---------------------------------------------------------------------------
 # Hand landmarks and palm orientation - WiLoR
 # ---------------------------------------------------------------------------
 #
