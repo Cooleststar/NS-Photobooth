@@ -25,6 +25,11 @@ const BOB_AMPLITUDE_FACTOR = 0.014
 // against the same palm_up signal, so reuse rather than re-derive.
 const PALM_HOLD_TIME = 0.4
 const PALM_CONFIRM_TIME = 0.15
+// How fast the rendered position catches up to the tracked hand, per second.
+// Mirrors drone.ts's FOLLOW_RATE — see there for the full reasoning. Higher is
+// more responsive but passes through more detector jitter; lower is smoother
+// but visibly trails a fast hand.
+const FOLLOW_RATE = 14
 
 interface FeedBounds { left: number; right: number; top: number; bottom: number }
 
@@ -122,11 +127,32 @@ async function createOCFusionSprite(
     y: new KalmanFilter(KF_PARAMS),
   }
 
+  // Two positions, as in drone.ts. wristX/Y is the TARGET, updated only when a
+  // backend sample arrives; drawnX/Y is what is actually rendered, eased toward
+  // the target every frame.
+  //
+  // Without this the sprite renders at 60 fps from a target that only moves at
+  // the hand-detection rate — ~5.7/sec with eight hands in shot, since WiLoR
+  // costs ~21 ms per hand. The Kalman filter smooths across backend samples,
+  // not across render frames, so the result is hold-then-jump.
   let wristX = 0
   let wristY = 0
+  let drawnX = 0
+  let drawnY = 0
+  let hasDrawn = false
   let bobTime = 0
   let palmHoldTimer = 0
   let palmConfirmTimer = 0
+  /** Drop the eased position so a sprite that faded out and is re-acquired
+   * elsewhere appears there rather than flying across the screen.
+   *
+   * Deliberately NOT part of initialState(): that is called during setup,
+   * before these `let` bindings exist, and touching them from there throws a
+   * ReferenceError through the temporal dead zone — which silently prevents
+   * the whole animation from being created. Same trap as drone.ts. */
+  const resetEasing = () => {
+    hasDrawn = false
+  }
   const animManager = new AnimStateManager()
 
   // `active` lets the assigner tell a visible slot from an idle one: only an
@@ -139,9 +165,26 @@ async function createOCFusionSprite(
       palmConfirmTimer = Math.min(PALM_CONFIRM_TIME, palmConfirmTimer + ticker.deltaMS / 1000)
       wristX = kf.x.filter(rawWrist.x)
       wristY = kf.y.filter(rawWrist.y)
+      if (!hasDrawn) {
+        // Seed on the FIRST REAL detection, not the first tick: ticks arrive
+        // before any hand does, and seeding from the still-zero target would
+        // make the sprite fly in from the top-left corner.
+        drawnX = wristX
+        drawnY = wristY
+        hasDrawn = true
+      }
     } else {
       palmHoldTimer = Math.max(0, palmHoldTimer - ticker.deltaMS / 1000)
       palmConfirmTimer = 0
+    }
+
+    // Ease the rendered position toward the target once per render frame.
+    // Framerate-independent via the exponential, so it looks the same at 60 or
+    // 144 Hz.
+    if (hasDrawn) {
+      const k = 1 - Math.exp(-FOLLOW_RATE * (ticker.deltaMS / 1000))
+      drawnX += (wristX - drawnX) * k
+      drawnY += (wristY - drawnY) * k
     }
 
     const hasPerson = animManager.tracking
@@ -151,11 +194,12 @@ async function createOCFusionSprite(
     animManager.tracking = hasPerson
     const { time, state } = animManager
 
-    const targetY = wristY - hoverOffset
+    const targetY = drawnY - hoverOffset
 
     switch (state) {
       case 'exited':
         initialState()
+        resetEasing()
         bobTime = 0
         break
 
@@ -164,7 +208,7 @@ async function createOCFusionSprite(
         sprite.alpha = lerpLinear(time, 0, ANIM.FADE)
         const progress = lerpEO(time, 0, ANIM.FADE)
         const startY = targetY - app.renderer.height * 0.2
-        const ep = clampPos(wristX, startY + (targetY - startY) * progress, size, bounds)
+        const ep = clampPos(drawnX, startY + (targetY - startY) * progress, size, bounds)
         container.position.set(ep.x, ep.y)
         if (time >= ANIM.FADE) animManager.transition()
         break
@@ -175,7 +219,7 @@ async function createOCFusionSprite(
         container.alpha = 1
         bobTime += ticker.deltaMS / 1000
         const bob = Math.sin(bobTime * BOB_SPEED) * bobAmplitude
-        const tp = clampPos(wristX, targetY + bob, size, bounds)
+        const tp = clampPos(drawnX, targetY + bob, size, bounds)
         container.position.set(tp.x, tp.y)
         break
       }
@@ -190,6 +234,7 @@ async function createOCFusionSprite(
         container.alpha = 1 - lerpLinear(time, 0, ANIM.FADE)
         if (time >= ANIM.FADE) {
           initialState()
+          resetEasing()
           animManager.transition()
         }
         break
