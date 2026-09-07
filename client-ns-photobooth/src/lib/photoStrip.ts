@@ -1,6 +1,23 @@
 import QRCode from 'qrcode'
 import logo11Url from '../assets/icons/11logo.png'
 import fusionLogoUrl from '../assets/icons/fusionlogo.png'
+import atlasLogoUrl from '../assets/icons/Atlas Logo.jpeg'
+import boreasLogoUrl from '../assets/icons/Boreas Logo.jpeg'
+import hqLogoUrl from '../assets/icons/HQ Logo.jpeg'
+import rstaLogoUrl from '../assets/icons/RSTA Logo.jpeg'
+import signalLogoUrl from '../assets/icons/Signal Logo.jpeg'
+import { CoyLogo, selectedCoyLogo } from '../store'
+
+/** Company logo files, keyed to match COY_LOGOS in the store. 'none' has no
+ * entry: the footer skips the slot entirely rather than drawing a blank. */
+const COY_LOGO_URLS: Partial<Record<CoyLogo, string>> = {
+  '11': logo11Url,
+  atlas: atlasLogoUrl,
+  boreas: boreasLogoUrl,
+  hq: hqLogoUrl,
+  rsta: rstaLogoUrl,
+  signal: signalLogoUrl,
+}
 
 /** Split an array into chunks of at most `size` elements each. */
 export function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -20,13 +37,26 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-// Loaded once and reused for every strip — both logos are static assets.
-let brandLogosPromise: Promise<[HTMLImageElement, HTMLImageElement]> | null = null
-function loadBrandLogos(): Promise<[HTMLImageElement, HTMLImageElement]> {
-  if (!brandLogosPromise) {
-    brandLogosPromise = Promise.all([loadImage(logo11Url), loadImage(fusionLogoUrl)])
+// fusionlogo is on every strip, so it is loaded once and kept.
+let fusionLogoPromise: Promise<HTMLImageElement> | null = null
+function loadFusionLogo(): Promise<HTMLImageElement> {
+  if (!fusionLogoPromise) fusionLogoPromise = loadImage(fusionLogoUrl)
+  return fusionLogoPromise
+}
+
+// The company logo can change between strips, so it is cached per key rather
+// than once globally - switching in Settings and taking another photo must not
+// keep drawing the previous company's logo.
+const coyLogoPromises = new Map<CoyLogo, Promise<HTMLImageElement>>()
+function loadCoyLogo(key: CoyLogo): Promise<HTMLImageElement> | null {
+  const url = COY_LOGO_URLS[key]
+  if (!url) return null
+  let p = coyLogoPromises.get(key)
+  if (!p) {
+    p = loadImage(url)
+    coyLogoPromises.set(key, p)
   }
-  return brandLogosPromise
+  return p
 }
 
 export const DEFAULT_STRIP_BG = '#ffffff'
@@ -72,10 +102,22 @@ function footerMetrics(imageCount: number) {
   }
 }
 
-/** 11logo.png carries transparent padding inside the file (its opaque content
- * is ~880x798 of a 1152x1100 canvas) while fusionlogo.png has none. Drawing
- * both into the same box therefore renders the 11 logo visibly smaller.
- * Measure each logo's opaque bounds once, then draw only that region. */
+/** Logos carry padding inside the file, and not the same kind. 11logo.png's
+ * opaque content is ~880x798 of a 1152x1100 canvas while fusionlogo.png has
+ * none, so drawing both into the same box renders the 11 logo visibly
+ * smaller. Measure each logo's content bounds once and draw only that region.
+ *
+ * "Content" means two different things depending on the file. The two brand
+ * PNGs are transparent, so their padding is alpha. The company logos are
+ * opaque JPEGs on white, so alpha finds nothing and the whole square measures
+ * as content - which would render them noticeably larger and boxier than
+ * fusionlogo beside them. For those, near-white is treated as padding too.
+ *
+ * Only the OUTER margin is trimmed either way, so white inside a logo is
+ * kept; nothing is made transparent. A company logo therefore still draws its
+ * own white background, which is invisible on the default white strip and
+ * shows as a pale block on a coloured one. Supplying those logos as PNGs with
+ * real transparency is the fix if coloured strips are used. */
 const opaqueBoxCache = new WeakMap<HTMLImageElement, { x: number; y: number; w: number; h: number }>()
 
 function opaqueBox(img: HTMLImageElement) {
@@ -90,10 +132,30 @@ function opaqueBox(img: HTMLImageElement) {
     const cx = c.getContext('2d')!
     cx.drawImage(img, 0, 0)
     const { data } = cx.getImageData(0, 0, img.width, img.height)
+
+    // Does this image use alpha at all? Sampling the four corners is enough:
+    // padding lives at the edges, so a file with transparent padding has
+    // transparent corners. If none are transparent the file is opaque and
+    // near-white has to stand in for padding instead.
+    const cornerAlpha = [
+      data[3],
+      data[(img.width - 1) * 4 + 3],
+      data[((img.height - 1) * img.width) * 4 + 3],
+      data[((img.height - 1) * img.width + img.width - 1) * 4 + 3],
+    ]
+    const usesAlpha = cornerAlpha.some((a) => a <= 8)
+    // Generous enough to catch JPEG compression noise around the edges of a
+    // white background, tight enough not to eat pale content.
+    const WHITE = 244
+
     let x0 = img.width, y0 = img.height, x1 = -1, y1 = -1
     for (let y = 0; y < img.height; y++) {
       for (let x = 0; x < img.width; x++) {
-        if (data[(y * img.width + x) * 4 + 3] > 8) {
+        const i = (y * img.width + x) * 4
+        const isContent = usesAlpha
+          ? data[i + 3] > 8
+          : data[i] < WHITE || data[i + 1] < WHITE || data[i + 2] < WHITE
+        if (isContent) {
           if (x < x0) x0 = x
           if (x > x1) x1 = x
           if (y < y0) y0 = y
@@ -168,16 +230,23 @@ async function drawFooter(
     canvasHeight,
   )
 
-  // Both logos sit beside the QR box, vertically centered on the same row
-  // as the brand text/timestamp above.
+  // Logos sit beside the QR box, vertically centered on the same row as the
+  // brand text/timestamp above. The company logo is read at draw time rather
+  // than passed in, so a strip re-themed later (addQrToStrip redraws from
+  // scratch) picks up the current selection like every other strip does.
   const { x: qrX } = footerQrBox(canvasWidth, canvasHeight, imageCount)
   const logoY = rowY - logoSize / 2
   const fusionX = qrX - qrMargin - logoSize
-  const logo11X = fusionX - logoGap - logoSize
+  const coyX = fusionX - logoGap - logoSize
 
-  const [logo11Img, fusionLogoImg] = await loadBrandLogos()
-  drawFooterIcon(ctx, logo11Img, logo11X, logoY, logoSize)
+  const fusionLogoImg = await loadFusionLogo()
   drawFooterIcon(ctx, fusionLogoImg, fusionX, logoY, logoSize)
+
+  // 'none' draws nothing and leaves the slot empty rather than shifting the
+  // other icons: fusionlogo and the QR keep their positions, so strips with
+  // and without a company logo still line up with each other.
+  const coyPromise = loadCoyLogo(selectedCoyLogo.get())
+  if (coyPromise) drawFooterIcon(ctx, await coyPromise, coyX, logoY, logoSize)
 }
 
 /** Stack photos vertically into a single strip image (data URL), on a

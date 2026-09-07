@@ -15,6 +15,9 @@ import {
   challenge67Enabled,
   debugEnabled,
   multiTarget,
+  COY_LOGOS,
+  CoyLogo,
+  selectedCoyLogo,
   offlineOnly,
   cameraInitialized,
   photoCountdownSec,
@@ -85,6 +88,35 @@ function SwitchRow({
 /** Dropdown that opens into a checkbox list — lets several animations be
  * selected at once (see selectedGifs) while still collapsing to a single
  * closed control like a normal dropdown. */
+/** Company logo drawn in the photo strip footer, beside fusionlogo and the QR.
+ *
+ * A plain single-select, unlike AnimMultiSelect above: exactly one company
+ * logo applies at a time, and it is set once per event rather than adjusted
+ * during one. */
+function CoyLogoSelect() {
+  const current = useStore(selectedCoyLogo)
+  return (
+    <div tw='flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>Company Logo</span>
+      <select
+        value={current}
+        onChange={(e) =>
+          selectedCoyLogo.set((e.target as HTMLSelectElement).value as CoyLogo)
+        }
+        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
+      >
+        {Object.entries(COY_LOGOS).map(([key, label]) => (
+          <option key={key} value={key}>{label}</option>
+        ))}
+      </select>
+      <span tw='text-xs text-gray-500'>
+        Appears on photo strips taken from now on; strips already taken keep
+        the logo they were made with.
+      </span>
+    </div>
+  )
+}
+
 function AnimMultiSelect() {
   const gifOptions = useStore(selectedGifs)
   const [open, setOpen] = useState(false)
@@ -326,6 +358,7 @@ export default function Settings() {
             {!qrMode && !challenge67 && (
               <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
             )}
+            <CoyLogoSelect />
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />

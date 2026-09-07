@@ -109,6 +109,38 @@ export function canSelect(
   if (kept.length !== current.length) selectedGifs.set(kept)
 }
 
+/** Company logo shown in the photo strip footer, beside fusionlogo and the QR.
+ *
+ * The files live in assets/icons and are imported by lib/photoStrip.ts - only
+ * the key is stored here, so a selection persisted in a browser stays valid if
+ * an image is renamed or re-exported.
+ *
+ * '11' is the historical default: 11logo.png was hardcoded in that slot before
+ * this was selectable, so an existing booth keeps the logo it has always had
+ * rather than silently changing on upgrade. 'none' draws nothing and closes
+ * the gap, for events where no company logo applies. */
+export const COY_LOGOS = {
+  none: 'No logo',
+  '11': '11 (default)',
+  atlas: 'Atlas',
+  boreas: 'Boreas',
+  hq: 'HQ',
+  rsta: 'RSTA',
+  signal: 'Signal',
+} as const
+export type CoyLogo = keyof typeof COY_LOGOS
+
+export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', '11', opts)
+
+// Self-heal, same as the GIF_OPTIONS cleanup above: a key that no longer
+// exists (a company removed, say) would otherwise sit in a browser's storage
+// and resolve to an undefined image URL, which fails at draw time rather than
+// at selection time.
+{
+  const current = selectedCoyLogo.get()
+  if (!(current in COY_LOGOS)) selectedCoyLogo.set('11')
+}
+
 export const pointerEnabled = atom(false)
 export const multiTarget = persistentAtom('multiTarget', false, opts)
 
