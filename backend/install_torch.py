@@ -6,11 +6,15 @@
 
 WHY THIS EXISTS
 ---------------
-torch is deliberately absent from requirements.txt: the correct wheel depends
-on the driver, and there is no single pin that is right everywhere. But leaving
-it out means `pip install -r requirements.txt` installs the CPU-only wheel from
-PyPI, because ultralytics, pytorch-lightning and mediapipe all depend on torch
-transitively and PyPI's default has no CUDA in it.
+requirements.txt pins torch's VERSION but not its wheel - it carries no index,
+because the right CUDA build depends on the driver and no single index is
+correct everywhere. That pin is satisfied by any local variant (2.6.0+cu124,
+2.6.0+cu118, or PyPI's CPU 2.6.0), which is what makes one file work on every
+machine. The gap it leaves is that a plain `pip install -r requirements.txt`
+on a clean box resolves those pins to the CPU-only wheels from PyPI.
+
+This script closes that gap: run it first and the pins resolve to the CUDA
+build already installed, so pip has nothing to do.
 
 Nothing errors when that happens. The booth starts and simply runs badly -
 ViTPose++ switches itself off, WiLoR slows by an order of magnitude, and YOLO
@@ -95,6 +99,18 @@ def main():
         sys.executable, '-m', 'pip', 'install',
         'torch==%s' % TORCH, 'torchvision==%s' % TORCHVISION,
         '--index-url', 'https://download.pytorch.org/whl/%s' % tag,
+        # PyPI must stay reachable as a fallback. --index-url REPLACES the
+        # default index, and the PyTorch index carries only torch's own
+        # wheels - so without this, resolving torch's dependencies fails on a
+        # clean machine ("No matching distribution found for flit_core",
+        # needed to build typing_extensions from source). Verified in an empty
+        # venv: with --index-url alone the install errors out; with this added
+        # it resolves to torch 2.6.0+cu124 and torchvision 0.21.0+cu124.
+        #
+        # The CUDA build still wins over PyPI's CPU one of the same version:
+        # PEP 440 sorts a local version segment above its absence, so
+        # 2.6.0+cu124 > 2.6.0.
+        '--extra-index-url', 'https://pypi.org/simple',
     ]
     print('\n' + ' '.join(cmd))
 
