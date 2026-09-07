@@ -11,10 +11,21 @@
 # ---------------------------------------------------------------------------
 # PyTorch - install FIRST, and NOT from PyPI
 # ---------------------------------------------------------------------------
-# torch/torchvision are deliberately not pinned below. The wheel that belongs
-# on a given machine depends on its CUDA version, and the default PyPI wheels
-# are CPU-only - installing those silently gives you a backend that runs, just
-# 20-50x slower, which is a miserable thing to debug at an event.
+# torch and torchvision ARE pinned below, but WITHOUT an index. That is a
+# version pin only: PEP 440 ignores the local version segment, so 2.6.0+cu124
+# and 2.6.0+cu118 both satisfy `torch==2.6.0`. What that buys:
+#
+#   * A correct CUDA install is never clobbered - pip sees the pin already
+#     satisfied by the +cuXXX build and leaves it alone.
+#   * One pin covers every machine, even though they need different wheels.
+#   * Without it, pip resolved torch transitively to 2.14.0 / torchvision
+#     0.29.0 - versions nothing here has been tested against.
+#
+# What the pin cannot do is choose the CUDA wheel, because the right one
+# depends on the driver. Pointing this file at a CUDA index would hardcode one
+# choice and break the other machine; pointing it at the CPU index would
+# guarantee a wasted 2.5 GB re-download every time. So install the wheel first,
+# and these pins then resolve to it rather than to CPU builds.
 #
 # Pick the wheel index by what your driver actually supports - check with
 # `nvidia-smi` (its "CUDA Version" field is the max the driver was built
@@ -43,6 +54,11 @@
 # ---------------------------------------------------------------------------
 # Vision pipeline
 # ---------------------------------------------------------------------------
+# Pinned without an index; see the note above. Install the CUDA build FIRST
+# with `python backend/install_torch.py`, or these resolve to CPU-only wheels
+# and main.py will refuse to start.
+torch==2.6.0
+torchvision==0.21.0
 ultralytics==8.4.90
 opencv-python==4.11.0.86
 numpy==2.4.6
