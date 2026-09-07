@@ -465,11 +465,16 @@ _detection_mode: str = 'both'
 
 # QR code detection, for QR mode (a guest holds a printed/on-screen QR code
 # up to the camera and the frontend shows a matching animation — see
-# QR_DRONE_PAYLOAD in Display.tsx). Two interchangeable backends: pyzbar is
-# noticeably more tolerant of small, angled, or partially-blurred codes than
-# OpenCV's built-in detector, but needs the zbar DLL on Windows, which isn't
-# always present — degrade to OpenCV (always available, ships with
-# opencv-python) rather than crash if it's missing.
+# QR_DRONE_PAYLOAD in Display.tsx). Two interchangeable backends, pyzbar
+# preferred when importable, degrading to OpenCV's built-in detector rather
+# than crashing if the zbar DLL is missing.
+#
+# The preference is habit, not evidence. pyzbar was long described here as
+# "noticeably more tolerant of small, angled or partially-blurred codes"; that
+# was never measured, and on synthetic codes it matched OpenCV on tilt and
+# lost on a small blurred one. Both are kept because they fail on different
+# inputs, but do not assume the pyzbar path is the better one - see
+# requirements.txt.
 _qr_detector = cv2.QRCodeDetector()
 # More pixels per QR module = more reliable decode at a distance, at some CPU
 # cost. Was 1280 — too aggressive a downscale once cameras started running

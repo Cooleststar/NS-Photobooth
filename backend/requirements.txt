@@ -110,10 +110,19 @@ requests==2.34.2
 # ---------------------------------------------------------------------------
 # Optional
 # ---------------------------------------------------------------------------
-# pyzbar decodes small, angled and partially-blurred QR codes noticeably
-# better than OpenCV's built-in detector, but it needs the zbar DLL, which is
-# not always present on Windows. main.py detects it at import and falls back
-# to OpenCV, so this is safe to skip - and is currently NOT installed here,
-# meaning QR mode is running on the weaker detector. Install it if QR
-# recognition at distance matters.
-# pyzbar==0.1.9
+# Second QR decoder. main.py prefers it when importable and falls back to
+# OpenCV's built-in detector otherwise, so omitting it is safe.
+#
+# It is listed because the two decoders fail on different inputs and having
+# both costs ~800 KB. It is NOT listed because it is better: the claim that
+# pyzbar handles small, angled and blurred codes "noticeably better" came with
+# the original code and had never been measured. Measured here on synthetic
+# codes, it matched OpenCV on tilt up to 0.32 and LOST on a 44px blurred code
+# OpenCV still read. Real camera frames carry perspective, uneven lighting and
+# JPEG artefacts those tests do not, so treat both as unproven and judge from
+# live QR mode.
+#
+# Windows note: the wheel bundles the zbar DLLs, but loading them needs the
+# Visual C++ 2013 redistributable - the usual cause of an ImportError after a
+# successful install.
+pyzbar==0.1.9
