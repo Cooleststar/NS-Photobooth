@@ -5,7 +5,7 @@
 import { useNiceROSState } from 'nice-ros-react'
 import { AnyTopicMap, MSG } from 'nice-ros-sdk'
 import { MutableRefObject, useEffect } from 'react'
-import { NormalizedLandmark } from '@mediapipe/drawing_utils'
+import { NormalizedLandmark } from './landmarks'
 import { Analysis, HandData, PoseKeypoint, QrCodeDetection } from './nicepipe'
 import { Point } from './nicepipe/propDetection'
 

@@ -504,13 +504,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mediapipe/drawing_utils@npm:^0.3.1620248257":
-  version: 0.3.1620248257
-  resolution: "@mediapipe/drawing_utils@npm:0.3.1620248257"
-  checksum: d1c36417b43f24ecff38e14fa7851ffddaa42d20f803c33f9cd41d252fd6bdaaf343b0a088e892ec517700d8d97408376bfc35a3b6d109013871cc34b6429b0c
-  languageName: node
-  linkType: hard
-
 "@nanostores/persistent@npm:^0.5.2":
   version: 0.5.2
   resolution: "@nanostores/persistent@npm:0.5.2"
@@ -2826,7 +2819,6 @@ __metadata:
     "@emotion/react": ^11.8.2
     "@emotion/styled": ^11.8.1
     "@jsquash/avif": ^1.0.2
-    "@mediapipe/drawing_utils": ^0.3.1620248257
     "@nanostores/persistent": ^0.5.2
     "@nanostores/preact": ^0.1.3
     "@nanostores/router": ^0.3.1

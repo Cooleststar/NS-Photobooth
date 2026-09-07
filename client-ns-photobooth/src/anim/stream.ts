@@ -1,4 +1,4 @@
-import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
+import { NormalizedLandmarkList } from '../api/landmarks'
 
 // MediaPipe Pose 33-keypoint connections — main bones only (no wrist/foot sub-triangles)
 const MP_POSE_CONNECTIONS: [number, number][] = [

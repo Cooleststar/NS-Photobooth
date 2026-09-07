@@ -1,4 +1,4 @@
-import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
+import { NormalizedLandmarkList } from '../landmarks'
 
 type Point = [number, number]
 /** box is tl, bl, br, tr */

@@ -1,5 +1,5 @@
 import * as PIXI from '../pixi'
-import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
+import { NormalizedLandmarkList } from '../api/landmarks'
 
 import { createKFilter } from './utils'
 import { convertPoint } from '../api/nicepipe/mpPose'

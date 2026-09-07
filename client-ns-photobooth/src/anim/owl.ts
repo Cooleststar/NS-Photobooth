@@ -1,4 +1,4 @@
-import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
+import { NormalizedLandmarkList } from '../api/landmarks'
 import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 

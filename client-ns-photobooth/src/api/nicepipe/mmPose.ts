@@ -1,7 +1,7 @@
 import {
   NormalizedLandmark,
   NormalizedLandmarkList,
-} from '@mediapipe/drawing_utils'
+} from '../landmarks'
 import { PoseKeypoint } from '.'
 
 /** note the coordinates are implicitly clipped... */

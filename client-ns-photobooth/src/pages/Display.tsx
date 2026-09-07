@@ -1,4 +1,4 @@
-import { NormalizedLandmarkList } from '@mediapipe/drawing_utils'
+import { NormalizedLandmarkList } from '../api/landmarks'
 import { useStore } from '@nanostores/preact'
 import { useCam, useNiceConnState, useNiceROS, useNiceRTC } from 'nice-ros-react'
 import {

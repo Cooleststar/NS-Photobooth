@@ -1,7 +1,7 @@
 import {
   NormalizedLandmark,
   NormalizedLandmarkList,
-} from '@mediapipe/drawing_utils'
+} from '../landmarks'
 
 /** converts normalizedLandmark to unnormalized coordinates */
 export function convertPoint(

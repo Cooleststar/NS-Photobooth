@@ -15,7 +15,6 @@
     "@emotion/react": "^11.8.2",
     "@emotion/styled": "^11.8.1",
     "@jsquash/avif": "^1.0.2",
-    "@mediapipe/drawing_utils": "^0.3.1620248257",
     "@nanostores/persistent": "^0.5.2",
     "@nanostores/preact": "^0.1.3",
     "@nanostores/router": "^0.3.1",
