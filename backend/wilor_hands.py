@@ -326,11 +326,7 @@ def _palm_normal_y(R: np.ndarray, is_right: bool) -> float:
     the left hand is mirrored. Unlike the MediaPipe path, the handedness this
     depends on comes from the detector's own class, not a coin-flip classifier.
     """
-    n = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
-    if not is_right:
-        n = n * np.array([1.0, 1.0, -1.0], dtype=np.float32)
-    n = n / (np.linalg.norm(n) + 1e-9)
-    return float(n[1])
+    return float(_oriented(R, (0.0, -1.0, 0.0), is_right)[1])
 
 
 # Which local axis runs along the fingers, wrist -> fingertips.
@@ -376,16 +372,26 @@ FINGERS_UP_THRESHOLD = float(os.environ.get('FINGERS_UP_THRESHOLD', '-0.5'))
 PALM_TO_CAMERA_THRESHOLD = float(os.environ.get('PALM_TO_CAMERA_THRESHOLD', '-0.3'))
 
 
-def _oriented(R: np.ndarray, local: tuple, is_right: bool) -> np.ndarray:
-    """A local axis expressed in camera space, mirrored for the left hand.
+# Chirality correction for left hands, applied in CAMERA space.
+#
+# WiLoR flips left-hand crops horizontally before the network sees them, so the
+# model always reconstructs a right hand. Undoing that is a reflection in the
+# image's x axis - hence (-1, 1, 1).
+#
+# _palm_normal_y previously used (1, 1, -1) here. That was never actually
+# exercised: it reads only the y component, and NO reflection of this kind
+# changes y, so palm_sky produced identical results either way and the wrong
+# axis could not show up. It surfaced the moment the OC Fusion gesture started
+# reading z - the left hand's palm-to-camera test came out inverted, so the
+# gesture worked on one hand only.
+_LEFT_MIRROR = np.array([-1.0, 1.0, 1.0], dtype=np.float32)
 
-    The mirror is the same chirality correction _palm_normal_y applies: the two
-    hands are reflections in the canonical frame, so a left hand's axes come
-    out flipped in z.
-    """
+
+def _oriented(R: np.ndarray, local: tuple, is_right: bool) -> np.ndarray:
+    """A local axis expressed in camera space, mirrored for the left hand."""
     v = R @ np.array(local, dtype=np.float32)
     if not is_right:
-        v = v * np.array([1.0, 1.0, -1.0], dtype=np.float32)
+        v = v * _LEFT_MIRROR
     return v / (np.linalg.norm(v) + 1e-9)
 
 
