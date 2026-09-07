@@ -415,7 +415,7 @@ def _to_mp33(xyn, conf):
 # models don't burn GPU/CPU computing data nobody's reading.
 #   'pose'  -> owl/bat/globe (YOLO + ViTPose only; they never read hands)
 #   'hands' -> drone (WiLoR hands only; drone's update() ignores pose)
-#   'none'  -> laptop (a fixed-position fade prop; reads neither)
+#   'none'  -> a fixed-position fade prop (reads neither)
 #   'both'  -> default until the frontend checks in, or an unrecognised mode
 # Set via POST /detection_mode {"mode": "..."} — see detection_mode_handler.
 # ---------------------------------------------------------------------------

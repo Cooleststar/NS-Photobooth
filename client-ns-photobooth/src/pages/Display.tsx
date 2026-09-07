@@ -32,7 +32,6 @@ import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
 import { convertPoint } from '../api/nicepipe/mpPose'
 import { useNiceROSAnalysis } from '../api/niceRos'
-import laptopGif from '../assets/laptop_anim/laptop.gif'
 import qrDroneGif from '../assets/drone_anim/drone.gif'
 import * as PIXI from '../pixi'
 import {
@@ -110,12 +109,10 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'none'>, string> = {
-  laptop: laptopGif,
-}
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'none'>, string> = {}
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
- * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type like laptop. */
+ * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
   'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
   'clownwignose', 'sunglasses', 'mustache',
@@ -123,23 +120,15 @@ const CHARACTER_OPTIONS = new Set<GifOption>([
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
 // pignose/batears/clownwignose/scuba read body pose only, drone and
-// ocfusion read hand landmarks only (ignores pose entirely), laptop is a
-// fixed-position fade prop that reads neither. Told to the backend via
-// POST /detection_mode so it skips idle models per-frame instead of running
-// YOLO/ViTPose/MediaPipe Hands unconditionally.
+// ocfusion read hand landmarks only (ignores pose entirely). Told to the
+// backend via POST /detection_mode so it skips idle models per-frame
+// instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
   none: 'none',
   owl: 'pose',
   bat: 'pose',
   globe: 'pose',
   drone: 'hands',
-  // 'pose', not 'none'. The laptop tracks nobody, so 'none' looked right - but
-  // it is presence-GATED: it fades in only while a person is in frame, and
-  // hasPerson is derived from pose data. 'none' stops the backend inferring at
-  // all, so no poses arrive, hasPerson is permanently false and the laptop
-  // never appears. It only worked when paired with another character, whose
-  // mode unioned back up to 'pose'.
-  laptop: 'pose',
   scuba: 'pose',
   ocfusion: 'hands',
   pignose: 'pose',

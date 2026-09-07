@@ -24,7 +24,6 @@ export const GIF_OPTIONS = {
   owl: 'Owl',
   bat: 'Bat',
   globe: 'Globe',
-  laptop: 'Laptop',
   drone: 'Drone',
   scuba: 'Scuba',
   ocfusion: 'OC Fusion',
