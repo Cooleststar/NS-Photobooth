@@ -814,9 +814,16 @@ export default function Display({
     const MAX_PEOPLE = 32
     const marginOpts = { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B }
     // hoisted so photographerRef.current (defined outside the IIFE below)
-    // can hide the decorative banner during capture — captured photos get
-    // their own border treatment in the gallery instead
-    let bannerContainer: PIXI.Container | undefined
+    // can hide the decorative banner FRAME during capture — captured photos
+    // get their own border treatment in the gallery instead.
+    //
+    // The logo is a separate container and deliberately NOT hidden: it is what
+    // brands each captured photo. Before it was split out it was painted into
+    // the frame image, so hiding the frame took the logo with it and no photo
+    // ever carried one.
+    let bannerFrame: PIXI.Container | undefined
+    let bannerLogo: PIXI.Container | undefined
+    let bannerUnsubscribe: (() => void) | undefined
 
     async function createAnimForGif(option: GifOption) {
       if (option === 'owl') {
@@ -1066,8 +1073,11 @@ export default function Display({
         createBanner(app),
       ])
       for (const [container] of arrows) animLayer.addChild(container)
-      app.stage.addChild(banner)
-      bannerContainer = banner
+      app.stage.addChild(banner.frameContainer)
+      app.stage.addChild(banner.logoContainer)
+      bannerFrame = banner.frameContainer
+      bannerLogo = banner.logoContainer
+      bannerUnsubscribe = banner.unsubscribe
 
       // Added to app.stage last (topmost), now that everything else is on
       // the stage too, so confetti renders over every character rather
@@ -1299,7 +1309,10 @@ export default function Display({
       })
 
       app.ticker.add(() => {
-        banner.visible = bannerEnabled.get()
+        // The Banner Animation switch governs the decorative frame. The logo
+        // is independent - it has its own "No logo" option and belongs in
+        // photos whether or not the frame is on screen.
+        banner.frameContainer.visible = bannerEnabled.get()
       })
       } catch (e) {
         // Asset load failure (network error, ensureLoaded's 60s timeout,
@@ -1317,11 +1330,12 @@ export default function Display({
       // Captured photos get their own border/branding in the gallery
       // (see photoStrip.ts) instead of the live-preview banner overlay, so
       // force one render with it hidden right before grabbing the frame.
-      const prevBannerVisible = bannerContainer?.visible ?? true
-      if (bannerContainer) bannerContainer.visible = false
+      const prevBannerVisible = bannerFrame?.visible ?? true
+      if (bannerFrame) bannerFrame.visible = false
+      // bannerLogo is left visible on purpose — see where it is declared.
       app.renderer.render(app.stage)
       const imCanvas = postprocessPicture(app.renderer.view)
-      if (bannerContainer) bannerContainer.visible = prevBannerVisible
+      if (bannerFrame) bannerFrame.visible = prevBannerVisible
 
       console.log('Captured photo resolution:', imCanvas.width, 'x', imCanvas.height)
       return imCanvas.toDataURL(
@@ -1339,6 +1353,10 @@ export default function Display({
 
     return () => {
       cancelled = true
+      // Drop the banner-logo store subscription with the app instance, or a
+      // switch after remount would drive sprites belonging to a destroyed
+      // renderer.
+      bannerUnsubscribe?.()
       try {
         clearInterval(debugPrintAnalysis)
         // NOTE: do NOT call app.loader.reset() here. With sharedLoader:true,

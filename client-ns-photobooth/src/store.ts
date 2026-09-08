@@ -135,6 +135,31 @@ export type CoyLogo = keyof typeof COY_LOGOS
 
 export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', 'fusion', opts)
 
+/** The logo shown over the live feed, at the bottom of the banner frame.
+ *
+ * It used to be painted into border_design6.png itself, which is why it could
+ * not be changed and never reached a captured photo - the whole banner is
+ * hidden during capture. The frame is now banner_frame.png with that logo
+ * removed, and the logo is drawn as its own sprite that STAYS visible while
+ * the frame hides, so it appears in photos.
+ *
+ * '11' is the default because that is the logo that was baked in, so a booth
+ * looks unchanged on upgrade. '11' is offered here and not in the footer
+ * because the footer already draws 11logo in its fixed slot. */
+export const BANNER_LOGOS = {
+  '11': '11 (default)',
+  none: 'No logo',
+  fusion: 'Fusion',
+  atlas: 'Atlas',
+  boreas: 'Boreas',
+  hq: 'HQ',
+  rsta: 'RSTA',
+  signal: 'Signal',
+} as const
+export type BannerLogo = keyof typeof BANNER_LOGOS
+
+export const selectedBannerLogo = persistentAtom<BannerLogo>('bannerLogo', '11', opts)
+
 // Self-heal, same as the GIF_OPTIONS cleanup above: a key that no longer
 // exists would otherwise sit in a browser's storage and resolve to an
 // undefined image URL, failing at draw time rather than at selection time.
@@ -143,6 +168,8 @@ export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', 'fusion', opts
 {
   const current = selectedCoyLogo.get()
   if (!(current in COY_LOGOS)) selectedCoyLogo.set('fusion')
+  const banner = selectedBannerLogo.get()
+  if (!(banner in BANNER_LOGOS)) selectedBannerLogo.set('11')
 }
 
 export const pointerEnabled = atom(false)

@@ -18,6 +18,9 @@ import {
   COY_LOGOS,
   CoyLogo,
   selectedCoyLogo,
+  BANNER_LOGOS,
+  BannerLogo,
+  selectedBannerLogo,
   offlineOnly,
   cameraInitialized,
   photoCountdownSec,
@@ -114,6 +117,35 @@ function CoyLogoSelect() {
       <span tw='text-xs text-gray-500'>
         Sits beside the 11 logo on photo strips taken from now on; strips
         already taken keep the logo they were made with.
+      </span>
+    </div>
+  )
+}
+
+/** The logo shown over the live feed, at the bottom of the banner frame.
+ *
+ * Separate from the footer selector: this one appears in every captured photo
+ * (the frame hides during capture, the logo does not), while the footer one
+ * appears on the printed strip. They can differ. */
+function BannerLogoSelect() {
+  const current = useStore(selectedBannerLogo)
+  return (
+    <div tw='flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>Banner Logo</span>
+      <select
+        value={current}
+        onChange={(e) =>
+          selectedBannerLogo.set((e.target as HTMLSelectElement).value as BannerLogo)
+        }
+        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
+      >
+        {Object.entries(BANNER_LOGOS).map(([key, label]) => (
+          <option key={key} value={key}>{label}</option>
+        ))}
+      </select>
+      <span tw='text-xs text-gray-500'>
+        Shown on the live feed and included in every photo taken. Independent
+        of the Banner Animation switch.
       </span>
     </div>
   )
@@ -360,6 +392,7 @@ export default function Settings() {
             {!qrMode && !challenge67 && (
               <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
             )}
+            <BannerLogoSelect />
             <CoyLogoSelect />
             <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />

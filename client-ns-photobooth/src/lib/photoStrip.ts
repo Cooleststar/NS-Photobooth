@@ -1,23 +1,13 @@
 import QRCode from 'qrcode'
-import logo11Url from '../assets/icons/11logo.png'
-import fusionLogoUrl from '../assets/icons/fusionlogo.png'
-import atlasLogoUrl from '../assets/icons/Atlas Logo.png'
-import boreasLogoUrl from '../assets/icons/Boreas Logo.png'
-import hqLogoUrl from '../assets/icons/HQ Logo.png'
-import rstaLogoUrl from '../assets/icons/RSTA Logo.png'
-import signalLogoUrl from '../assets/icons/Signal Logo.png'
+import { LOGO_URLS, LogoKey } from './logos'
 import { CoyLogo, selectedCoyLogo } from '../store'
 
-/** Files for the selectable middle slot, keyed to match COY_LOGOS in the
- * store. 'none' has no entry: the footer skips the slot rather than drawing a
- * blank. 11logo is absent because it is the FIXED slot, never selectable. */
-const COY_LOGO_URLS: Partial<Record<CoyLogo, string>> = {
-  fusion: fusionLogoUrl,
-  atlas: atlasLogoUrl,
-  boreas: boreasLogoUrl,
-  hq: hqLogoUrl,
-  rsta: rstaLogoUrl,
-  signal: signalLogoUrl,
+const logo11Url = LOGO_URLS['11']
+
+/** The middle slot's file, or null for 'none' - which draws nothing rather
+ * than a blank. 11logo is never selectable here: it is the fixed slot. */
+function coyLogoUrl(key: CoyLogo): string | null {
+  return key === 'none' ? null : LOGO_URLS[key as LogoKey] ?? null
 }
 
 /** Split an array into chunks of at most `size` elements each. */
@@ -50,7 +40,7 @@ function loadLogo11(): Promise<HTMLImageElement> {
 // keep drawing the previous selection.
 const coyLogoPromises = new Map<CoyLogo, Promise<HTMLImageElement>>()
 function loadCoyLogo(key: CoyLogo): Promise<HTMLImageElement> | null {
-  const url = COY_LOGO_URLS[key]
+  const url = coyLogoUrl(key)
   if (!url) return null
   let p = coyLogoPromises.get(key)
   if (!p) {
