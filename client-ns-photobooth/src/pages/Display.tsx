@@ -864,7 +864,13 @@ export default function Display({
       console.log('Beginning animation load...')
       try {
 
-      type AnimUpdate = (pose: typeof dataRef.current.mp_pose.pose) => void
+      // Every animation's update() requires a real landmark list, and every
+      // call site below already guards with `if (curPose)` before calling, so
+      // this states what is actually true. Deriving it from
+      // dataRef.current.mp_pose.pose instead made it
+      // `NormalizedLandmarkList | undefined` - a promise none of the
+      // animations can keep, since they index into the list unconditionally.
+      type AnimUpdate = (pose: NormalizedLandmarkList) => void
       // Grouped per selected character type, each with its OWN per-person
       // slot assignment — this is what lets several characters be selected
       // at once while each still independently tracks every detected person
@@ -1148,7 +1154,12 @@ export default function Display({
             ? convertPoint({ x: droneCodeRaw.x, y: droneCodeRaw.y, z: 0 }, height, width)
             : undefined
           const allPosesRaw = dataRef.current.allPoses ?? {}
-          const allPoses: { [id: number]: { x: number; y: number }[] } = {}
+          // NormalizedLandmarkList, not { x, y }[]: convertPoint returns z and
+          // visibility as well, and the QR-lock filter below reads visibility
+          // to reject landmarks the model cannot actually see. Annotating
+          // this as { x, y } hid that field from the type system while it was
+          // still present at runtime.
+          const allPoses: { [id: number]: NormalizedLandmarkList } = {}
           for (const [idStr, pose] of Object.entries(allPosesRaw)) {
             allPoses[Number(idStr)] = pose.map((p) => convertPoint(p, height, width))
           }
@@ -1262,7 +1273,15 @@ export default function Display({
             }
           }
 
-          const instNowLocked = inst.locked.get() && inst.lockedTrackId !== undefined
+          // Read the id ONCE into a const, then test and use that same value.
+          // Two reasons. inst.lockedTrackId is reassigned a few lines above in
+          // this same loop body, so checking the property and later indexing
+          // with it read it at two different moments; and narrowing does not
+          // survive being stored in a boolean - instNowLocked is just `true`,
+          // carrying no memory of which property it proved something about, so
+          // indexing with the property directly stayed `number | undefined`.
+          const lockedId = inst.lockedTrackId
+          const instNowLocked = inst.locked.get() && lockedId !== undefined
           if (instNowLocked && !inst.wasLocked && code) {
             // Immediate, at the code's own position — see the drone's
             // matching comment above for why not the exact landing spot.
@@ -1283,7 +1302,7 @@ export default function Display({
             // since it can't re-acquire without the code being shown again.
             // Requires the "Reset Animation" button in Settings to hand the
             // code back to a new guest.
-            inst.update(allPosesRaw[inst.lockedTrackId] ?? [])
+            inst.update(allPosesRaw[lockedId] ?? [])
           } else {
             // Not locked yet: no target, so it just stays hidden until the
             // code is shown and picked up by someone.
