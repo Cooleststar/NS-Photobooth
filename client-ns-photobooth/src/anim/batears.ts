@@ -38,9 +38,10 @@ const RIGHT_EAR_ANCHOR = { x: 0.8145, y: 0.2823 }
 const EAR_CONTENT_WIDTH_FRACTION = 0.3669
 
 // Desired *visible* width of each ear, relative to ear-to-ear distance —
-// the actual tuning knob. Was 0.8, reduced ~30% per feedback. Tune this if
-// the ears look too small/large.
-const EAR_VISIBLE_SIZE_FACTOR = 0.56
+// the actual tuning knob. Was 0.8, reduced ~30% per feedback, then raised
+// ~30% again (0.56 -> 0.728) per later feedback. Tune this if the ears look
+// too small/large.
+const EAR_VISIBLE_SIZE_FACTOR = 0.728
 
 // Ears don't have their own reliable detected landmark to anchor to (see
 // note above), so — same as this file's earlier horn logic — position is
@@ -54,8 +55,12 @@ const EAR_VISIBLE_SIZE_FACTOR = 0.56
 // — high enough to clear the hairline, lower than pure crown height. Tune
 // this if the ears sit too low/high on the head, EAR_SPREAD_FACTOR if too
 // close together/far apart.
-const CROWN_OFFSET_FACTOR = 0.45
-const EAR_SPREAD_FACTOR = 0.55
+// Raised from 0.45 and spread from 0.55 - latest reference photo showed the
+// pair sitting low and clustered near the eyebrows/forehead center instead
+// of above each ear at the sides of the head. Tune further if still off:
+// this factor for height, EAR_SPREAD_FACTOR below for how far apart.
+const CROWN_OFFSET_FACTOR = 0.65
+const EAR_SPREAD_FACTOR = 0.75
 
 // The crown-derived position above only reads as correct while roughly
 // facing the camera — in profile it's built from a frozen pre-turn
