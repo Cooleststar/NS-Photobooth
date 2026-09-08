@@ -294,12 +294,22 @@ export default function HUD({ photographerRef }: HUDProps) {
           <span tw='flex flex-row gap-5'>
             {images.length > 1 && (
               <>
+                {/* Arrow keys, matching how the rest of the preview is driven
+                    (PageUp confirms, PageDown cancels). These were the only
+                    KeybindBtns with no keyCode, so they registered a keydown
+                    listener that compared e.code against undefined and could
+                    never fire - a KeybindBtn doing no keybinding.
+                    The listener lives inside KeybindBtn, so it exists only
+                    while these buttons are mounted: during preview, with more
+                    than one photo. Arrow keys are unbound elsewhere. */}
                 <KeybindBtn
+                  keyCode='ArrowLeft'
                   onClick={() => setPreviewIndex((i) => Math.max(0, i - 1))}
                 >
                   Prev
                 </KeybindBtn>
                 <KeybindBtn
+                  keyCode='ArrowRight'
                   onClick={() =>
                     setPreviewIndex((i) => Math.min(images.length - 1, i + 1))
                   }

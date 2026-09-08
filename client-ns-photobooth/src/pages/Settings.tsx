@@ -239,6 +239,10 @@ function ResRow({
   return (
     <div tw='flex flex-col gap-1'>
       <span tw='text-xs text-gray-500'>{label}</span>
+      {/* String() on defaultValue below: Preact types it as string-only where
+          React allows numbers, and value.width/height are numbers. The DOM
+          coerces either way, so this is what was already happening
+          implicitly - the values are read back out with parseInt anyway. */}
       <div tw='flex items-center gap-2'>
         <input
           ref={widthRef}
@@ -246,7 +250,7 @@ function ResRow({
           type='number'
           min={0}
           max={3840}
-          defaultValue={value.width}
+          defaultValue={String(value.width)}
         />
         <span tw='text-gray-500 text-sm'>×</span>
         <input
@@ -255,7 +259,7 @@ function ResRow({
           type='number'
           min={0}
           max={2160}
-          defaultValue={value.height}
+          defaultValue={String(value.height)}
         />
         <button
           tw='flex-1 bg-gray-700 hover:bg-gray-600 text-white text-sm py-1.5 rounded transition-colors'

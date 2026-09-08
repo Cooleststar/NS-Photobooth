@@ -30,7 +30,12 @@ export async function loadPictures(): Promise<Picture[]> {
   }
 }
 
-export async function savePictures(pics: Picture[]): Promise<void> {
+/** `readonly` because this only reads the array to hand it to IndexedDB, and
+ * because nanostores gives listeners a read-only view of the store's value on
+ * purpose - so a listener cannot mutate state behind the store's back. Asking
+ * for a mutable Picture[] here demanded permission this function never uses,
+ * and made store.ts's pictures.listen() call a type error. */
+export async function savePictures(pics: readonly Picture[]): Promise<void> {
   try {
     const db = await openDB()
     return await new Promise((resolve, reject) => {
