@@ -1,13 +1,7 @@
 import { useStore } from '@nanostores/preact'
-import { useEffect, useState } from 'react'
 import 'twin.macro'
 import { Countdown, KeybindBtn } from '../components'
-import { challenge67Game, getBackendHttpUrl } from '../store'
-
-interface LeaderboardEntry {
-  score: number
-  ts: number
-}
+import { challenge67Game } from '../store'
 
 /** Full-screen overlay for 67 Mode, rendered by HUD.tsx in place of its
  * normal ready-state content (camera button/AnimPicker) when
@@ -17,20 +11,19 @@ interface LeaderboardEntry {
  * "start" trigger that flips phase to 'countdown'. */
 export default function Challenge67UI() {
   const game = useStore(challenge67Game)
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
+  // The leaderboard shown below comes from game.lastResult.top - the exact
+  // list the backend returned right after writing THIS round's score, not a
+  // separate fetch. A separate GET fired the moment phase flips to
+  // 'finished' used to race the POST that saves this round's score, and
+  // often won: the results screen would then show the board as it looked
+  // BEFORE this round's score was written, so even a chart-topping run never
+  // appeared at #1 here.
+  const leaderboard = game.lastResult?.top ?? []
 
   const start = () => {
     if (game.phase !== 'waiting' && game.phase !== 'finished') return
     challenge67Game.set({ phase: 'countdown', timeLeft: 0, reps: 0 })
   }
-
-  useEffect(() => {
-    if (game.phase !== 'finished') return
-    fetch(`${getBackendHttpUrl()}/challenge67/leaderboard`)
-      .then((res) => res.json())
-      .then((data) => setLeaderboard(data.top ?? []))
-      .catch(() => {})
-  }, [game.phase])
 
   switch (game.phase) {
     case 'waiting':

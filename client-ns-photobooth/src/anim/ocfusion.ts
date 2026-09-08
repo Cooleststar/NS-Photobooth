@@ -1,240 +1,201 @@
+import { NormalizedLandmarkList } from '../api/landmarks'
 import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 
-import { lerpLinear, lerpEO } from './utils'
+import { lerpLinear } from './utils'
+import { convertPoint } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
-import { HandData } from '../api/nicepipe'
 
-import ocFusionImg from '../assets/OC_Fusion/OC_FUSION.png'
+import ocFusionImg from '../assets/OC_Fusion/Firefly_RemoveBackground.png'
 
-// Same shape as drone.ts throughout — same trigger signal (palm_up from the
-// backend), same debounce/hover motion, same multi-hand slot assignment.
-// The only real difference is the asset itself is a static PNG rather than
-// an animated GIF, so there's no play()/stop()/currentFrame — which also
-// makes this cheaper than the drone per-instance (no per-frame GIF decode).
+// Was a hand-tracked hovering icon (WiLoR palm_up, same shape as drone.ts).
+// Changed on request to replace the person's face instead — now the same
+// sparse-face-point approach as clownwignose.ts/pignose.ts: no face-mesh
+// detector in this pipeline, so the face points already present in body
+// pose (nose=0, ears=7/8) are reused to size/position/rotate the image.
+//
+// Asset is Firefly_RemoveBackground.png (912x1173, alpha-trimmed to content
+// bbox (76,22)-(903,1173)) rather than the original abstract OC_FUSION.png
+// logo. A photo needs its OWN eye-line lined up with the tracked head's, and
+// it is nowhere near square — a centre-anchor + square-size approach would
+// both misplace it (eyes wouldn't land where the real eyes are) and squash
+// it toward square. See FIREFLY_FACE_ANCHOR/FIREFLY_CONTENT_WIDTH_FRACTION
+// below, measured by eye against a percentage-gridded copy of the source
+// file.
 const ANIM = {
   FADE: parseFloat(import.meta.env.VITE_ANIM_FADE),
   RETRACK: parseFloat(import.meta.env.VITE_ANIM_RETRACK),
 }
 
-const KF_PARAMS = { R: 0.02, Q: 1.5 }
-const OC_FUSION_SIZE_FACTOR = 0.22
-const BOB_SPEED = 2.5
-const BOB_AMPLITUDE_FACTOR = 0.014
-// Same values as drone.ts's PALM_HOLD_TIME/PALM_CONFIRM_TIME — tuned there
-// against the same palm_up signal, so reuse rather than re-derive.
-const PALM_HOLD_TIME = 0.4
-const PALM_CONFIRM_TIME = 0.15
-// How fast the rendered position catches up to the tracked hand, per second.
-// Mirrors drone.ts's FOLLOW_RATE — see there for the full reasoning. Higher is
-// more responsive but passes through more detector jitter; lower is smoother
-// but visibly trails a fast hand.
-const FOLLOW_RATE = 14
+const KF_PARAMS = { R: 0.03, Q: 2 }
 
-interface FeedBounds { left: number; right: number; top: number; bottom: number }
+/** Where the eye-line sits in the source photo, as a fraction of the full
+ * image — this point gets pinned to the tracked head's ear-midpoint, same
+ * role as clownwignose's WIG_FACE_ANCHOR. Measured, not guessed: the glasses
+ * sit right at ~38-39% down the image, and the face reads as horizontally
+ * centred. */
+const FIREFLY_FACE_ANCHOR = { x: 0.5, y: 0.385 }
 
-function clampPos(x: number, y: number, size: number, b: FeedBounds) {
-  const half = size * 0.5
-  return {
-    x: Math.max(b.left + half, Math.min(b.right - half, x)),
-    y: Math.max(b.top + half, Math.min(b.bottom - half, y)),
-  }
-}
+/** How wide the face is at that eye-line (temple to temple, through the
+ * glasses), as a fraction of the full image width — measured the same way
+ * as clownwignose's WIG_HOLE_WIDTH_FRACTION, just against solid content
+ * instead of a transparent hole. Used to convert "the face should be this
+ * wide relative to ear-to-ear distance" into the sprite width PIXI needs. */
+const FIREFLY_CONTENT_WIDTH_FRACTION = 0.80
 
-// How far a slot may reach to claim a hand, as a fraction of screen width.
-// Mirrors drone.ts's MAX_CLAIM_DISTANCE_FACTOR — see there for the reasoning.
-const MAX_CLAIM_DISTANCE_FACTOR = 0.25
+/** Desired *visible* face width relative to ear-to-ear distance. Starts near
+ * 1 since this is a real face photo with real proportions — nudge this if
+ * it reads too big/small once seen live; the hair/tentacle effects extend
+ * past the measured face width so a touch over 1 is expected to look
+ * right. */
+const FACE_COVER_SIZE_FACTOR = 1.1
 
-// Assign palm-up hand screen positions to slots by proximity — identical
-// approach to drone.ts's assignHandsToDrones, so each instance sticks to
-// the hand it's already near rather than swapping when sort order jitters.
-function assignHandsToSlots(
-  hands: HandData[],
-  trackedPositions: Array<{ x: number; y: number; active: boolean }>,
+// A jump larger than this (in ear-to-ear distances) means this animation
+// slot has been handed to a different person, not that someone moved
+// quickly. Snap to the new face rather than letting the filter drag the
+// image across the frame and over somebody else on the way. Same guard as
+// pignose.ts/clownwignose.ts.
+const REBIND_SNAP_RATIO = 1.5
+
+// The nose landmark anchors the mask, so a weak detection there would park
+// it somewhere arbitrary. Ears only supply scale and roll, so one visible
+// ear is enough to survive a profile turn.
+const NOSE_VISIBILITY_MIN = 0.5
+const EAR_VISIBILITY_MIN = 0.3
+
+/** Face centre, scale and roll from MP-33 pose landmarks (nose=0, ears=7/8) —
+ * same approach as clownwignose.ts's getFaceTarget. */
+function getFaceTarget(
+  pose: NormalizedLandmarkList,
   height: number,
   width: number,
-): Array<{ x: number; y: number } | undefined> {
-  const available = hands
-    .filter(h => h.palmUp)
-    .map(h => ({ x: (1 - h.x[0]) * width, y: h.y[0] * height }))
-
-  const result: Array<{ x: number; y: number } | undefined> = trackedPositions.map(() => undefined)
-  const claimed = new Set<number>()
-  const maxClaim = width * MAX_CLAIM_DISTANCE_FACTOR
-
-  // Nearest pair first, rather than slot 0 first: slot order is arbitrary, so
-  // letting an early slot take a hand that is a much better match for a later
-  // one is what made instances trade places with each other.
-  const pairs: Array<{ slot: number; hand: number; d: number }> = []
-  for (let i = 0; i < trackedPositions.length; i++) {
-    const pos = trackedPositions[i]
-    for (let j = 0; j < available.length; j++) {
-      const d = Math.hypot(available[j].x - pos.x, available[j].y - pos.y)
-      if (d <= maxClaim) pairs.push({ slot: i, hand: j, d })
-    }
-  }
-  pairs.sort((a, b) => a.d - b.d)
-
-  const usedSlot = new Set<number>()
-  for (const { slot, hand } of pairs) {
-    if (usedSlot.has(slot) || claimed.has(hand)) continue
-    result[slot] = available[hand]
-    usedSlot.add(slot)
-    claimed.add(hand)
+) {
+  if (pose.length === 0) return undefined
+  const nose = pose[0]
+  const leftEar = pose[7]
+  const rightEar = pose[8]
+  if (!nose || !leftEar || !rightEar) return undefined
+  if ((nose.visibility ?? 1) < NOSE_VISIBILITY_MIN) return undefined
+  if (
+    (leftEar.visibility ?? 1) < EAR_VISIBILITY_MIN &&
+    (rightEar.visibility ?? 1) < EAR_VISIBILITY_MIN
+  ) {
+    return undefined
   }
 
-  // Leftover hands go to IDLE slots only, at any distance — an idle slot is
-  // not on screen, so there is nothing to teleport. Active slots are excluded
-  // so a visible sprite never jumps across to a stranger's hand.
-  const idleSlots = result
-    .map((r, i) => (r === undefined && !trackedPositions[i].active ? i : -1))
-    .filter(i => i >= 0)
-  for (let j = 0; j < available.length && idleSlots.length; j++) {
-    if (claimed.has(j)) continue
-    const slot = idleSlots.shift()!
-    result[slot] = available[j]
-    claimed.add(j)
-  }
-  return result
+  const le = convertPoint(leftEar, height, width)
+  const re = convertPoint(rightEar, height, width)
+
+  const earDist = Math.hypot(le.x - re.x, le.y - re.y)
+  if (earDist < 1) return undefined
+
+  // Roll from the ear-to-ear line, so the mask tilts with the head.
+  const angle = Math.atan2(re.y - le.y, re.x - le.x)
+
+  // Face centre is the ear midpoint — a steadier reference than the nose,
+  // which sits forward of it and swings about as the head turns.
+  const midX = (le.x + re.x) / 2
+  const midY = (le.y + re.y) / 2
+
+  return { x: midX, y: midY, earDist, angle }
 }
 
-async function createOCFusionSprite(
-  app: PIXI.Application,
-  texture: PIXI.Texture,
-  size: number,
-  hoverOffset: number,
-  bobAmplitude: number,
-  bounds: FeedBounds,
-) {
-  const { ticker } = app
+export async function createOCFusionAnim(app: PIXI.Application) {
+  const {
+    renderer: { height, width },
+    ticker,
+    loader,
+  } = app
 
   const container = new PIXI.Container()
-  // Shares the one already-loaded texture across every slot — cheap, and
-  // lets PixiJS batch these sprites together since they share a base texture.
-  const sprite = PIXI.Sprite.from(texture)
-  sprite.anchor.set(0.5, 0.5)
-  sprite.width = size
-  sprite.height = size
+  const { texture } = await PIXI.ensureLoaded(loader, ocFusionImg)
+
+  // The photo is 912x1173 — tall, not square. Height must follow width by
+  // this aspect ratio rather than being set equal to it, or the face gets
+  // squashed toward square every frame.
+  const fireflyAspect = texture!.height / texture!.width
+
+  const sprite = PIXI.Sprite.from(texture!)
+  // Anchored on the measured eye-line (FIREFLY_FACE_ANCHOR), not the sprite
+  // centre — this is what lines the photo's own eyes up with the tracked
+  // head's, the same role clownwignose's wig-hole anchor plays.
+  sprite.anchor.set(FIREFLY_FACE_ANCHOR.x, FIREFLY_FACE_ANCHOR.y)
   container.addChild(sprite)
+
+  const makeFilters = () => ({
+    x: new KalmanFilter(KF_PARAMS),
+    y: new KalmanFilter(KF_PARAMS),
+    size: new KalmanFilter(KF_PARAMS),
+    angle: new KalmanFilter(KF_PARAMS),
+  })
+  let kf = makeFilters()
+  // whether kf currently holds a recent target belonging to this same person
+  let bound = false
 
   const initialState = () => {
     container.alpha = 0
+    bound = false
   }
   initialState()
 
-  const kf = {
-    x: new KalmanFilter(KF_PARAMS),
-    y: new KalmanFilter(KF_PARAMS),
-  }
-
-  // Two positions, as in drone.ts. wristX/Y is the TARGET, updated only when a
-  // backend sample arrives; drawnX/Y is what is actually rendered, eased toward
-  // the target every frame.
-  //
-  // Without this the sprite renders at 60 fps from a target that only moves at
-  // the hand-detection rate — ~5.7/sec with eight hands in shot, since WiLoR
-  // costs ~21 ms per hand. The Kalman filter smooths across backend samples,
-  // not across render frames, so the result is hold-then-jump.
-  let wristX = 0
-  let wristY = 0
-  let drawnX = 0
-  let drawnY = 0
-  let hasDrawn = false
-  let bobTime = 0
-  let palmHoldTimer = 0
-  let palmConfirmTimer = 0
-  /** Drop the eased position so a sprite that faded out and is re-acquired
-   * elsewhere appears there rather than flying across the screen.
-   *
-   * Deliberately NOT part of initialState(): that is called during setup,
-   * before these `let` bindings exist, and touching them from there throws a
-   * ReferenceError through the temporal dead zone — which silently prevents
-   * the whole animation from being created. Same trap as drone.ts. */
-  const resetEasing = () => {
-    hasDrawn = false
-  }
+  let x = 0
+  let y = 0
+  let earDist = 100
+  let angle = 0
   const animManager = new AnimStateManager()
 
-  // `active` lets the assigner tell a visible slot from an idle one: only an
-  // idle slot may acquire a hand at any distance.
-  const getTrackedPos = () => ({ x: wristX, y: wristY, active: animManager.tracking })
-
-  const update = (rawWrist: { x: number; y: number } | undefined) => {
-    if (rawWrist) {
-      palmHoldTimer = PALM_HOLD_TIME
-      palmConfirmTimer = Math.min(PALM_CONFIRM_TIME, palmConfirmTimer + ticker.deltaMS / 1000)
-      wristX = kf.x.filter(rawWrist.x)
-      wristY = kf.y.filter(rawWrist.y)
-      if (!hasDrawn) {
-        // Seed on the FIRST REAL detection, not the first tick: ticks arrive
-        // before any hand does, and seeding from the still-zero target would
-        // make the sprite fly in from the top-left corner.
-        drawnX = wristX
-        drawnY = wristY
-        hasDrawn = true
+  const update = (pose: NormalizedLandmarkList) => {
+    const target = getFaceTarget(pose, height, width)
+    if (target) {
+      const jumped =
+        bound &&
+        Math.hypot(target.x - x, target.y - y) > target.earDist * REBIND_SNAP_RATIO
+      if (jumped || !bound) {
+        // Fresh person for this slot: drop the previous person's filter
+        // state so the mask appears on them rather than travelling there.
+        kf = makeFilters()
+        bound = true
       }
-    } else {
-      palmHoldTimer = Math.max(0, palmHoldTimer - ticker.deltaMS / 1000)
-      palmConfirmTimer = 0
+      x = kf.x.filter(target.x)
+      y = kf.y.filter(target.y)
+      earDist = kf.size.filter(target.earDist)
+      angle = kf.angle.filter(target.angle)
     }
 
-    // Ease the rendered position toward the target once per render frame.
-    // Framerate-independent via the exponential, so it looks the same at 60 or
-    // 144 Hz.
-    if (hasDrawn) {
-      const k = 1 - Math.exp(-FOLLOW_RATE * (ticker.deltaMS / 1000))
-      drawnX += (wristX - drawnX) * k
-      drawnY += (wristY - drawnY) * k
-    }
+    // Size so the measured face width (FIREFLY_CONTENT_WIDTH_FRACTION of the
+    // image) matches the desired coverage, then derive height from the
+    // image's own aspect ratio so it isn't squashed.
+    sprite.width = (earDist * FACE_COVER_SIZE_FACTOR) / FIREFLY_CONTENT_WIDTH_FRACTION
+    sprite.height = sprite.width * fireflyAspect
+    sprite.rotation = angle
 
-    const hasPerson = animManager.tracking
-      ? rawWrist !== undefined || palmHoldTimer > 0
-      : palmConfirmTimer >= PALM_CONFIRM_TIME
-
-    animManager.tracking = hasPerson
+    animManager.tracking = !!target
     const { time, state } = animManager
-
-    const targetY = drawnY - hoverOffset
 
     switch (state) {
       case 'exited':
         initialState()
-        resetEasing()
-        bobTime = 0
         break
 
-      case 'entering': {
-        container.alpha = 1
-        sprite.alpha = lerpLinear(time, 0, ANIM.FADE)
-        const progress = lerpEO(time, 0, ANIM.FADE)
-        const startY = targetY - app.renderer.height * 0.2
-        const ep = clampPos(drawnX, startY + (targetY - startY) * progress, size, bounds)
-        container.position.set(ep.x, ep.y)
+      case 'entering':
+        container.alpha = lerpLinear(time, 0, ANIM.FADE)
+        container.position.set(x, y)
         if (time >= ANIM.FADE) animManager.transition()
         break
-      }
 
-      case 'entered': {
-        sprite.alpha = 1
+      case 'entered':
         container.alpha = 1
-        bobTime += ticker.deltaMS / 1000
-        const bob = Math.sin(bobTime * BOB_SPEED) * bobAmplitude
-        const tp = clampPos(drawnX, targetY + bob, size, bounds)
-        container.position.set(tp.x, tp.y)
+        container.position.set(x, y)
         break
-      }
 
       case 'lost':
-        // No re-track grace, same as drone — the hold timer above already
-        // covers brief detection gaps.
-        animManager.transition()
+        if (time >= ANIM.RETRACK) animManager.transition()
         break
 
       case 'exiting':
         container.alpha = 1 - lerpLinear(time, 0, ANIM.FADE)
         if (time >= ANIM.FADE) {
           initialState()
-          resetEasing()
           animManager.transition()
         }
         break
@@ -243,46 +204,5 @@ async function createOCFusionSprite(
     animManager.update(ticker.deltaMS / 1000)
   }
 
-  return [container, update, getTrackedPos] as const
-}
-
-export async function createOCFusionAnim(
-  app: PIXI.Application,
-  margins = { mx: 30 / 1920, mt: 30 / 1080, mb: 30 / 1080 },
-) {
-  const { height, width } = app.renderer
-
-  const bounds: FeedBounds = {
-    left: margins.mx * width,
-    right: (1 - margins.mx) * width,
-    top: margins.mt * height,
-    bottom: (1 - margins.mb) * height,
-  }
-
-  const size = height * OC_FUSION_SIZE_FACTOR
-  const hoverOffset = size
-  const bobAmplitude = height * BOB_AMPLITUDE_FACTOR
-
-  // Loaded once, shared texture across all slots (see createOCFusionSprite).
-  const { texture } = await PIXI.ensureLoaded(app.loader, ocFusionImg)
-
-  // Matches drone.ts's DRONE_SLOTS — same WILOR_MAX_HANDS ceiling, raised
-  // from 4 to 8 so a group of four does not run out of slots.
-  const OC_FUSION_SLOTS = 8
-  const instances = await Promise.all(
-    Array.from({ length: OC_FUSION_SLOTS }, () =>
-      createOCFusionSprite(app, texture!, size, hoverOffset, bobAmplitude, bounds),
-    ),
-  )
-
-  const parentContainer = new PIXI.Container()
-  for (const [container] of instances) parentContainer.addChild(container)
-
-  const update = (hands: HandData[]) => {
-    const trackedPositions = instances.map(([, , getPos]) => getPos())
-    const assigned = assignHandsToSlots(hands, trackedPositions, height, width)
-    instances.forEach(([, updateSlot], i) => updateSlot(assigned[i]))
-  }
-
-  return [parentContainer, update] as const
+  return [container, update] as const
 }

@@ -25,6 +25,7 @@ import { createOwlAnim } from '../anim/owl'
 import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
+import { createSixSevenAnim } from '../anim/sixseven'
 import { createSunglassesAnim } from '../anim/sunglasses'
 import { createMustacheAnim } from '../anim/mustache'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
@@ -113,19 +114,22 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'none'>, string> = {}
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'none'>, string> = {}
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
   'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
-  'clownwignose', 'sunglasses', 'mustache',
+  'clownwignose', 'sunglasses', 'mustache', 'sixseven',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// pignose/batears/clownwignose/scuba read body pose only, drone and
-// ocfusion read hand landmarks only (ignores pose entirely). Told to the
-// backend via POST /detection_mode so it skips idle models per-frame
+// pignose/batears/clownwignose/scuba/ocfusion read body pose only, drone and
+// sixseven read hand landmarks only (ignores pose entirely). ocfusion used
+// to be hand-tracked too (same shape as drone) but was changed on request to
+// replace the person's face instead, via the same nose/ear pose landmarks
+// as clownwignose/pignose — so it moved from 'hands' to 'pose' here. Told to
+// the backend via POST /detection_mode so it skips idle models per-frame
 // instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
   none: 'none',
@@ -134,12 +138,13 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   globe: 'pose',
   drone: 'hands',
   scuba: 'pose',
-  ocfusion: 'hands',
+  ocfusion: 'pose',
   pignose: 'pose',
   batears: 'pose',
   clownwignose: 'pose',
   sunglasses: 'pose',
   mustache: 'pose',
+  sixseven: 'hands',
 }
 
 /** Multiple animations can be selected at once now, each possibly wanting a
@@ -840,9 +845,13 @@ export default function Display({
       } else if (option === 'scuba') {
         return await createScubaAnim(app, marginOpts)
       } else if (option === 'ocfusion') {
-        const [container, updateOCFusion] = await createOCFusionAnim(app, marginOpts)
-        // Same as drone — driven by MediaPipe hand landmarks, not body pose
-        const wrappedUpdate = (_pose: any) => updateOCFusion(rawRef.current.hands ?? [])
+        // No longer hand-tracked (see ocfusion.ts) — reads its assigned
+        // person's own face pose directly, same contract as pignose/etc.
+        return await createOCFusionAnim(app)
+      } else if (option === 'sixseven') {
+        const [container, updateSixSeven] = await createSixSevenAnim(app, marginOpts)
+        // Same as drone/ocfusion — driven by hand landmarks, not body pose
+        const wrappedUpdate = (_pose: any) => updateSixSeven(rawRef.current.hands ?? [])
         return [container, wrappedUpdate] as const
       } else if (option === 'pignose') {
         return await createPigNoseAnim(app)
@@ -893,9 +902,14 @@ export default function Display({
         })
           .then((res) => res.json())
           .then((data) => {
+            // `top` comes straight from this response, not a separate GET -
+            // a GET fired off the 'finished' phase transition below used to
+            // race this very POST and could win, showing the leaderboard as
+            // it looked BEFORE this round's score was written. See
+            // Challenge67UI.tsx and Challenge67State.lastResult.
             challenge67Game.set({
               ...challenge67Game.get(),
-              lastResult: { score, rank: data.rank, total: data.total },
+              lastResult: { score, rank: data.rank, total: data.total, top: data.top ?? [] },
             })
           })
           .catch((e) => console.warn('Failed to submit 67 Mode score:', e))
@@ -1012,19 +1026,22 @@ export default function Display({
         for (const option of gifOptions) {
           if (option === 'none') continue
           if (CHARACTER_OPTIONS.has(option)) {
-            // Drone and OC Fusion always run a single (outer) instance
-            // regardless of multi-target mode — each already implements its
-            // own internal 4-slot multi-HAND assignment (reading the raw
-            // global hand list directly, not a single assigned person's
-            // pose), specifically so several hands/people can show the
-            // gesture at once. Spawning multiple outer instances for these
-            // would each spin up their own competing 4-slot system fighting
-            // over the same hands — several duplicate drones jumping
-            // between the same targets — instead of one coordinated system.
-            // Scuba doesn't need that special-casing: it just reads its
-            // assigned person's own pose like Clown Wig & Nose/Pig Nose/etc, so it gets a
-            // normal per-person instance via the outer slot assigner below.
-            const count = isMulti && option !== 'drone' && option !== 'ocfusion' ? MAX_PEOPLE : 1
+            // Drone and 67 always run a single (outer) instance regardless of
+            // multi-target mode — each already implements its own internal
+            // multi-HAND assignment (reading the raw global hand list
+            // directly, not a single assigned person's pose), specifically so
+            // several hands/people can show the gesture at once. Spawning
+            // multiple outer instances for these would each spin up their own
+            // competing slot system fighting over the same hands — several
+            // duplicate drones jumping between the same targets — instead of
+            // one coordinated system. Everything else, OC Fusion included now
+            // that it reads its assigned person's own face pose like Clown
+            // Wig & Nose/Pig Nose/Scuba/etc, gets a normal per-person
+            // instance via the outer slot assigner below.
+            const count =
+              isMulti && option !== 'drone' && option !== 'sixseven'
+                ? MAX_PEOPLE
+                : 1
             const results = await Promise.all(
               Array.from({ length: count }, () => createAnimForGif(option))
             )
@@ -1038,7 +1055,7 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'none'>]
             // A stale option can still be sitting in the persisted
             // selectedGifs from before a character was removed from
             // GIF_OPTIONS (e.g. localStorage from an older session) — that's

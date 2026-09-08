@@ -32,6 +32,7 @@ export const GIF_OPTIONS = {
   clownwignose: 'Clown Wig & Nose',
   sunglasses: 'Sunglasses',
   mustache: 'Mustache',
+  sixseven: '67',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 /** Every currently-active pose/hand-tracked animation and/or corner-prop —
@@ -63,9 +64,14 @@ export const MAX_SELECTED = 5
  * both puts two creatures in one spot, overlapping and fighting for the same
  * few pixels rather than reading as two characters.
  *
+ * drone + sixseven: both trigger on the same palm-to-the-sky gesture, so
+ * selecting both spawns a drone and a number on every one of the same palms,
+ * overlapping rather than reading as two props.
+ *
  * Add further groups here; nothing else needs changing. */
 export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
   ['owl', 'bat'],
+  ['drone', 'sixseven'],
 ]
 
 /** Which already-selected option, if any, blocks `option` from being added.
@@ -214,7 +220,16 @@ export interface Challenge67State {
   phase: 'waiting' | 'countdown' | 'playing' | 'finished'
   timeLeft: number
   reps: number
-  lastResult?: { score: number; rank: number; total: number }
+  lastResult?: {
+    score: number
+    rank: number
+    total: number
+    // Straight from the submit response (computed server-side right after
+    // the write, under its lock) rather than a separate GET fired off this
+    // round's own score-writing race - see Challenge67UI.tsx for why a
+    // second independent fetch used to show a stale board.
+    top: { score: number; ts: number }[]
+  }
 }
 // Ephemeral, like pointerEnabled/freezePosition below - Display.tsx's ticker
 // owns the timer/phase transitions/rep counting (it already has the per-
