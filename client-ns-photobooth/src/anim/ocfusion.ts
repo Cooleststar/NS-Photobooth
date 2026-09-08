@@ -6,7 +6,7 @@ import { lerpLinear } from './utils'
 import { convertPoint } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
 
-import ocFusionImg from '../assets/OC_Fusion/Firefly_RemoveBackground.png'
+import ocFusionImg from '../assets/OC_Fusion/oc_makeup.png'
 
 // Was a hand-tracked hovering icon (WiLoR palm_up, same shape as drone.ts).
 // Changed on request to replace the person's face instead — now the same
@@ -14,14 +14,16 @@ import ocFusionImg from '../assets/OC_Fusion/Firefly_RemoveBackground.png'
 // detector in this pipeline, so the face points already present in body
 // pose (nose=0, ears=7/8) are reused to size/position/rotate the image.
 //
-// Asset is Firefly_RemoveBackground.png (912x1173, alpha-trimmed to content
-// bbox (76,22)-(903,1173)) rather than the original abstract OC_FUSION.png
-// logo. A photo needs its OWN eye-line lined up with the tracked head's, and
-// it is nowhere near square — a centre-anchor + square-size approach would
-// both misplace it (eyes wouldn't land where the real eyes are) and squash
-// it toward square. See FIREFLY_FACE_ANCHOR/FIREFLY_CONTENT_WIDTH_FRACTION
-// below, measured by eye against a percentage-gridded copy of the source
-// file.
+// Asset is oc_makeup.png (440x567, alpha-trimmed to content bbox
+// (5,6)-(437,567)) — previously Firefly_RemoveBackground.png, before that
+// the original abstract OC_FUSION.png logo. A photo needs its OWN eye-line
+// lined up with the tracked head's, and it is nowhere near square — a
+// centre-anchor + square-size approach would both misplace it (eyes
+// wouldn't land where the real eyes are) and squash it toward square. See
+// MASK_FACE_ANCHOR/MASK_CONTENT_WIDTH_FRACTION below, measured by eye
+// against a percentage-gridded copy of the source file — re-measured for
+// each asset swap, since these are photo-specific, not something that
+// carries over from the previous image.
 const ANIM = {
   FADE: parseFloat(import.meta.env.VITE_ANIM_FADE),
   RETRACK: parseFloat(import.meta.env.VITE_ANIM_RETRACK),
@@ -31,33 +33,34 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 
 /** Where the eye-line sits in the source photo, as a fraction of the full
  * image — this point gets pinned to the tracked head's ear-midpoint, same
- * role as clownwignose's WIG_FACE_ANCHOR. Measured, not guessed: the glasses
- * sit right at ~38-39% down the image, and the face reads as horizontally
- * centred. */
-const FIREFLY_FACE_ANCHOR = { x: 0.5, y: 0.385 }
+ * role as clownwignose's WIG_FACE_ANCHOR. Measured, not guessed: the
+ * glasses/eyes sit right around 34% down the image, and the face reads as
+ * horizontally centred. */
+const MASK_FACE_ANCHOR = { x: 0.5, y: 0.34 }
 
 /** How wide the face is at that eye-line (temple to temple, through the
  * glasses), as a fraction of the full image width — measured the same way
  * as clownwignose's WIG_HOLE_WIDTH_FRACTION, just against solid content
  * instead of a transparent hole. Used to convert "the face should be this
  * wide relative to ear-to-ear distance" into the sprite width PIXI needs. */
-const FIREFLY_CONTENT_WIDTH_FRACTION = 0.80
+const MASK_CONTENT_WIDTH_FRACTION = 0.80
 
 /** Desired *visible* face width relative to ear-to-ear distance. Starts near
  * 1 since this is a real face photo with real proportions — nudge this if
- * it reads too big/small once seen live; the hair/tentacle effects extend
- * past the measured face width so a touch over 1 is expected to look
- * right. */
+ * it reads too big/small once seen live. Carried over from the previous
+ * asset's tuned value (they happened to share very similar framing/crop),
+ * but re-check once seen live since it wasn't re-measured against this
+ * specific photo. */
 const FACE_COVER_SIZE_FACTOR = 1.1
 
 /** Nudge the mask up relative to the tracked ear-midpoint, in ear-to-ear
- * distances, on request ("move it a little higher" — 0.12 wasn't enough,
- * the top of the head in the photo needs to line up with the real
- * hairline). Applied along the head's own "up" direction (perpendicular to
+ * distances, so the top of the head in the photo lines up with the real
+ * hairline. Applied along the head's own "up" direction (perpendicular to
  * the ear line) rather than a flat screen-space offset, so it scales with
  * face size and stays correct as the head tilts — same approach as
- * batears.ts/pignose.ts's crown-offset lift. Tune this further if it still
- * needs to sit higher/lower. */
+ * batears.ts/pignose.ts's crown-offset lift. Carried over from the previous
+ * asset's tuned value (0.3) as a starting point — tune further if it sits
+ * too high/low on this photo specifically. */
 const VERTICAL_LIFT_FACTOR = 0.3
 
 // A jump larger than this (in ear-to-ear distances) means this animation
@@ -127,16 +130,16 @@ export async function createOCFusionAnim(app: PIXI.Application) {
   const container = new PIXI.Container()
   const { texture } = await PIXI.ensureLoaded(loader, ocFusionImg)
 
-  // The photo is 912x1173 — tall, not square. Height must follow width by
+  // The photo is 440x567 — tall, not square. Height must follow width by
   // this aspect ratio rather than being set equal to it, or the face gets
   // squashed toward square every frame.
-  const fireflyAspect = texture!.height / texture!.width
+  const maskAspect = texture!.height / texture!.width
 
   const sprite = PIXI.Sprite.from(texture!)
-  // Anchored on the measured eye-line (FIREFLY_FACE_ANCHOR), not the sprite
+  // Anchored on the measured eye-line (MASK_FACE_ANCHOR), not the sprite
   // centre — this is what lines the photo's own eyes up with the tracked
   // head's, the same role clownwignose's wig-hole anchor plays.
-  sprite.anchor.set(FIREFLY_FACE_ANCHOR.x, FIREFLY_FACE_ANCHOR.y)
+  sprite.anchor.set(MASK_FACE_ANCHOR.x, MASK_FACE_ANCHOR.y)
   container.addChild(sprite)
 
   const makeFilters = () => ({
@@ -179,11 +182,11 @@ export async function createOCFusionAnim(app: PIXI.Application) {
       angle = kf.angle.filter(target.angle)
     }
 
-    // Size so the measured face width (FIREFLY_CONTENT_WIDTH_FRACTION of the
+    // Size so the measured face width (MASK_CONTENT_WIDTH_FRACTION of the
     // image) matches the desired coverage, then derive height from the
     // image's own aspect ratio so it isn't squashed.
-    sprite.width = (earDist * FACE_COVER_SIZE_FACTOR) / FIREFLY_CONTENT_WIDTH_FRACTION
-    sprite.height = sprite.width * fireflyAspect
+    sprite.width = (earDist * FACE_COVER_SIZE_FACTOR) / MASK_CONTENT_WIDTH_FRACTION
+    sprite.height = sprite.width * maskAspect
     sprite.rotation = angle
 
     animManager.tracking = !!target

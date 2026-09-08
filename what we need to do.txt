@@ -19,6 +19,9 @@ drone and 67 cannot use together
 
 5 max items selected
 
+
+--BANNER INFO--
+
 owl and bat cannot be used together
 
 pressing S opens setting
