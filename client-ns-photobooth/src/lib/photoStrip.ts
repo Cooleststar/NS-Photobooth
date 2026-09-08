@@ -1,11 +1,11 @@
 import QRCode from 'qrcode'
 import logo11Url from '../assets/icons/11logo.png'
 import fusionLogoUrl from '../assets/icons/fusionlogo.png'
-import atlasLogoUrl from '../assets/icons/Atlas Logo.jpeg'
-import boreasLogoUrl from '../assets/icons/Boreas Logo.jpeg'
-import hqLogoUrl from '../assets/icons/HQ Logo.jpeg'
-import rstaLogoUrl from '../assets/icons/RSTA Logo.jpeg'
-import signalLogoUrl from '../assets/icons/Signal Logo.jpeg'
+import atlasLogoUrl from '../assets/icons/Atlas Logo.png'
+import boreasLogoUrl from '../assets/icons/Boreas Logo.png'
+import hqLogoUrl from '../assets/icons/HQ Logo.png'
+import rstaLogoUrl from '../assets/icons/RSTA Logo.png'
+import signalLogoUrl from '../assets/icons/Signal Logo.png'
 import { CoyLogo, selectedCoyLogo } from '../store'
 
 /** Company logo files, keyed to match COY_LOGOS in the store. 'none' has no
@@ -107,17 +107,17 @@ function footerMetrics(imageCount: number) {
  * none, so drawing both into the same box renders the 11 logo visibly
  * smaller. Measure each logo's content bounds once and draw only that region.
  *
- * "Content" means two different things depending on the file. The two brand
- * PNGs are transparent, so their padding is alpha. The company logos are
- * opaque JPEGs on white, so alpha finds nothing and the whole square measures
- * as content - which would render them noticeably larger and boxier than
- * fusionlogo beside them. For those, near-white is treated as padding too.
+ * Padding is measured from alpha, which every logo here now has - the company
+ * logos were originally opaque JPEGs on white and were re-exported as
+ * transparent PNGs precisely so this works and so they do not show a pale
+ * block on a coloured strip background.
  *
- * Only the OUTER margin is trimmed either way, so white inside a logo is
- * kept; nothing is made transparent. A company logo therefore still draws its
- * own white background, which is invisible on the default white strip and
- * shows as a pale block on a coloured one. Supplying those logos as PNGs with
- * real transparency is the fix if coloured strips are used. */
+ * The near-white fallback below is kept as a safety net for a future logo
+ * dropped in as a JPEG: without it, alpha finds nothing, the whole square
+ * measures as content, and it renders noticeably larger and boxier than
+ * fusionlogo beside it with no error to explain why. It trims only the OUTER
+ * margin, so white inside a logo is kept and nothing is made transparent -
+ * which is why a transparent PNG is still the right format to supply. */
 const opaqueBoxCache = new WeakMap<HTMLImageElement, { x: number; y: number; w: number; h: number }>()
 
 function opaqueBox(img: HTMLImageElement) {
