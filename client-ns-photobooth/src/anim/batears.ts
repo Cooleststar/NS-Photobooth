@@ -56,13 +56,11 @@ const EAR_CONTENT_WIDTH_FRACTION = 0.424
 const EAR_VISIBLE_SIZE_FACTOR = 1.15
 
 /** How far above the nose the ear pair's base sits, in ear-to-ear distances.
- * Reused as-is from the previous two-sprite implementation's own
- * CROWN_OFFSET_FACTOR (0.65, most recently tuned up from 0.45 — the pair had
- * been sitting low, clustered near the eyebrows/forehead) rather than
- * re-derived from scratch: "how far above the nose do ears sit" isn't a
- * question the art swap changes the answer to. Tune this if the pair sits
- * too low/high on the head. */
-const EAR_CROWN_OFFSET_FACTOR = 0.65
+ * Was 0.65 (reused from the previous two-sprite implementation's tuned
+ * CROWN_OFFSET_FACTOR) — lowered on request so the pair's base actually
+ * touches the top of the head instead of floating above it. Tune further if
+ * it still sits too low/high. */
+const EAR_CROWN_OFFSET_FACTOR = 0.5
 
 // A jump larger than this (in ear-to-ear distances) means this animation
 // slot has been handed to a different person, not that someone moved.

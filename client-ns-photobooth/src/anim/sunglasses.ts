@@ -39,38 +39,40 @@ const CONTENT_WIDTH_FRACTION = 1.0
  * too small on real faces. */
 const VISIBLE_SIZE_FACTOR = 0.95
 
-/** How far above the nose tip the glasses sit, as a fraction of ear-to-ear
- * distance — the nose landmark is the tip, not the eye line, so this lifts
- * the frame up to bridge height. Tune this if they sit too high/low. */
-const EYE_LIFT_FACTOR = 0.22
-
 // A jump larger than this (in ear-to-ear distances) means this animation slot
 // has been handed to a different person, not that someone moved quickly. Snap
 // to the new face rather than letting the filter drag the glasses across the
 // frame. Same guard as pignose.ts/clownwignose.ts.
 const REBIND_SNAP_RATIO = 1.5
 
-// The nose landmark anchors the costume, so a weak detection there would park
-// it somewhere arbitrary. Ears only supply scale and roll, so one visible ear
-// is enough to survive a profile turn.
-const NOSE_VISIBILITY_MIN = 0.5
+// Ears only supply scale (earDist) and, when both eyes aren't available, roll
+// — one visible ear is enough to survive a profile turn there.
+const EYE_VISIBILITY_MIN = 0.5
 const EAR_VISIBILITY_MIN = 0.3
 
-/** Glasses position, head scale and roll from MP-33 pose landmarks (nose=0,
- * ears=7/8). Same sparse-face-point approach as the other face props — there
- * is no face-mesh detector in this pipeline, so the face points already
- * present in body pose are reused. */
+/** Glasses position, head scale and roll from MP-33 pose landmarks (left
+ * eye=2, right eye=5, ears=7/8). Positioned directly on the eye landmarks —
+ * not the nose plus a guessed lift factor, which only approximated eye
+ * height — so the frame actually covers the eyes rather than sitting
+ * wherever that approximation happened to land. Same sparse-face-point
+ * approach as the other face props otherwise: there is no face-mesh
+ * detector in this pipeline, so the face points already present in body
+ * pose are reused. */
 function getFaceTarget(
   pose: NormalizedLandmarkList,
   height: number,
   width: number,
 ) {
   if (pose.length === 0) return undefined
-  const nose = pose[0]
+  const leftEye = pose[2]
+  const rightEye = pose[5]
   const leftEar = pose[7]
   const rightEar = pose[8]
-  if (!nose || !leftEar || !rightEar) return undefined
-  if ((nose.visibility ?? 1) < NOSE_VISIBILITY_MIN) return undefined
+  if (!leftEye || !rightEye || !leftEar || !rightEar) return undefined
+
+  const leftEyeVisible = (leftEye.visibility ?? 1) >= EYE_VISIBILITY_MIN
+  const rightEyeVisible = (rightEye.visibility ?? 1) >= EYE_VISIBILITY_MIN
+  if (!leftEyeVisible && !rightEyeVisible) return undefined
   if (
     (leftEar.visibility ?? 1) < EAR_VISIBILITY_MIN &&
     (rightEar.visibility ?? 1) < EAR_VISIBILITY_MIN
@@ -78,27 +80,38 @@ function getFaceTarget(
     return undefined
   }
 
-  const n = convertPoint(nose, height, width)
   const le = convertPoint(leftEar, height, width)
   const re = convertPoint(rightEar, height, width)
-
   const earDist = Math.hypot(le.x - re.x, le.y - re.y)
   if (earDist < 1) return undefined
 
-  // Roll from the ear-to-ear line, so the glasses tilt with the head.
-  const angle = Math.atan2(re.y - le.y, re.x - le.x)
+  const leftE = convertPoint(leftEye, height, width)
+  const rightE = convertPoint(rightEye, height, width)
 
-  // "Up" is perpendicular to the ear line rather than screen-up, so the
-  // glasses stay on the head when it tilts instead of sliding off sideways.
-  const upX = Math.sin(angle)
-  const upY = -Math.cos(angle)
-
-  return {
-    x: n.x + upX * earDist * EYE_LIFT_FACTOR,
-    y: n.y + upY * earDist * EYE_LIFT_FACTOR,
-    earDist,
-    angle,
+  let x: number
+  let y: number
+  let angle: number
+  if (leftEyeVisible && rightEyeVisible) {
+    // Both eyes tracked: sit right on their midpoint, and take roll directly
+    // from the eye-to-eye line — the most direct signal available for how
+    // glasses specifically should tilt, more so than the general head-tilt
+    // the ear line approximates.
+    x = (leftE.x + rightE.x) / 2
+    y = (leftE.y + rightE.y) / 2
+    angle = Math.atan2(rightE.y - leftE.y, rightE.x - leftE.x)
+  } else {
+    // Profile turn: only one eye is a real detection, the other is the pose
+    // model's best guess for an occluded point (usually collapsed toward the
+    // visible one) — averaging them in would pull the glasses off-target, so
+    // anchor on the one real eye instead. Roll still comes from the ear
+    // line, which stays valid in profile.
+    const visible = leftEyeVisible ? leftE : rightE
+    x = visible.x
+    y = visible.y
+    angle = Math.atan2(re.y - le.y, re.x - le.x)
   }
+
+  return { x, y, earDist, angle }
 }
 
 export async function createSunglassesAnim(app: PIXI.Application) {
