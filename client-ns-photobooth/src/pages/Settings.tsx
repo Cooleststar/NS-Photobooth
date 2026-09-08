@@ -6,7 +6,6 @@ import { useKeybind } from '../components'
 import {
   GIF_OPTIONS,
   GifOption,
-  bannerEnabled,
   burstCount,
   burstIntervalSec,
   burstModeEnabled,
@@ -144,8 +143,7 @@ function BannerLogoSelect() {
         ))}
       </select>
       <span tw='text-xs text-gray-500'>
-        Shown on the live feed and included in every photo taken. Independent
-        of the Banner Animation switch.
+        Shown on the live feed and included in every photo taken.
       </span>
     </div>
   )
@@ -394,7 +392,6 @@ export default function Settings() {
             )}
             <BannerLogoSelect />
             <CoyLogoSelect />
-            <SwitchRow label='Banner Animation' boolVar={bannerEnabled} />
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
             {!challenge67 && (

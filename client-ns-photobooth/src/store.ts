@@ -17,7 +17,6 @@ const opts = {
 
 export const debugEnabled = persistentAtom('debugEnabled', false, opts)
 export const owlEnabled = persistentAtom('owlEnabled', true, opts)
-export const bannerEnabled = persistentAtom('bannerEnabled', true, opts)
 
 export const GIF_OPTIONS = {
   none: 'No animation',
@@ -141,13 +140,16 @@ export type CoyLogo = keyof typeof COY_LOGOS
 
 export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', 'fusion', opts)
 
-/** The logo shown over the live feed, at the bottom of the banner frame.
+/** The logo shown over the live feed.
  *
  * It used to be painted into border_design6.png itself, which is why it could
- * not be changed and never reached a captured photo - the whole banner is
- * hidden during capture. The frame is now banner_frame.png with that logo
- * removed, and the logo is drawn as its own sprite that STAYS visible while
- * the frame hides, so it appears in photos.
+ * not be changed and never reached a captured photo - a decorative frame
+ * drawn around the feed was hidden during capture, and the logo was baked
+ * into that same image. The logo was later split into its own sprite that
+ * stayed visible while the frame hid, so it appeared in photos; the frame
+ * itself was subsequently removed entirely (anim/banner.ts) as a redundant
+ * toggle once the logo already had its own on/off control, leaving just the
+ * logo described here.
  *
  * '11' is the default because that is the logo that was baked in, so a booth
  * looks unchanged on upgrade. '11' is offered here and not in the footer

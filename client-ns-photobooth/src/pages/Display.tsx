@@ -39,7 +39,6 @@ import qrDroneGif from '../assets/drone_anim/drone.gif'
 import * as PIXI from '../pixi'
 import {
   GifOption,
-  bannerEnabled,
   camSize,
   challenge67Enabled,
   challenge67Game,
@@ -818,16 +817,8 @@ export default function Display({
     // people enter/leave frame — a much larger, riskier change).
     const MAX_PEOPLE = 32
     const marginOpts = { mx: MARGIN_X, mt: MARGIN_T, mb: MARGIN_B }
-    // hoisted so photographerRef.current (defined outside the IIFE below)
-    // can hide the decorative banner FRAME during capture — captured photos
-    // get their own border treatment in the gallery instead.
-    //
-    // The logo is a separate container and deliberately NOT hidden: it is what
-    // brands each captured photo. Before it was split out it was painted into
-    // the frame image, so hiding the frame took the logo with it and no photo
-    // ever carried one.
-    let bannerFrame: PIXI.Container | undefined
-    let bannerLogo: PIXI.Container | undefined
+    // hoisted so the cleanup return below (outside the IIFE) can drop the
+    // banner-logo store subscription with the app instance.
     let bannerUnsubscribe: (() => void) | undefined
 
     async function createAnimForGif(option: GifOption) {
@@ -1090,10 +1081,7 @@ export default function Display({
         createBanner(app),
       ])
       for (const [container] of arrows) animLayer.addChild(container)
-      app.stage.addChild(banner.frameContainer)
       app.stage.addChild(banner.logoContainer)
-      bannerFrame = banner.frameContainer
-      bannerLogo = banner.logoContainer
       bannerUnsubscribe = banner.unsubscribe
 
       // Added to app.stage last (topmost), now that everything else is on
@@ -1325,12 +1313,6 @@ export default function Display({
         }
       })
 
-      app.ticker.add(() => {
-        // The Banner Animation switch governs the decorative frame. The logo
-        // is independent - it has its own "No logo" option and belongs in
-        // photos whether or not the frame is on screen.
-        banner.frameContainer.visible = bannerEnabled.get()
-      })
       } catch (e) {
         // Asset load failure (network error, ensureLoaded's 60s timeout,
         // etc.) previously left this IIFE as an unhandled rejection with
@@ -1344,15 +1326,11 @@ export default function Display({
     })()
 
     photographerRef.current = async () => {
-      // Captured photos get their own border/branding in the gallery
-      // (see photoStrip.ts) instead of the live-preview banner overlay, so
-      // force one render with it hidden right before grabbing the frame.
-      const prevBannerVisible = bannerFrame?.visible ?? true
-      if (bannerFrame) bannerFrame.visible = false
-      // bannerLogo is left visible on purpose — see where it is declared.
+      // Captured photos get their own border/branding in the gallery (see
+      // photoStrip.ts) — the banner logo is left in deliberately, though: it
+      // is what brands each captured photo.
       app.renderer.render(app.stage)
       const imCanvas = postprocessPicture(app.renderer.view)
-      if (bannerFrame) bannerFrame.visible = prevBannerVisible
 
       console.log('Captured photo resolution:', imCanvas.width, 'x', imCanvas.height)
       return imCanvas.toDataURL(
