@@ -1,36 +1,30 @@
 import * as PIXI from '../pixi'
 
-import bannerImg from '../assets/borders/banner_frame.png'
 import { LOGO_URLS } from '../lib/logos'
 import { selectedBannerLogo } from '../store'
 
-// Where the logo sits within the banner, measured from the original artwork.
-// border_design6.png had the 11 crest painted into it at x 866..1050,
-// y 895..1027 of a 1920x1080 canvas; banner_frame.png is that same file with
-// the crest removed, so reproducing these fractions puts a selected logo
-// exactly where the baked one used to be.
+// Where the logo sits over the live feed, measured from the original
+// artwork. border_design6.png (and banner_frame.png, its now-removed
+// decorative-frame companion) had the 11 crest painted in at x 866..1050,
+// y 895..1027 of a 1920x1080 canvas, so reproducing these fractions puts a
+// selected logo exactly where the baked one used to be.
 const LOGO_CENTER_X = 0.499
 const LOGO_CENTER_Y = 0.890
 const LOGO_WIDTH_FRACTION = 0.096
 
-/** The decorative frame over the live feed, plus a selectable logo.
+/** A selectable logo shown over the live feed and included in every photo
+ * taken.
  *
- * Returned as two containers on purpose. Display.tsx hides the frame during
- * capture (photos get their own border treatment in the gallery) but keeps the
- * logo visible, which is what puts the logo into every photo taken - the whole
- * thing used to hide together, so the baked-in logo never appeared in one.
- */
+ * Used to also draw a decorative frame around the feed (a separate
+ * container, hidden during capture since photos get their own border
+ * treatment in the gallery) — removed on request as a redundant/pointless
+ * toggle once the logo already had its own on/off control. Only the logo
+ * remains now. */
 export async function createBanner(app: PIXI.Application) {
   const {
     renderer: { width, height },
     loader,
   } = app
-
-  const frameContainer = new PIXI.Container()
-  const { texture } = await PIXI.ensureLoaded(loader, bannerImg)
-  const borderSprite = PIXI.Sprite.from(texture!)
-  borderSprite.scale.set(width / borderSprite.width)
-  frameContainer.addChild(borderSprite)
 
   const logoContainer = new PIXI.Container()
   const logoSprite = new PIXI.Sprite()
@@ -68,5 +62,5 @@ export async function createBanner(app: PIXI.Application) {
   await applyLogo()
   const unsubscribe = selectedBannerLogo.subscribe(() => void applyLogo())
 
-  return { frameContainer, logoContainer, unsubscribe }
+  return { logoContainer, unsubscribe }
 }

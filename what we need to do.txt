@@ -14,3 +14,20 @@ week after: stress test (multiple people) 12 ppl etc
 week after after: work on stress test and fix broken anims
 
 week after after: outside testing (light etc)
+
+drone and 67 cannot use together
+
+5 max items selected
+
+owl and bat cannot be used together
+
+pressing S opens setting
+selecting banner logo will modify the screen to have the banner logo appear. (can select different coys)
+
+selecting footer logo will modify the logo that appears at the right side of the footer after the photo is taken. (can select different coys)
+
+enable 67 mode will allow you to play the 67 game.
+
+when burst mode is enabled 3 pictures will be taken into 1 photo strip
+
+top right drop down box is to select company logos

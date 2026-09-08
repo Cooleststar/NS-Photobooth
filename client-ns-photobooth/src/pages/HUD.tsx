@@ -3,7 +3,7 @@ import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
 import { uploadImage } from '../api/imgbb'
 import cameraURI from '../assets/icons/camera_black_48dp.svg'
-import { AnimPicker, OcFusionPicker, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
+import { AnimPicker, OcFusionPicker, TopControls, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
 import Challenge67UI from './Challenge67UI'
 import {
   addQrToStrip,
@@ -70,6 +70,11 @@ export default function HUD({ photographerRef }: HUDProps) {
     const imgGetter = photographerRef.current!
     setState('timing')
     ;(async () => {
+      // Restore whatever the pointer setting actually was before hiding it
+      // for capture, rather than forcing it back on — the old `set(true)`
+      // here silently turned Arrow Pointer on after every single photo, even
+      // for guests who never enabled it.
+      const wasPointerEnabled = pointerEnabled.get()
       pointerEnabled.set(false)
       freezePosition.set(true)
       try {
@@ -86,7 +91,7 @@ export default function HUD({ photographerRef }: HUDProps) {
         setError(e?.message ?? e.toString())
         setState('error')
       } finally {
-        pointerEnabled.set(true)
+        pointerEnabled.set(wasPointerEnabled)
         freezePosition.set(false)
       }
     })()
@@ -96,6 +101,8 @@ export default function HUD({ photographerRef }: HUDProps) {
     const imgGetter = photographerRef.current!
     setState('timing')
     ;(async () => {
+      // See captureSingle's comment — restore the prior value, don't force it on.
+      const wasPointerEnabled = pointerEnabled.get()
       pointerEnabled.set(false)
       freezePosition.set(true)
       try {
@@ -138,7 +145,7 @@ export default function HUD({ photographerRef }: HUDProps) {
         document.body.style.cursor = ''
         window.document.body.style.opacity = '1'
         setShowIntervalTimer(false)
-        pointerEnabled.set(true)
+        pointerEnabled.set(wasPointerEnabled)
         freezePosition.set(false)
       }
     })()
@@ -250,6 +257,7 @@ export default function HUD({ photographerRef }: HUDProps) {
           </KeybindBtn>
           <AnimPicker />
           <OcFusionPicker />
+          <TopControls />
         </>
       )
     case 'timing':
