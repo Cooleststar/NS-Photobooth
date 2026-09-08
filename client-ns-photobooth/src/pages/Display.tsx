@@ -124,9 +124,12 @@ const CHARACTER_OPTIONS = new Set<GifOption>([
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// pignose/batears/clownwignose/scuba read body pose only, drone, ocfusion
-// and sixseven read hand landmarks only (ignores pose entirely). Told to the
-// backend via POST /detection_mode so it skips idle models per-frame
+// pignose/batears/clownwignose/scuba/ocfusion read body pose only, drone and
+// sixseven read hand landmarks only (ignores pose entirely). ocfusion used
+// to be hand-tracked too (same shape as drone) but was changed on request to
+// replace the person's face instead, via the same nose/ear pose landmarks
+// as clownwignose/pignose — so it moved from 'hands' to 'pose' here. Told to
+// the backend via POST /detection_mode so it skips idle models per-frame
 // instead of running YOLO/ViTPose/MediaPipe Hands unconditionally.
 const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both'> = {
   none: 'none',
@@ -135,7 +138,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   globe: 'pose',
   drone: 'hands',
   scuba: 'pose',
-  ocfusion: 'hands',
+  ocfusion: 'pose',
   pignose: 'pose',
   batears: 'pose',
   clownwignose: 'pose',
@@ -835,10 +838,9 @@ export default function Display({
       } else if (option === 'scuba') {
         return await createScubaAnim(app, marginOpts)
       } else if (option === 'ocfusion') {
-        const [container, updateOCFusion] = await createOCFusionAnim(app, marginOpts)
-        // Same as drone — driven by MediaPipe hand landmarks, not body pose
-        const wrappedUpdate = (_pose: any) => updateOCFusion(rawRef.current.hands ?? [])
-        return [container, wrappedUpdate] as const
+        // No longer hand-tracked (see ocfusion.ts) — reads its assigned
+        // person's own face pose directly, same contract as pignose/etc.
+        return await createOCFusionAnim(app)
       } else if (option === 'sixseven') {
         const [container, updateSixSeven] = await createSixSevenAnim(app, marginOpts)
         // Same as drone/ocfusion — driven by hand landmarks, not body pose
@@ -1017,20 +1019,20 @@ export default function Display({
         for (const option of gifOptions) {
           if (option === 'none') continue
           if (CHARACTER_OPTIONS.has(option)) {
-            // Drone, OC Fusion and 67 always run a single (outer) instance
-            // regardless of multi-target mode — each already implements its
-            // own internal 4-slot multi-HAND assignment (reading the raw
-            // global hand list directly, not a single assigned person's
-            // pose), specifically so several hands/people can show the
-            // gesture at once. Spawning multiple outer instances for these
-            // would each spin up their own competing 4-slot system fighting
-            // over the same hands — several duplicate drones jumping
-            // between the same targets — instead of one coordinated system.
-            // Scuba doesn't need that special-casing: it just reads its
-            // assigned person's own pose like Clown Wig & Nose/Pig Nose/etc, so it gets a
-            // normal per-person instance via the outer slot assigner below.
+            // Drone and 67 always run a single (outer) instance regardless of
+            // multi-target mode — each already implements its own internal
+            // multi-HAND assignment (reading the raw global hand list
+            // directly, not a single assigned person's pose), specifically so
+            // several hands/people can show the gesture at once. Spawning
+            // multiple outer instances for these would each spin up their own
+            // competing slot system fighting over the same hands — several
+            // duplicate drones jumping between the same targets — instead of
+            // one coordinated system. Everything else, OC Fusion included now
+            // that it reads its assigned person's own face pose like Clown
+            // Wig & Nose/Pig Nose/Scuba/etc, gets a normal per-person
+            // instance via the outer slot assigner below.
             const count =
-              isMulti && option !== 'drone' && option !== 'ocfusion' && option !== 'sixseven'
+              isMulti && option !== 'drone' && option !== 'sixseven'
                 ? MAX_PEOPLE
                 : 1
             const results = await Promise.all(
