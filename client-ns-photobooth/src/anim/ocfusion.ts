@@ -50,6 +50,16 @@ const FIREFLY_CONTENT_WIDTH_FRACTION = 0.80
  * right. */
 const FACE_COVER_SIZE_FACTOR = 1.1
 
+/** Nudge the mask up relative to the tracked ear-midpoint, in ear-to-ear
+ * distances, on request ("move it a little higher" — 0.12 wasn't enough,
+ * the top of the head in the photo needs to line up with the real
+ * hairline). Applied along the head's own "up" direction (perpendicular to
+ * the ear line) rather than a flat screen-space offset, so it scales with
+ * face size and stays correct as the head tilts — same approach as
+ * batears.ts/pignose.ts's crown-offset lift. Tune this further if it still
+ * needs to sit higher/lower. */
+const VERTICAL_LIFT_FACTOR = 0.3
+
 // A jump larger than this (in ear-to-ear distances) means this animation
 // slot has been handed to a different person, not that someone moved
 // quickly. Snap to the new face rather than letting the filter drag the
@@ -92,10 +102,17 @@ function getFaceTarget(
   // Roll from the ear-to-ear line, so the mask tilts with the head.
   const angle = Math.atan2(re.y - le.y, re.x - le.x)
 
+  // "Up" is perpendicular to the ear line rather than screen-up, so the
+  // lift below stays correct as the head tilts instead of sliding off at
+  // an angle — same convention as batears.ts/pignose.ts.
+  const upX = Math.sin(angle)
+  const upY = -Math.cos(angle)
+
   // Face centre is the ear midpoint — a steadier reference than the nose,
-  // which sits forward of it and swings about as the head turns.
-  const midX = (le.x + re.x) / 2
-  const midY = (le.y + re.y) / 2
+  // which sits forward of it and swings about as the head turns. Lifted up
+  // slightly per VERTICAL_LIFT_FACTOR.
+  const midX = (le.x + re.x) / 2 + upX * earDist * VERTICAL_LIFT_FACTOR
+  const midY = (le.y + re.y) / 2 + upY * earDist * VERTICAL_LIFT_FACTOR
 
   return { x: midX, y: midY, earDist, angle }
 }
