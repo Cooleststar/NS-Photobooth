@@ -8,10 +8,11 @@ import rstaLogoUrl from '../assets/icons/RSTA Logo.png'
 import signalLogoUrl from '../assets/icons/Signal Logo.png'
 import { CoyLogo, selectedCoyLogo } from '../store'
 
-/** Company logo files, keyed to match COY_LOGOS in the store. 'none' has no
- * entry: the footer skips the slot entirely rather than drawing a blank. */
+/** Files for the selectable middle slot, keyed to match COY_LOGOS in the
+ * store. 'none' has no entry: the footer skips the slot rather than drawing a
+ * blank. 11logo is absent because it is the FIXED slot, never selectable. */
 const COY_LOGO_URLS: Partial<Record<CoyLogo, string>> = {
-  '11': logo11Url,
+  fusion: fusionLogoUrl,
   atlas: atlasLogoUrl,
   boreas: boreasLogoUrl,
   hq: hqLogoUrl,
@@ -37,16 +38,16 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-// fusionlogo is on every strip, so it is loaded once and kept.
-let fusionLogoPromise: Promise<HTMLImageElement> | null = null
-function loadFusionLogo(): Promise<HTMLImageElement> {
-  if (!fusionLogoPromise) fusionLogoPromise = loadImage(fusionLogoUrl)
-  return fusionLogoPromise
+// 11logo is on every strip, so it is loaded once and kept.
+let logo11Promise: Promise<HTMLImageElement> | null = null
+function loadLogo11(): Promise<HTMLImageElement> {
+  if (!logo11Promise) logo11Promise = loadImage(logo11Url)
+  return logo11Promise
 }
 
-// The company logo can change between strips, so it is cached per key rather
+// The middle slot can change between strips, so it is cached per key rather
 // than once globally - switching in Settings and taking another photo must not
-// keep drawing the previous company's logo.
+// keep drawing the previous selection.
 const coyLogoPromises = new Map<CoyLogo, Promise<HTMLImageElement>>()
 function loadCoyLogo(key: CoyLogo): Promise<HTMLImageElement> | null {
   const url = COY_LOGO_URLS[key]
@@ -230,23 +231,26 @@ async function drawFooter(
     canvasHeight,
   )
 
-  // Logos sit beside the QR box, vertically centered on the same row as the
-  // brand text/timestamp above. The company logo is read at draw time rather
-  // than passed in, so a strip re-themed later (addQrToStrip redraws from
-  // scratch) picks up the current selection like every other strip does.
+  // Footer row is [11logo] [selectable] [QR], vertically centered on the same
+  // row as the brand text/timestamp above. 11logo is fixed; the middle slot
+  // holds fusionlogo by default, a company logo when one is chosen, or
+  // nothing.
+  //
+  // The selection is read at draw time rather than passed in, so a strip
+  // re-themed later (addQrToStrip redraws from scratch) picks up the current
+  // choice like every other strip does.
   const { x: qrX } = footerQrBox(canvasWidth, canvasHeight, imageCount)
   const logoY = rowY - logoSize / 2
-  const fusionX = qrX - qrMargin - logoSize
-  const coyX = fusionX - logoGap - logoSize
+  const middleX = qrX - qrMargin - logoSize
+  const logo11X = middleX - logoGap - logoSize
 
-  const fusionLogoImg = await loadFusionLogo()
-  drawFooterIcon(ctx, fusionLogoImg, fusionX, logoY, logoSize)
+  drawFooterIcon(ctx, await loadLogo11(), logo11X, logoY, logoSize)
 
-  // 'none' draws nothing and leaves the slot empty rather than shifting the
-  // other icons: fusionlogo and the QR keep their positions, so strips with
-  // and without a company logo still line up with each other.
+  // 'none' draws nothing and leaves the slot empty rather than closing the
+  // gap: 11logo and the QR keep their positions, so strips with and without a
+  // middle logo still line up with each other.
   const coyPromise = loadCoyLogo(selectedCoyLogo.get())
-  if (coyPromise) drawFooterIcon(ctx, await coyPromise, coyX, logoY, logoSize)
+  if (coyPromise) drawFooterIcon(ctx, await coyPromise, middleX, logoY, logoSize)
 }
 
 /** Stack photos vertically into a single strip image (data URL), on a

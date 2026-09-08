@@ -88,16 +88,18 @@ function SwitchRow({
 /** Dropdown that opens into a checkbox list — lets several animations be
  * selected at once (see selectedGifs) while still collapsing to a single
  * closed control like a normal dropdown. */
-/** Company logo drawn in the photo strip footer, beside fusionlogo and the QR.
+/** The middle logo in the photo strip footer, which is [11logo] [this] [QR].
+ * 11logo is fixed; this slot holds fusionlogo by default and a company logo
+ * when one is chosen.
  *
- * A plain single-select, unlike AnimMultiSelect above: exactly one company
- * logo applies at a time, and it is set once per event rather than adjusted
- * during one. */
+ * A plain single-select, unlike AnimMultiSelect above: exactly one logo
+ * applies at a time, and it is set once per event rather than adjusted during
+ * one. */
 function CoyLogoSelect() {
   const current = useStore(selectedCoyLogo)
   return (
     <div tw='flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>Company Logo</span>
+      <span tw='text-xs text-gray-500'>Footer Logo</span>
       <select
         value={current}
         onChange={(e) =>
@@ -110,8 +112,8 @@ function CoyLogoSelect() {
         ))}
       </select>
       <span tw='text-xs text-gray-500'>
-        Appears on photo strips taken from now on; strips already taken keep
-        the logo they were made with.
+        Sits beside the 11 logo on photo strips taken from now on; strips
+        already taken keep the logo they were made with.
       </span>
     </div>
   )

@@ -109,19 +109,22 @@ export function canSelect(
   if (kept.length !== current.length) selectedGifs.set(kept)
 }
 
-/** Company logo shown in the photo strip footer, beside fusionlogo and the QR.
+/** What occupies the middle logo slot in the photo strip footer.
+ *
+ * The footer is [11logo] [this] [QR]. 11logo is fixed and always drawn; only
+ * the middle slot is selectable, and choosing a company logo replaces
+ * fusionlogo there.
  *
  * The files live in assets/icons and are imported by lib/photoStrip.ts - only
  * the key is stored here, so a selection persisted in a browser stays valid if
  * an image is renamed or re-exported.
  *
- * '11' is the historical default: 11logo.png was hardcoded in that slot before
- * this was selectable, so an existing booth keeps the logo it has always had
- * rather than silently changing on upgrade. 'none' draws nothing and closes
- * the gap, for events where no company logo applies. */
+ * 'fusion' is the default because it is what the slot held before this became
+ * selectable, so an existing booth looks unchanged on upgrade. 'none' draws
+ * nothing and leaves the slot empty, for events where neither applies. */
 export const COY_LOGOS = {
+  fusion: 'Fusion (default)',
   none: 'No logo',
-  '11': '11 (default)',
   atlas: 'Atlas',
   boreas: 'Boreas',
   hq: 'HQ',
@@ -130,15 +133,16 @@ export const COY_LOGOS = {
 } as const
 export type CoyLogo = keyof typeof COY_LOGOS
 
-export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', '11', opts)
+export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', 'fusion', opts)
 
 // Self-heal, same as the GIF_OPTIONS cleanup above: a key that no longer
-// exists (a company removed, say) would otherwise sit in a browser's storage
-// and resolve to an undefined image URL, which fails at draw time rather than
-// at selection time.
+// exists would otherwise sit in a browser's storage and resolve to an
+// undefined image URL, failing at draw time rather than at selection time.
+// This also catches the earlier '11' key, from when 11logo was the thing being
+// replaced rather than the fixed one.
 {
   const current = selectedCoyLogo.get()
-  if (!(current in COY_LOGOS)) selectedCoyLogo.set('11')
+  if (!(current in COY_LOGOS)) selectedCoyLogo.set('fusion')
 }
 
 export const pointerEnabled = atom(false)
