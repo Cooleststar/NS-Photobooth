@@ -130,6 +130,16 @@ const MIN_HORIZONTAL_RATIO = 0.65
 // Note this also bridges brief detection dropouts mid-gesture, so setting it
 // too low can make the cat flicker while you are still waving.
 const GESTURE_HOLD_SEC = 1
+// How long the swing must be sustained, continuously, before the cat first
+// appears — on request, so a brief/accidental wave doesn't summon it.
+// Separate from SHAKE_WINDOW_SEC/MOTION_ENERGY_FACTOR above: those decide
+// whether THIS frame counts as "currently shaking" at all (energy within a
+// rolling window), this decides how long that "currently shaking" verdict
+// must hold true back-to-back before it's treated as deliberate rather than
+// a quick flick. Only gates the FIRST appearance — once already on screen,
+// continued swinging refreshes GESTURE_HOLD_SEC immediately below rather
+// than re-demanding another full confirm period each time.
+const GESTURE_CONFIRM_SEC = 2
 
 type MotionPoint = { t: number; x: number; y: number }
 
@@ -219,6 +229,8 @@ export async function createScubaAnim(
   const buffers: Record<'left' | 'right', MotionPoint[]> = { left: [], right: [] }
   let elapsed = 0
   let triggeredUntil = -Infinity
+  // Continuous-shaking duration this frame is part of — see GESTURE_CONFIRM_SEC.
+  let confirmTimer = 0
   const animManager = new AnimStateManager()
 
   let targetX = 0
@@ -248,7 +260,16 @@ export async function createScubaAnim(
       buffers.left = buffers.left.filter((s) => elapsed - s.t <= SHAKE_WINDOW_SEC)
       buffers.right = buffers.right.filter((s) => elapsed - s.t <= SHAKE_WINDOW_SEC)
 
-      if (isShaking(buffers.left, torso.shoulderWidth) || isShaking(buffers.right, torso.shoulderWidth)) {
+      const shakingNow =
+        isShaking(buffers.left, torso.shoulderWidth) || isShaking(buffers.right, torso.shoulderWidth)
+      confirmTimer = shakingNow ? confirmTimer + deltaSec : 0
+
+      // Already visible (within a previous hold window): any continued
+      // swinging just refreshes the hold, no need to re-confirm 2s again.
+      // Not yet visible: only start the hold once swinging has been
+      // sustained continuously for GESTURE_CONFIRM_SEC.
+      const alreadyOnScreen = elapsed < triggeredUntil
+      if (shakingNow && (alreadyOnScreen || confirmTimer >= GESTURE_CONFIRM_SEC)) {
         triggeredUntil = elapsed + GESTURE_HOLD_SEC
       }
       gestureActive = elapsed < triggeredUntil
@@ -264,6 +285,7 @@ export async function createScubaAnim(
       // handles brief dropouts below.
       buffers.left = []
       buffers.right = []
+      confirmTimer = 0
     }
 
     animManager.tracking = gestureActive

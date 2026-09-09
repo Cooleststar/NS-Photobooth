@@ -15,12 +15,12 @@ week after after: work on stress test and fix broken anims
 
 week after after: outside testing (light etc)
 
+
+--BANNER INFO--
+
 drone and 67 cannot use together
 
 5 max items selected
-
-
---BANNER INFO--
 
 owl and bat cannot be used together
 
