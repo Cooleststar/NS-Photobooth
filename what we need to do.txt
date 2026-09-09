@@ -16,6 +16,10 @@ week after after: work on stress test and fix broken anims
 week after after: outside testing (light etc)
 
 
+current porblem
+fix camera application in this photobooth
+(fix bat and owl anims in n out)
+(fix globe)
 --BANNER INFO--
 
 drone and 67 cannot use together
