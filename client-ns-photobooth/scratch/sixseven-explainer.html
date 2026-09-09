@@ -1,0 +1,597 @@
+<title>6 Left, 7 Right</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f2f4f7;
+    --surface: #ffffff;
+    --ink: #161b22;
+    --muted: #5c6570;
+    --line: #d7dce2;
+    --six: #c9402a;
+    --six-ink: #ffffff;
+    --seven: #b8862a;
+    --seven-ink: #161b22;
+    --valid: #2f7d6e;
+    --valid-ink: #ffffff;
+    --code-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10151c;
+      --surface: #171e27;
+      --ink: #e7ecf2;
+      --muted: #93a0ae;
+      --line: #2a323d;
+      --six: #ff7a5c;
+      --six-ink: #1a0f0b;
+      --seven: #e8b84a;
+      --seven-ink: #1a1206;
+      --valid: #5fd1b8;
+      --valid-ink: #0b201c;
+      --code-bg: #1d2530;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10151c;
+    --surface: #171e27;
+    --ink: #e7ecf2;
+    --muted: #93a0ae;
+    --line: #2a323d;
+    --six: #ff7a5c;
+    --six-ink: #1a0f0b;
+    --seven: #e8b84a;
+    --seven-ink: #1a1206;
+    --valid: #5fd1b8;
+    --valid-ink: #0b201c;
+    --code-bg: #1d2530;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  ::selection { background: var(--six); color: var(--six-ink); }
+
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 56px 24px 80px;
+  }
+
+  .kicker {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .kicker .dot { color: var(--six); }
+  .kicker .dot2 { color: var(--seven); }
+
+  h1 {
+    font-family: 'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif;
+    font-weight: 700;
+    font-size: clamp(40px, 7vw, 64px);
+    line-height: 1.02;
+    letter-spacing: -0.01em;
+    margin: 10px 0 0;
+    text-wrap: balance;
+  }
+  h1 .six { color: var(--six); }
+  h1 .seven { color: var(--seven); }
+
+  .dek {
+    max-width: 62ch;
+    font-size: 18px;
+    color: var(--muted);
+    margin: 18px 0 0;
+  }
+
+  header.masthead { margin-bottom: 40px; }
+
+  figure {
+    margin: 32px 0;
+    padding: 0;
+  }
+  figure.frame {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 20px 20px 16px;
+  }
+  .diagram-scroll {
+    overflow-x: auto;
+  }
+  figure svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  figure.hero svg { min-width: 480px; }
+  figure.wide svg { min-width: 620px; }
+  figure.compact svg { min-width: 320px; max-width: 420px; margin: 0 auto; }
+
+  figcaption {
+    font-size: 14px;
+    color: var(--muted);
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  main { display: flex; flex-direction: column; gap: 8px; }
+
+  .stage {
+    padding: 44px 0;
+    border-top: 1px solid var(--line);
+  }
+  .stage:first-of-type { border-top: none; padding-top: 8px; }
+
+  .stage-kicker {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .stage-kicker .num {
+    font-weight: 600;
+    color: var(--ink);
+    font-size: 13px;
+  }
+
+  .stage h2 {
+    font-family: 'IBM Plex Sans Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 30px;
+    margin: 6px 0 16px;
+    text-wrap: balance;
+  }
+
+  .stage p {
+    max-width: 66ch;
+    font-size: 16px;
+    margin: 0 0 14px;
+  }
+  .stage p:last-of-type { margin-bottom: 0; }
+
+  code, .mono {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.9em;
+  }
+  code {
+    background: var(--code-bg);
+    border-radius: 3px;
+    padding: 0.12em 0.4em;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    background: var(--surface);
+  }
+  .chip.six { border-color: color-mix(in srgb, var(--six) 40%, var(--line)); color: var(--six); }
+  .chip.seven { border-color: color-mix(in srgb, var(--seven) 40%, var(--line)); color: var(--seven); }
+
+  table.ref {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  table.ref caption {
+    text-align: left;
+    font-family: 'IBM Plex Sans Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+    margin-bottom: 14px;
+  }
+  table.ref th, table.ref td {
+    text-align: left;
+    padding: 9px 12px 9px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.ref th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  table.ref td.val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  footer {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 560px) {
+    .page { padding: 40px 16px 64px; }
+    .stage h2 { font-size: 26px; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="kicker">
+      <span class="dot">●</span>ANIMPICKER GESTURE<span class="dot2">●</span>
+      <span>client-ns-photobooth</span>
+    </div>
+    <h1>Palms up, tilted apart:<br><span class="six">6</span> on one hand, <span class="seven">7</span> on the other.</h1>
+    <p class="dek">
+      The "67" character has no dedicated gesture model. It reads the same 21-point
+      hand landmarks every other palm-triggered prop uses, and decides "diagonal enough,
+      which side is which, whose hand is whose" with geometry alone — five stages, worked
+      through below with the actual thresholds from <code>anim/sixseven.ts</code>.
+    </p>
+  </header>
+
+  <figure class="frame hero">
+    <div class="diagram-scroll">
+      <svg viewBox="0 0 640 320" role="img" aria-label="Two palms on a mirrored display, tilted about 24 degrees off level, with a six marker on the lower-left palm and a seven marker on the upper-right palm.">
+        <rect x="20" y="20" width="600" height="260" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="320" y="304" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)" letter-spacing="0.08em">DISPLAY SHOWN TO THE GUEST (MIRRORED)</text>
+
+        <line x1="170" y1="220" x2="470" y2="220" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="4 4"/>
+        <line x1="170" y1="220" x2="470" y2="90" stroke="currentColor" stroke-width="2"/>
+        <path d="M 210 220 A 40 40 0 0 0 205.5 202.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="222" y="204" class="mono" font-size="13" fill="var(--ink)">&#952; &#8776; 24&#176;</text>
+
+        <circle cx="170" cy="220" r="28" fill="var(--six)"/>
+        <text x="170" y="228" text-anchor="middle" font-size="26" font-weight="700" fill="var(--six-ink)" font-family="'IBM Plex Sans Condensed', sans-serif">6</text>
+        <circle cx="470" cy="90" r="28" fill="var(--seven)"/>
+        <text x="470" y="98" text-anchor="middle" font-size="26" font-weight="700" fill="var(--seven-ink)" font-family="'IBM Plex Sans Condensed', sans-serif">7</text>
+
+        <text x="170" y="270" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">smaller screen-x</text>
+        <text x="470" y="60" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">larger screen-x</text>
+      </svg>
+    </div>
+    <figcaption>
+      A valid "67": both palms face the sky, tilted roughly 24&#176; off level. Stage 3 sets the
+      exact window this angle has to clear; Stage 4 explains why the lower-x palm — not the
+      person's literal left hand — is the one that gets the six.
+    </figcaption>
+  </figure>
+
+  <main>
+
+    <section class="stage">
+      <div class="stage-kicker"><span class="num">STAGE 1</span><span>Signal</span></div>
+      <h2>Wherever a palm faces the sky, that's a candidate</h2>
+      <p>
+        Every hand the backend reports arrives as 21 normalized landmarks, plus two
+        pre-classified booleans: <code>palmUp</code> (an upright "stop" hand) and
+        <code>palmSky</code> (a flat, outstretched, offering hand). The Drone character
+        already uses <code>palmSky</code> for its hovering prop, so 67 reuses the exact
+        same signal and the exact same landmark math — a person doesn't have to learn a
+        new hand shape, they just need <em>two</em> of the gesture the booth already knows.
+      </p>
+      <p>
+        A palm's center is the average of the wrist and the four knuckle bases — stable
+        under rotation, unlike the wrist alone, which only works while the hand is held
+        upright.
+      </p>
+      <figure class="frame compact">
+        <div class="diagram-scroll">
+          <svg viewBox="0 0 340 300" role="img" aria-label="Five hand landmark points, the wrist and four knuckle bases, each connected by a dashed line to their averaged center point labeled palm center.">
+            <line x1="170" y1="260" x2="172" y2="157" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+            <line x1="110" y1="150" x2="172" y2="157" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+            <line x1="150" y1="110" x2="172" y2="157" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+            <line x1="195" y1="115" x2="172" y2="157" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+            <line x1="235" y1="150" x2="172" y2="157" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+
+            <circle cx="170" cy="260" r="6" fill="var(--ink)"/>
+            <text x="182" y="264" class="mono" font-size="11" fill="var(--muted)">0 wrist</text>
+            <circle cx="110" cy="150" r="6" fill="var(--ink)"/>
+            <text x="60" y="146" class="mono" font-size="11" fill="var(--muted)">5</text>
+            <circle cx="150" cy="110" r="6" fill="var(--ink)"/>
+            <text x="150" y="98" class="mono" font-size="11" fill="var(--muted)">9</text>
+            <circle cx="195" cy="115" r="6" fill="var(--ink)"/>
+            <text x="203" y="105" class="mono" font-size="11" fill="var(--muted)">13</text>
+            <circle cx="235" cy="150" r="6" fill="var(--ink)"/>
+            <text x="243" y="146" class="mono" font-size="11" fill="var(--muted)">17</text>
+
+            <circle cx="172" cy="157" r="9" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="172" y="192" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">palm center</text>
+          </svg>
+        </div>
+        <figcaption>Landmarks 0, 5, 9, 13, 17 averaged — the same palm-center calculation the Drone character already uses.</figcaption>
+      </figure>
+    </section>
+
+    <section class="stage">
+      <div class="stage-kicker"><span class="num">STAGE 2</span><span>Matching</span></div>
+      <h2>Two phases, because the backend hands over no identities</h2>
+      <p>
+        The backend reports a flat list of palms — up to eight, its own confidence
+        ceiling — with no notion of which two belong to the same person. Re-pairing that
+        list from scratch every frame would be unstable: the reported set churns as
+        confidence shifts, and a pair's midpoint alone can't tell two correct hands from
+        two wrong ones that happen to average to the same spot. So a slot that's already
+        showing a 6/7 pair reclaims <em>its own</em> two hands first, by proximity, before
+        any new pairing is attempted.
+      </p>
+      <p>
+        Only the palms nobody has reclaimed enter the pairing stage. There, every
+        remaining combination is checked against three gates — a plausible hand-to-hand
+        spread, a maximum distance, and the diagonal angle from Stage 3 — and the
+        <em>closest</em> valid combination wins, not the most diagonal one. Ranking by
+        steepest angle would reward exactly the wrong case: my raised hand paired with a
+        stranger's lowered one.
+      </p>
+      <figure class="frame wide">
+        <div class="diagram-scroll">
+          <svg viewBox="0 0 900 400" role="img" aria-label="A pipeline diagram: five palm-up hands enter from the left. One is reclaimed by an existing active slot within its claim radius. The remaining four are evaluated in phase two, where the closest pair passing the distance and angle gates becomes a new six-seven pair, and the two hands left over stay unpaired for this frame.">
+            <text x="90" y="42" text-anchor="middle" class="mono" font-size="12" fill="var(--muted)" letter-spacing="0.04em">PALMSKY HANDS</text>
+            <circle cx="90" cy="100" r="16" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="90" y="104" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">h1</text>
+            <circle cx="90" cy="160" r="16" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="90" y="164" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">h2</text>
+            <circle cx="90" cy="220" r="16" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="90" y="224" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">h3</text>
+            <circle cx="90" cy="280" r="16" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="90" y="284" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">h4</text>
+            <circle cx="90" cy="340" r="16" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="90" y="344" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">h5</text>
+
+            <text x="385" y="42" text-anchor="middle" class="mono" font-size="12" fill="var(--muted)" letter-spacing="0.04em">PHASE 1 &#8212; ACTIVE SLOTS RECLAIM</text>
+            <circle cx="385" cy="160" r="66" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="3 4"/>
+            <text x="385" y="240" text-anchor="middle" class="mono" font-size="10.5" fill="var(--muted)">claim radius &#8804; 0.25&#183;width</text>
+            <text x="385" y="105" text-anchor="middle" class="mono" font-size="10.5" fill="var(--muted)">slot A (active)</text>
+            <circle cx="372" cy="160" r="13" fill="var(--six)"/>
+            <text x="372" y="164" text-anchor="middle" font-size="12" font-weight="700" fill="var(--six-ink)" font-family="'IBM Plex Sans Condensed', sans-serif">6</text>
+            <circle cx="398" cy="160" r="13" fill="var(--seven)"/>
+            <text x="398" y="164" text-anchor="middle" font-size="12" font-weight="700" fill="var(--seven-ink)" font-family="'IBM Plex Sans Condensed', sans-serif">7</text>
+            <path d="M 106 100 C 220 100, 300 130, 340 152" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="220" y="90" class="mono" font-size="10.5" fill="var(--ink)">h1 reclaimed</text>
+
+            <path d="M 106 160 L 640 160" fill="none" stroke="var(--line)" stroke-width="1.2"/>
+            <path d="M 106 220 L 640 220" fill="none" stroke="var(--line)" stroke-width="1.2"/>
+            <path d="M 106 280 L 640 280" fill="none" stroke="var(--line)" stroke-width="1.2"/>
+            <path d="M 106 340 L 640 340" fill="none" stroke="var(--line)" stroke-width="1.2"/>
+            <text x="500" y="150" text-anchor="middle" class="mono" font-size="10" fill="var(--muted)">unclaimed &#8594;</text>
+
+            <text x="685" y="42" text-anchor="middle" class="mono" font-size="12" fill="var(--muted)" letter-spacing="0.04em">PHASE 2 &#8212; PAIR WHAT'S LEFT</text>
+
+            <line x1="660" y1="220" x2="660" y2="280" stroke="var(--valid)" stroke-width="2.5"/>
+            <text x="672" y="256" class="mono" font-size="10" fill="var(--valid)">&#916;x &#10003;&#160;&#160;dist &#10003;&#160;&#160;&#952; 27&#176; &#10003;</text>
+            <circle cx="660" cy="220" r="16" fill="var(--six)"/>
+            <text x="660" y="224" text-anchor="middle" font-size="13" font-weight="700" fill="var(--six-ink)" font-family="'IBM Plex Sans Condensed', sans-serif">6</text>
+            <circle cx="660" cy="280" r="16" fill="var(--seven)"/>
+            <text x="660" y="284" text-anchor="middle" font-size="13" font-weight="700" fill="var(--seven-ink)" font-family="'IBM Plex Sans Condensed', sans-serif">7</text>
+            <text x="660" y="312" text-anchor="middle" class="mono" font-size="10.5" fill="var(--valid)">new slot B</text>
+
+            <circle cx="660" cy="160" r="16" fill="var(--surface)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="660" y="164" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">h2</text>
+            <text x="660" y="140" text-anchor="middle" class="mono" font-size="10" fill="var(--muted)">no partner yet</text>
+            <circle cx="660" cy="340" r="16" fill="var(--surface)" stroke="var(--muted)" stroke-width="1.5"/>
+            <text x="660" y="344" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">h5</text>
+            <text x="660" y="368" text-anchor="middle" class="mono" font-size="10" fill="var(--muted)">no partner yet</text>
+
+            <path d="M 340 152 C 500 140, 550 200, 596 220" fill="none" stroke="var(--valid)" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arrow-valid)"/>
+            <path d="M 385 226 C 470 250, 580 260, 596 232" fill="none" stroke="var(--valid)" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arrow-valid)"/>
+
+            <path d="M 414 160 C 500 175, 550 195, 600 210" fill="none" stroke="var(--six)" stroke-width="2" marker-end="url(#arrow-six)"/>
+            <path d="M 414 210 C 500 190, 550 250, 600 280" fill="none" stroke="var(--seven)" stroke-width="2" marker-end="url(#arrow-seven)"/>
+            <text x="835" y="235" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">4 pair-slots,&#10;rendered</text>
+
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="currentColor"/></marker>
+              <marker id="arrow-valid" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="var(--valid)"/></marker>
+              <marker id="arrow-six" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="var(--six)"/></marker>
+              <marker id="arrow-seven" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="var(--seven)"/></marker>
+            </defs>
+          </svg>
+        </div>
+        <figcaption>
+          h1 sits inside slot A's claim radius and is reclaimed before anything else runs.
+          Of the four hands left, h3&#8211;h4 is the closest combination that also clears the
+          angle and distance gates, so it becomes new slot B; h2 and h5 sit out this frame.
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="stage">
+      <div class="stage-kicker"><span class="num">STAGE 3</span><span>The angle gate</span></div>
+      <h2>"Diagonal" is a window, not a switch</h2>
+      <p>
+        The tilt between two palms is measured as an angle, not a raw pixel gap — a
+        gap in pixels shrinks for anyone standing further from the camera, but the angle
+        of two outstretched arms doesn't. Below 12&#176; reads as level. Above 72&#176; reads as
+        two different people at two different depths, not one person's arms. Between 20&#176;
+        and 72&#176; is unambiguously a real 67 pose.
+      </p>
+      <p>
+        The 12&#8211;20&#176; band only matters to a pair that's already on screen: it takes a
+        clear 20&#176; tilt to <em>start</em> a pair, but only 12&#176; to keep one alive — enough
+        hysteresis that hovering near the boundary doesn't flicker the numbers in and out.
+      </p>
+      <figure class="frame wide">
+        <div class="diagram-scroll">
+          <svg viewBox="0 0 640 170" role="img" aria-label="A linear scale from 0 to 90 degrees, showing a fade zone from 0 to 12 degrees, a hysteresis band from 12 to 20 degrees, a valid diagonal band from 20 to 72 degrees, and a too-vertical zone from 72 to 90 degrees, with an example angle of 24 degrees marked inside the valid band.">
+            <rect x="40" y="80" width="75" height="20" fill="var(--muted)" opacity="0.3"/>
+            <rect x="115" y="80" width="49" height="20" fill="var(--line)"/>
+            <rect x="164" y="80" width="324" height="20" fill="var(--valid)" opacity="0.55"/>
+            <rect x="488" y="80" width="112" height="20" fill="var(--muted)" opacity="0.3"/>
+            <line x1="40" y1="80" x2="600" y2="80" stroke="currentColor" stroke-width="1"/>
+            <line x1="40" y1="100" x2="600" y2="100" stroke="currentColor" stroke-width="1"/>
+
+            <line x1="40" y1="75" x2="40" y2="105" stroke="currentColor" stroke-width="1.5"/>
+            <text x="40" y="122" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">0&#176;</text>
+            <line x1="115" y1="75" x2="115" y2="105" stroke="currentColor" stroke-width="1.5"/>
+            <text x="115" y="122" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">12&#176; exit</text>
+            <line x1="164" y1="75" x2="164" y2="105" stroke="currentColor" stroke-width="1.5"/>
+            <text x="164" y="122" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">20&#176; enter</text>
+            <line x1="488" y1="75" x2="488" y2="105" stroke="currentColor" stroke-width="1.5"/>
+            <text x="488" y="122" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">72&#176; max</text>
+            <line x1="600" y1="75" x2="600" y2="105" stroke="currentColor" stroke-width="1.5"/>
+            <text x="600" y="122" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">90&#176;</text>
+
+            <text x="77" y="145" text-anchor="middle" class="mono" font-size="10.5" fill="var(--muted)">fades</text>
+            <text x="326" y="145" text-anchor="middle" class="mono" font-size="10.5" fill="var(--valid)">valid diagonal</text>
+            <text x="544" y="145" text-anchor="middle" class="mono" font-size="10.5" fill="var(--muted)">too vertical</text>
+
+            <line x1="189" y1="55" x2="189" y2="78" stroke="currentColor" stroke-width="1.5"/>
+            <polygon points="189,78 184,66 194,66" fill="currentColor"/>
+            <text x="189" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">&#952; &#8776; 24&#176; example</text>
+          </svg>
+        </div>
+        <figcaption>Enter, exit and ceiling thresholds from <code>DIAGONAL_ENTER_ANGLE</code>, <code>DIAGONAL_EXIT_ANGLE</code> and <code>DIAGONAL_MAX_ANGLE</code>.</figcaption>
+      </figure>
+      <p>
+        A detection <em>gap</em> is treated differently from a pair that's simply gone
+        level: losing sight of a hand for a moment is forgiven for
+        <span class="chip">0.4s hold</span>, but a pair that's still tracked and has
+        straightened out fades immediately — the gesture is over, not glitching.
+      </p>
+    </section>
+
+    <section class="stage">
+      <div class="stage-kicker"><span class="num">STAGE 4</span><span>Assignment</span></div>
+      <h2>Which hand gets the six</h2>
+      <p>
+        No handedness label is ever read from the backend — nothing else in this codebase
+        trusts it, and it's unverified against a mirrored feed. Instead the rule is purely
+        geometric: whichever palm sits at the smaller x on screen becomes the six, the
+        other becomes the seven. Because the feed is mirrored for the guest (the same
+        flip that makes any mirror feel natural), that smaller-x palm is reliably the
+        guest's own left hand.
+      </p>
+      <figure class="frame">
+        <div class="diagram-scroll">
+          <svg viewBox="0 0 560 240" role="img" aria-label="Two panels. The left panel, labeled camera raw, shows a person's left hand at higher x on the right side of frame. An arrow labeled x-screen equals one minus x times width points to the right panel, labeled screen shown to guest, where the mirrored image now shows that same left hand on the screen's left side, which becomes the six.">
+            <rect x="20" y="30" width="220" height="180" rx="8" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+            <text x="130" y="20" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">CAMERA (RAW)</text>
+            <circle cx="130" cy="90" r="16" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <rect x="102" y="106" width="56" height="76" rx="18" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="72" cy="150" r="9" fill="var(--muted)"/>
+            <text x="72" y="196" text-anchor="middle" class="mono" font-size="9.5" fill="var(--muted)">their right, x&#8776;0.22</text>
+            <circle cx="188" cy="150" r="9" fill="var(--muted)"/>
+            <text x="188" y="196" text-anchor="middle" class="mono" font-size="9.5" fill="var(--muted)">their left, x&#8776;0.78</text>
+
+            <line x1="250" y1="120" x2="310" y2="120" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow-mirror)"/>
+            <text x="280" y="105" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">x&#8202;&#8594;&#8202;1&#8722;x</text>
+            <defs>
+              <marker id="arrow-mirror" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="currentColor"/></marker>
+            </defs>
+
+            <rect x="320" y="30" width="220" height="180" rx="8" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+            <text x="430" y="20" text-anchor="middle" class="mono" font-size="11" fill="var(--muted)">SCREEN SHOWN TO GUEST</text>
+            <circle cx="430" cy="90" r="16" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <rect x="402" y="106" width="56" height="76" rx="18" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="372" cy="150" r="9" fill="var(--six)"/>
+            <text x="372" y="196" text-anchor="middle" class="mono" font-size="9.5" fill="var(--six)">their left &#8594; six</text>
+            <circle cx="488" cy="150" r="9" fill="var(--seven)"/>
+            <text x="488" y="196" text-anchor="middle" class="mono" font-size="9.5" fill="var(--seven)">their right &#8594; seven</text>
+          </svg>
+        </div>
+        <figcaption>The mirror that makes the feed feel natural is the same mirror that makes "smaller screen-x" mean "the guest's own left hand."</figcaption>
+      </figure>
+    </section>
+
+    <section class="stage">
+      <div class="stage-kicker"><span class="num">STAGE 5</span><span>Lifecycle</span></div>
+      <h2>Appearing, holding, fading</h2>
+      <p>
+        Once a pair is accepted, both numbers share a single fade state — they rise in
+        together, bob in together, and fade out together, so the two glyphs always read
+        as one prop rather than two independent sprites that happen to be nearby. Losing
+        the diagonal drops a pair straight to fading out, with no grace period — that
+        part of the gesture is meant to end the moment the arms come back level.
+      </p>
+      <figure class="frame compact">
+        <div class="diagram-scroll">
+          <svg viewBox="0 0 460 210" role="img" aria-label="A state diagram: exited leads to entering leads to entered on tracking start and fade completion. Entered drops to lost when tracking is lost. Lost transitions immediately, with no grace period, to exiting, which returns to exited once its fade completes. A dashed arrow shows lost returning directly to its prior state if tracking resumes.">
+            <rect x="10" y="20" width="110" height="46" rx="6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="65" y="48" text-anchor="middle" font-size="13" fill="var(--ink)">exited</text>
+            <rect x="175" y="20" width="110" height="46" rx="6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="230" y="48" text-anchor="middle" font-size="13" fill="var(--ink)">entering</text>
+            <rect x="340" y="20" width="110" height="46" rx="6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="395" y="48" text-anchor="middle" font-size="13" fill="var(--ink)">entered</text>
+
+            <line x1="120" y1="43" x2="173" y2="43" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow-sm)"/>
+            <text x="147" y="34" text-anchor="middle" class="mono" font-size="9.5" fill="var(--muted)">tracking</text>
+            <line x1="285" y1="43" x2="338" y2="43" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow-sm)"/>
+            <text x="311" y="34" text-anchor="middle" class="mono" font-size="9.5" fill="var(--muted)">fade done</text>
+
+            <rect x="340" y="140" width="110" height="46" rx="6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="395" y="168" text-anchor="middle" font-size="13" fill="var(--ink)">lost</text>
+            <line x1="395" y1="68" x2="395" y2="138" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow-sm)"/>
+            <text x="440" y="106" text-anchor="middle" class="mono" font-size="9.5" fill="var(--muted)">tracking lost</text>
+
+            <rect x="175" y="140" width="110" height="46" rx="6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="230" y="168" text-anchor="middle" font-size="13" fill="var(--ink)">exiting</text>
+            <line x1="338" y1="163" x2="287" y2="163" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow-sm)"/>
+            <text x="312" y="153" text-anchor="middle" class="mono" font-size="9" fill="var(--muted)">no grace</text>
+
+            <line x1="173" y1="163" x2="122" y2="163" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow-sm)"/>
+            <line x1="65" y1="140" x2="65" y2="68" stroke="currentColor" stroke-width="1.5"/>
+            <text x="60" y="106" text-anchor="middle" class="mono" font-size="9.5" fill="var(--muted)" transform="rotate(-90 60 106)">fade done</text>
+
+            <path d="M 375 138 C 300 100, 300 60, 350 45" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#arrow-sm)"/>
+            <text x="270" y="90" text-anchor="middle" class="mono" font-size="9" fill="var(--muted)">regained &#8594; resumes</text>
+
+            <defs>
+              <marker id="arrow-sm" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><polygon points="0 0, 7 3.5, 0 7" fill="currentColor"/></marker>
+            </defs>
+          </svg>
+        </div>
+        <figcaption>The shared <code>AnimStateManager</code> both glyphs ride — resuming from <code>lost</code> restores whichever state and elapsed time it left off at.</figcaption>
+      </figure>
+    </section>
+
+  </main>
+
+  <table class="ref">
+    <caption>Tuning reference</caption>
+    <thead>
+      <tr><th>Constant</th><th>Value</th><th>Governs</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>PAIR_SLOTS</td><td class="val">4</td><td>Simultaneous 6/7 pairs (backend caps at 8 hands total)</td></tr>
+      <tr><td>MAX_CLAIM_DISTANCE_FACTOR</td><td class="val">0.25&#183;w</td><td>How far an active slot may reach to reclaim its own hand</td></tr>
+      <tr><td>MIN / MAX_PAIR_DX_FACTOR</td><td class="val">0.05&#8211;0.55&#183;w</td><td>Plausible hand-to-hand spread for one person</td></tr>
+      <tr><td>MAX_PAIR_DIST_FACTOR</td><td class="val">0.6&#183;w</td><td>Ceiling ruling out two different people</td></tr>
+      <tr><td>DIAGONAL_ENTER / EXIT</td><td class="val">20&#176; / 12&#176;</td><td>Hysteresis band around the diagonal gate</td></tr>
+      <tr><td>DIAGONAL_MAX_ANGLE</td><td class="val">72&#176;</td><td>Rejects near-vertical, cross-depth "pairs"</td></tr>
+      <tr><td>PALM_HOLD_TIME</td><td class="val">0.4s</td><td>Grace period across a detection gap only</td></tr>
+      <tr><td>PALM_CONFIRM_TIME</td><td class="val">0.15s</td><td>Continuous detection required before a first trigger</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <span>Source: <code>client-ns-photobooth/src/anim/sixseven.ts</code></span>
+    <span>Companion to Drone &amp; OC Fusion — same palm signal, same slot-claiming shape</span>
+  </footer>
+
+</div>
