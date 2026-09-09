@@ -57,7 +57,6 @@ import os
 import queue
 import sys
 import threading
-import time
 import types
 
 import numpy as np
@@ -329,61 +328,17 @@ def _palm_normal_y(R: np.ndarray, is_right: bool) -> float:
     return float(_oriented(R, (0.0, -1.0, 0.0), is_right)[1])
 
 
-# Which local axis runs along the fingers, wrist -> fingertips.
-#
-# The palm normal is local -y (see _palm_normal_y), so the hand plane is xz and
-# the finger axis is one of +/-x or +/-z. Which one is NOT derivable from here:
-# WiLoR's keypoints come from the MANO layer, which is stubbed out (MANO is
-# separately licensed and its loader needs chumpy, which will not install on
-# 3.11), so there are no real fingertip positions to check against.
-#
-# It is therefore an env var rather than a hardcoded guess, and the default was
-# corrected by observation rather than reasoning: with '+x' the gesture fired
-# on a palm facing the camera with fingertips pointing DOWN. The axis was
-# right and its sign was not - +x runs fingertips->wrist, so 'up' and 'down'
-# were swapped. -x is wrist->fingertips.
-#
-# To re-derive it on other hardware: run with WILOR_GESTURE_DEBUG=1, hold an
-# open palm facing the camera with fingertips up, and the log prints the
-# y-component of all four candidates. The correct one reads close to -1
-# (camera y points down, so up is negative).
-WILOR_FINGER_AXIS = os.environ.get('WILOR_FINGER_AXIS', '-x')
-
-# When set, logs the candidate axes once every few seconds so the value above
-# can be confirmed against a held pose. Off by default; costs nothing when off.
-WILOR_GESTURE_DEBUG = os.environ.get('WILOR_GESTURE_DEBUG', '0') == '1'
-_gesture_debug_last = 0.0
-
-_AXES = {
-    '+x': (1.0, 0.0, 0.0), '-x': (-1.0, 0.0, 0.0),
-    '+z': (0.0, 0.0, 1.0), '-z': (0.0, 0.0, -1.0),
-}
-
-# How far the fingers must point skyward before the gesture counts. -1 is
-# straight up. -0.5 is roughly 60 degrees off horizontal, which allows a
-# comfortably raised hand without matching one held out sideways.
-FINGERS_UP_THRESHOLD = float(os.environ.get('FINGERS_UP_THRESHOLD', '-0.5'))
-
-# How squarely the palm must face the camera. OpenCV camera space is x right,
-# y down, z forward into the scene, so a palm turned toward the lens has a
-# normal pointing back along -z. This is what separates the intended pose from
-# a hand held edge-on or with its back to the camera - all of which have a
-# near-horizontal normal and used to pass the old |ny| test.
-PALM_TO_CAMERA_THRESHOLD = float(os.environ.get('PALM_TO_CAMERA_THRESHOLD', '-0.3'))
-
-
 # Chirality correction for left hands, applied in CAMERA space.
 #
 # WiLoR flips left-hand crops horizontally before the network sees them, so the
 # model always reconstructs a right hand. Undoing that is a reflection in the
 # image's x axis - hence (-1, 1, 1).
 #
-# _palm_normal_y previously used (1, 1, -1) here. That was never actually
-# exercised: it reads only the y component, and NO reflection of this kind
-# changes y, so palm_sky produced identical results either way and the wrong
-# axis could not show up. It surfaced the moment the OC Fusion gesture started
-# reading z - the left hand's palm-to-camera test came out inverted, so the
-# gesture worked on one hand only.
+# This previously used (1, 1, -1), which was wrong but invisible: _palm_normal_y
+# reads only the y component, and NO reflection of this kind changes y, so
+# palm_sky produced identical results either way. It surfaced only once a
+# gesture started reading z, and is corrected here so anything reading x or z
+# in future starts from the right frame.
 _LEFT_MIRROR = np.array([-1.0, 1.0, 1.0], dtype=np.float32)
 
 
@@ -393,38 +348,6 @@ def _oriented(R: np.ndarray, local: tuple, is_right: bool) -> np.ndarray:
     if not is_right:
         v = v * _LEFT_MIRROR
     return v / (np.linalg.norm(v) + 1e-9)
-
-
-def _palm_to_camera_fingers_up(R: np.ndarray, is_right: bool) -> bool:
-    """The OC Fusion gesture: an open palm facing the camera, fingertips up.
-
-    Replaces a flag that tested only abs(ny) < 0.35 - the vertical component of
-    the palm normal. That constrained how far the palm tilted up or down and
-    said nothing about which way it faced horizontally, so a palm turned away
-    from the camera and both edge-on positions passed it too. Only one of those
-    four is the gesture anyone means, and the edge-on ones occur naturally
-    whenever someone lowers their arm or turns to talk to a friend.
-
-    Both conditions here come from the full rotation matrix, which carries the
-    orientation the old single-number test threw away.
-    """
-    n = _oriented(R, (0.0, -1.0, 0.0), is_right)          # palm normal
-    f = _oriented(R, _AXES[WILOR_FINGER_AXIS], is_right)  # wrist -> fingertips
-    return bool(f[1] < FINGERS_UP_THRESHOLD and n[2] < PALM_TO_CAMERA_THRESHOLD)
-
-
-def _log_gesture_axes(R: np.ndarray, is_right: bool) -> None:
-    """Print every candidate finger axis so WILOR_FINGER_AXIS can be set from
-    an observed pose rather than guessed. See that constant."""
-    global _gesture_debug_last
-    now = time.time()
-    if now - _gesture_debug_last < 2.0:
-        return
-    _gesture_debug_last = now
-    n = _oriented(R, (0.0, -1.0, 0.0), is_right)
-    parts = ['%s: y=%+.2f' % (k, _oriented(R, v, is_right)[1]) for k, v in _AXES.items()]
-    log.info("gesture axes [%s]  %s | palm normal y=%+.2f z=%+.2f",
-             'R' if is_right else 'L', '  '.join(parts), n[1], n[2])
 
 
 def _infer(frame: np.ndarray) -> list:
@@ -467,8 +390,6 @@ def _infer(frame: np.ndarray) -> list:
     for i in range(min(len(rots), len(boxes))):
         is_right = bool(rights[i] > 0.5)
         ny = _palm_normal_y(rots[i], is_right)
-        if WILOR_GESTURE_DEBUG:
-            _log_gesture_axes(rots[i], is_right)
 
         # Palm centre from the bounding box, normalised. The frontend averages
         # landmarks 0/5/9/13/17 to get this same point, so every index is
@@ -483,11 +404,6 @@ def _infer(frame: np.ndarray) -> list:
             'y': [cy] * 21,
             'z': [0.0] * 21,
             'label': 'Right' if is_right else 'Left',
-            # Open palm facing the camera with fingertips up (OC Fusion).
-            # Uses the full rotation matrix - see the function - rather than
-            # the vertical component alone, which could not tell this pose
-            # apart from a hand turned away or held edge-on.
-            'palm_up': _palm_to_camera_fingers_up(rots[i], is_right),
             'palm_sky': bool(ny < PALM_SKY_THRESHOLD),
             'palm_normal_y': ny,
             'conf': float(confs[i]) if i < len(confs) else 0.0,
