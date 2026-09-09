@@ -9,7 +9,7 @@ import { AnimStateManager } from './AnimState'
 import batFlyGif from '../assets/Bat_anim/Bat.gif'
 import batSwoopGif from '../assets/Bat_anim/bat_swoop.gif'
 import batVanishGif from '../assets/Bat_anim/bat_vanish.gif'
-import batRestPng from '../assets/Bat_anim/Bat_rest.png'
+import batRestGif from '../assets/Bat_anim/Bat_rest2.gif'
 
 /** anim duration & timing config */
 const ANIM = {
@@ -21,7 +21,10 @@ const ANIM = {
 // R is system noisiness, Q is measurement noisiness
 const KF_PARAMS = { R: 0.03, Q: 2 }
 
-const BAT_MARGIN_B = 0.27
+// Vertical offset (bottom-anchored) below the forearm landing point, in
+// multiples of batSize. Was 0.27, lowered on request so the bat reads as
+// standing/perched on the arm rather than hanging below it.
+const BAT_MARGIN_B = 0.12
 // Resting pose rendered a bit smaller than the shared batSize, on request.
 const REST_SIZE_FACTOR = 0.75
 // Where along the forearm (elbow->wrist) the bat lands, as a fraction of
@@ -187,20 +190,20 @@ export async function createBatAnim(app: PIXI.Application) {
   const batContainer = new PIXI.Container()
 
   // cloning necessary for reuse since animation itself is a single sprite...
-  const [restTexture, flySprite, landSprite, vanishSprite] = await Promise.all([
-    PIXI.ensureLoaded(loader, batRestPng).then((res) => res.texture!),
+  const [restSprite, flySprite, landSprite, vanishSprite] = await Promise.all([
+    PIXI.ensureLoaded(loader, batRestGif).then((res) => res.animation!.clone()),
     PIXI.ensureLoaded(loader, batFlyGif).then((res) => res.animation!.clone()),
     PIXI.ensureLoaded(loader, batSwoopGif).then((res) => res.animation!.clone()),
     PIXI.ensureLoaded(loader, batVanishGif).then((res) => res.animation!.clone()),
   ])
 
-  const restSprite = PIXI.Sprite.from(restTexture)
   restSprite.anchor.set(0.5, 1)
   batContainer.addChild(restSprite)
-  // Bat_rest.png is a wide, non-square image (648x396) — forcing it into the
-  // same square batSize as the other sprites squashed it visibly. Scale its
-  // width off its own natural aspect ratio instead, so it renders undistorted.
-  const restAspect = restTexture.width / restTexture.height
+  // Bat_rest2.gif happens to be square (498x498), but this is computed from
+  // the loaded texture rather than hardcoded so it stays correct if the
+  // asset is swapped again for something non-square, same reasoning as the
+  // old static Bat_rest.png (648x396) needed this.
+  const restAspect = restSprite.texture.width / restSprite.texture.height
 
   flySprite.anchor.set(0.5, 1)
   batContainer.addChild(flySprite)
@@ -214,11 +217,12 @@ export async function createBatAnim(app: PIXI.Application) {
   const initialState = () => {
     batContainer.alpha = 1
     batContainer.position.set(0, 0)
+    restSprite.stop()
     flySprite.stop()
     landSprite.stop()
     vanishSprite.stop()
     restSprite.alpha = flySprite.alpha = landSprite.alpha = vanishSprite.alpha = 0
-    flySprite.currentFrame = landSprite.currentFrame = vanishSprite.currentFrame = 0
+    restSprite.currentFrame = flySprite.currentFrame = landSprite.currentFrame = vanishSprite.currentFrame = 0
   }
   initialState()
 
@@ -234,6 +238,11 @@ export async function createBatAnim(app: PIXI.Application) {
   /** time in seconds till idle (resting) */
   const toIdleTime = toLandTime + landSprite.duration / 1000
   const vanishDuration = vanishSprite.duration / 1000
+  // Landing plays fly -> swoop (a transformation-style clip) -> rest. On
+  // request, lifting off mirrors that: rest -> swoop (the SAME clip, reused
+  // as a generic "transforming" bridge rather than a landing-specific one)
+  // -> vanish, instead of cutting straight from the resting pose to vanish.
+  const liftOffDuration = landSprite.duration / 1000
   let batSize = 150
   const animManager = new AnimStateManager()
 
@@ -319,7 +328,9 @@ export async function createBatAnim(app: PIXI.Application) {
         }
         break
       case 'entered':
-        batContainer.alpha = restSprite.alpha = 1
+        batContainer.alpha = 1
+        if (!restSprite.playing) restSprite.play()
+        restSprite.alpha = 1
         landSprite.alpha = flySprite.alpha = 0
         batContainer.position.set(x, y)
         break
@@ -328,18 +339,38 @@ export async function createBatAnim(app: PIXI.Application) {
           case time < ANIM.RETRACK:
             break
           default:
+            // landSprite already played through once during entering and is
+            // sitting on its last frame — reset it here, the single place
+            // that leads into 'exiting', so the lift-off phase below plays
+            // it from the start rather than a single frozen frame.
+            landSprite.stop()
+            landSprite.currentFrame = 0
             animManager.transition()
         }
         break
       case 'exiting':
-        restSprite.alpha = flySprite.alpha = landSprite.alpha = 0
-        if (!vanishSprite.playing) vanishSprite.play()
-        if (time < vanishDuration) {
-          vanishSprite.alpha = 1
-          batContainer.alpha = 1 - lerpLinear(time, vanishDuration * 0.5, vanishDuration)
-        } else {
-          initialState()
-          animManager.transition()
+        restSprite.alpha = flySprite.alpha = 0
+        switch (true) {
+          case time < liftOffDuration:
+            // Mirrors the landing sequence's swoop phase — same clip reused
+            // as a "transforming" bridge out of the resting pose, rather
+            // than cutting straight from rest to vanish.
+            if (!landSprite.playing) landSprite.play()
+            landSprite.alpha = 1
+            vanishSprite.alpha = 0
+            batContainer.alpha = 1
+            break
+          case time < liftOffDuration + vanishDuration: {
+            landSprite.alpha = 0
+            if (!vanishSprite.playing) vanishSprite.play()
+            vanishSprite.alpha = 1
+            const vanishTime = time - liftOffDuration
+            batContainer.alpha = 1 - lerpLinear(vanishTime, vanishDuration * 0.5, vanishDuration)
+            break
+          }
+          default:
+            initialState()
+            animManager.transition()
         }
         break
     }

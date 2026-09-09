@@ -139,7 +139,7 @@ const GESTURE_HOLD_SEC = 1
 // a quick flick. Only gates the FIRST appearance — once already on screen,
 // continued swinging refreshes GESTURE_HOLD_SEC immediately below rather
 // than re-demanding another full confirm period each time.
-const GESTURE_CONFIRM_SEC = 2
+const GESTURE_CONFIRM_SEC = 1
 
 type MotionPoint = { t: number; x: number; y: number }
 
