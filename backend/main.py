@@ -310,7 +310,7 @@ _pose_debug_last = 0.0
 _KEYPOINT_BOX_SLACK = 0.25
 
 
-def _keypoints_fit_box(kps_xyn, box, frame_shape) -> bool:
+def _keypoints_fit_box(kps_xyn, box, frame_shape, track_id=None) -> bool:
     """Whether these keypoints plausibly describe the person in `box`.
 
     The IoU check above compares the box STORED with a cached result against
@@ -339,6 +339,17 @@ def _keypoints_fit_box(kps_xyn, box, frame_shape) -> bool:
             continue
         px, py = kps_xyn[idx][0] * w, kps_xyn[idx][1] * h
         if px < x1 - mx or px > x2 + mx or py < y1 - my or py > y2 + my:
+            if _POSE_DEBUG:
+                # Logged so the root-cause fix can be cross-checked without
+                # removing this guard. fdf12c5 corrected the box format handed
+                # to ViTPose, which was what displaced the crop onto a
+                # neighbour; if that fix is complete this should never fire.
+                # Lines appearing here mean something still mis-attaches
+                # keypoints and the guard is the only thing catching it.
+                log.info("keypoints REJECTED for id=%s: %s at (%.0f,%.0f) "
+                         "outside box [%.0f,%.0f,%.0f,%.0f]",
+                         track_id, ('nose', None, None, 'earL', 'earR')[idx],
+                         px, py, x1, y1, x2, y2)
             return False
     return True
 
@@ -935,7 +946,8 @@ def run_pose_detection(
                 if (cached and (now - cached[0]) < _VITPOSE_CACHE_TTL
                         and i < len(boxes_xyxy)
                         and _box_iou(cached[3], boxes_xyxy[i]) >= _VITPOSE_MIN_IOU
-                        and _keypoints_fit_box(cached[1], boxes_xyxy[i], frame.shape)):
+                        and _keypoints_fit_box(cached[1], boxes_xyxy[i], frame.shape,
+                                               track_id=track_id)):
                     x, y, scores = _to_mp33(cached[1], cached[2])   # ViTPose++ keypoints
                     _used_vitpose = True
                 else:
