@@ -278,6 +278,70 @@ def _box_overlap_ratio(a, b) -> float:
 # shoulder still each keep most of their own box to themselves.
 _DUPLICATE_OVERLAP_THRESH = 0.75
 
+# Diagnostic for the "three people in a row, middle one gets no animation"
+# report. Off by default; set DEDUPE_DEBUG=1 to log every discarded detection
+# with the overlap that caused it, so it can be confirmed on real bodies
+# rather than reasoned about. Prints only on frames where something is
+# actually discarded, so a quiet log means dedupe is not the cause.
+_DEDUPE_DEBUG = os.environ.get('DEDUPE_DEBUG', '0') == '1'
+
+# Diagnostic for "two animations on one person, none on another". Dedupe was
+# ruled out by DEDUPE_DEBUG - it discards nothing, so all three people are
+# detected with distinct boxes. That leaves the KEYPOINTS: an animation lands
+# where the nose is, so two animations on one face means two track IDs
+# carrying nearly the same nose position.
+#
+# Logs one line per person per sampled frame: the track ID, its box centre,
+# and the nose the animation will actually use. A person whose nose sits far
+# from their own box centre is the bug, and two IDs sharing a nose is it
+# happening. Also reports whether the keypoints came from ViTPose or YOLO,
+# since only the ViTPose path can put one person's keypoints under another's
+# ID. Throttled, or this floods at frame rate.
+_POSE_DEBUG = os.environ.get('POSE_DEBUG', '0') == '1'
+_POSE_DEBUG_MIN_INTERVAL = 1.0
+_pose_debug_last = 0.0
+
+
+# How far outside its own box a head keypoint may sit before the whole result
+# is rejected, as a fraction of that box's size. Not zero: a box crops tightly
+# to the visible body, so an ear or the top of a head legitimately sits a
+# little outside it. A quarter of the box is far more than that slack and far
+# less than the distance to a neighbour.
+_KEYPOINT_BOX_SLACK = 0.25
+
+
+def _keypoints_fit_box(kps_xyn, box, frame_shape) -> bool:
+    """Whether these keypoints plausibly describe the person in `box`.
+
+    The IoU check above compares the box STORED with a cached result against
+    the current box for the same track ID. That catches a stale entry - the ID
+    having moved to a different person - but it cannot catch keypoints that
+    were attached to the wrong ID in the first place, because those get stored
+    with that ID's own box and so match themselves perfectly.
+
+    Observed with three people standing in a row: the middle person's box was
+    correct while his keypoints were the LEFT person's, 20px outside his own
+    box. Every face prop positions itself from the nose, so his sunglasses
+    rendered on the left person's face and he got none - two props on one
+    person, and the doubling that was reported.
+
+    A person's head is inside their own bounding box, so that is what is
+    checked here, with slack for the crop being tight. Cheap - three points -
+    and it holds regardless of what caused the mismatch.
+    """
+    h, w = frame_shape[:2]
+    x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
+    bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)
+    mx, my = bw * _KEYPOINT_BOX_SLACK, bh * _KEYPOINT_BOX_SLACK
+    # COCO 0/3/4 = nose, left ear, right ear - the points the face props use.
+    for idx in (0, 3, 4):
+        if idx >= len(kps_xyn):
+            continue
+        px, py = kps_xyn[idx][0] * w, kps_xyn[idx][1] * h
+        if px < x1 - mx or px > x2 + mx or py < y1 - my or py > y2 + my:
+            return False
+    return True
+
 
 def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
     """Indices (into boxes_xyxy) to keep after dropping near-duplicate
@@ -294,6 +358,7 @@ def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
     n = len(boxes_xyxy)
     order = keep_indices if keep_indices is not None else list(range(n))
     dropped = set()
+    why = {}  # index -> (kept index it lost to, overlap) for the debug log
     # Highest confidence first, so when a pair overlaps, the box being
     # compared against is always the more-trusted one of the two.
     by_conf = sorted(order, key=lambda i: -box_conf[i])
@@ -305,8 +370,25 @@ def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
             j = by_conf[b_pos]
             if j in dropped:
                 continue
-            if _box_overlap_ratio(boxes_xyxy[i], boxes_xyxy[j]) >= _DUPLICATE_OVERLAP_THRESH:
+            ratio = _box_overlap_ratio(boxes_xyxy[i], boxes_xyxy[j])
+            if ratio >= _DUPLICATE_OVERLAP_THRESH:
                 dropped.add(j)
+                why[j] = (i, ratio)
+
+    if _DEDUPE_DEBUG and dropped:
+        def _fmt(k):
+            b = boxes_xyxy[k]
+            return 'box=[%4d,%4d,%4d,%4d] cx=%4d conf=%.2f' % (
+                b[0], b[1], b[2], b[3], (b[0] + b[2]) / 2, box_conf[k])
+        log.info("dedupe: %d detected, discarding %d", len(order), len(dropped))
+        for k in order:
+            if k in dropped:
+                lost_to, ratio = why[k]
+                log.info("  DROPPED #%d %s  <- %.0f%% inside #%d",
+                         k, _fmt(k), ratio * 100, lost_to)
+            else:
+                log.info("  kept    #%d %s", k, _fmt(k))
+
     return [i for i in order if i not in dropped]
 
 
@@ -812,6 +894,8 @@ def run_pose_detection(
 
             # Build pose list — merge ViTPose++ cached keypoints when fresh
             now = time.time()
+            _pose_debug_rows: list = []
+            _used_vitpose = False
             for i in range(len(kps_xyn)):
                 track_id = int(ids[i])
                 cached   = _vitpose_cache.get(track_id)
@@ -821,9 +905,12 @@ def run_pose_detection(
                 # — otherwise fall back to YOLO's own keypoints.
                 if (cached and (now - cached[0]) < _VITPOSE_CACHE_TTL
                         and i < len(boxes_xyxy)
-                        and _box_iou(cached[3], boxes_xyxy[i]) >= _VITPOSE_MIN_IOU):
+                        and _box_iou(cached[3], boxes_xyxy[i]) >= _VITPOSE_MIN_IOU
+                        and _keypoints_fit_box(cached[1], boxes_xyxy[i], frame.shape)):
                     x, y, scores = _to_mp33(cached[1], cached[2])   # ViTPose++ keypoints
+                    _used_vitpose = True
                 else:
+                    _used_vitpose = False
                     conf_row = kps_conf[i] if kps_conf is not None else None
                     x, y, scores = _to_mp33(kps_xyn[i], conf_row)  # YOLO keypoints
                 poses.append({
@@ -831,6 +918,45 @@ def run_pose_detection(
                     "scores": scores,
                     "track": {"id": track_id},
                 })
+                if _POSE_DEBUG:
+                    # MP-33: 0 = nose, 7 = left ear, 8 = right ear. The face
+                    # props size, rotate and position themselves from the two
+                    # ears, but only bail when BOTH are low-confidence - so a
+                    # single bad ear still steers the result. Log both scores
+                    # and both x positions to see that happening.
+                    _pose_debug_rows.append((
+                        track_id,
+                        float((boxes_xyxy[i][0] + boxes_xyxy[i][2]) / 2) if i < len(boxes_xyxy) else float('nan'),
+                        x[0], y[0], scores[0],
+                        x[7], scores[7],
+                        x[8], scores[8],
+                        _used_vitpose,
+                    ))
+
+    if _POSE_DEBUG and len(poses) > 1:
+        global _pose_debug_last
+        _now = time.time()
+        if _now - _pose_debug_last >= _POSE_DEBUG_MIN_INTERVAL:
+            _pose_debug_last = _now
+            log.info("poses: %d people   (screen order: leftmost first)", len(_pose_debug_rows))
+            # Sorted by nose x. NOTE the feed is mirrored for display (see
+            # convertPoint's 1 - x), so the LEFTMOST person on screen has the
+            # HIGHEST nose x - hence the descending sort.
+            for (tid, bcx, nx, ny, nsc, lex, lesc, rex, resc, vit) in sorted(
+                    _pose_debug_rows, key=lambda r: -r[2]):
+                # earSpan is what the props use as their size and rotation
+                # basis. It should be a small fraction of the frame; a large
+                # value means one ear has landed somewhere it should not be.
+                span = abs(lex - rex)
+                flag = ''
+                if lesc < 0.3 or resc < 0.3:
+                    flag += '  <- an ear is low-confidence'
+                if span > 0.15:
+                    flag += '  <- earSpan implausibly wide'
+                log.info("  id=%-4d box_cx=%6.1f nose=(%.3f,%.3f) sc=%.2f | "
+                         "earL x=%.3f sc=%.2f  earR x=%.3f sc=%.2f  span=%.3f | %s%s",
+                         tid, bcx, nx, ny, nsc, lex, lesc, rex, resc, span,
+                         'ViTPose' if vit else 'YOLO', flag)
 
     hands: list = []
     if mode in ('hands', 'both'):
@@ -1393,6 +1519,13 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
 
     _multi_target = request.rel_url.query.get('multi', '0') == '1'
     log.info(f"Multi-target: {_multi_target}")
+    # Say so explicitly: without this line, a silent log during the dedupe
+    # test is ambiguous between "nothing was discarded" and "the env var
+    # never took".
+    if _DEDUPE_DEBUG:
+        log.info("DEDUPE_DEBUG on - will log every discarded detection")
+    if _POSE_DEBUG:
+        log.info("POSE_DEBUG on - will log per-person nose positions once a second")
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)
