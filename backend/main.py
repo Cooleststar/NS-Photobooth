@@ -446,8 +446,37 @@ def _vitpose_worker():
             pil_img  = PILImage.fromarray(rgb)
             boxes_list = boxes_xyxy.tolist()
 
+            # ViTPose's processor wants COCO boxes - (x, y, WIDTH, HEIGHT) -
+            # not the (x1, y1, x2, y2) YOLO hands back. See
+            # box_to_center_and_scale in transformers' image_processing_vitpose:
+            #
+            #     top_left_x, top_left_y, width, height = box[:4]
+            #     center = [top_left_x + width * 0.5, top_left_y + height * 0.5]
+            #
+            # Feeding it xyxy therefore computed a centre of (x1 + x2/2,
+            # y1 + y2/2) and a size taken from the far corner - a crop shifted
+            # down-right and 2-3x too large. Measured on a real three-person
+            # frame (320x240):
+            #
+            #     box              true centre      centre used     crop
+            #     [196,109,270,240] (233.0,174.5)   (331.0,229.0)   338x450
+            #     [ 88,148,219,239] (153.5,193.5)   (197.5,267.5)   274x365
+            #
+            # The second person's crop is centred at x=197.5, inside the FIRST
+            # person's box (196..270) - so ViTPose analysed the wrong face and
+            # returned those keypoints under the second person's track ID. That
+            # is the "two face props on one person, none on another" bug;
+            # _keypoints_fit_box catches the result, this fixes the cause.
+            #
+            # Only the processor calls need converting. The cache below stores
+            # xyxy, because the merge compares it with _box_iou against the
+            # current xyxy box.
+            boxes_coco = [
+                [x1, y1, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes_list
+            ]
+
             inputs = _vitpose_processor(
-                images=pil_img, boxes=[boxes_list], return_tensors="pt",
+                images=pil_img, boxes=[boxes_coco], return_tensors="pt",
             )
             pixel_values = inputs["pixel_values"].to(_vitpose_device)
             dataset_index = torch.zeros(
@@ -462,7 +491,7 @@ def _vitpose_worker():
             h, w = frame.shape[:2]
             now = time.time()
             for i, person in enumerate(_vitpose_processor.post_process_pose_estimation(
-                outputs, boxes=[boxes_list],
+                outputs, boxes=[boxes_coco],
             )[0]):
                 if i >= len(ids):
                     continue   # no identity for this box; caching it under a
