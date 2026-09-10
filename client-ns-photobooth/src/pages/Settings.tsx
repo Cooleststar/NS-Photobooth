@@ -33,6 +33,10 @@ import {
   qrPigNoseLocked,
   qrBatEarsLocked,
   qrOrdloLocked,
+  qrScubaLocked,
+  qrOcFusionLocked,
+  qrSunglassesLocked,
+  qrMustacheLocked,
   qrModeEnabled,
   router,
   selectedGifs,
@@ -428,6 +432,10 @@ export default function Settings() {
                   qrPigNoseLocked.set(false)
                   qrBatEarsLocked.set(false)
                   qrOrdloLocked.set(false)
+                  qrScubaLocked.set(false)
+                  qrOcFusionLocked.set(false)
+                  qrSunglassesLocked.set(false)
+                  qrMustacheLocked.set(false)
                 }}
               >
                 Reset Animation

@@ -835,13 +835,111 @@ def _decode_qr_codes(frame: np.ndarray, allow_live_retry: bool = False) -> list:
         for text, (_ts, cx, cy) in _qr_last_seen.items()
     ]
 
+# ---------------------------------------------------------------------------
+# Fixed YOLO pose input size
+# ---------------------------------------------------------------------------
+
+_POSE_WIDTH = 640
+_POSE_HEIGHT = 360
+_POSE_SIZE = (_POSE_WIDTH, _POSE_HEIGHT)
+
+# Which capture source last fed YOLO ('local' webcam vs 'rtsp'). Switching
+# between them has to reset the tracker - see reset_pose_tracker below.
+_current_pose_source: str = ""
+
+# Diagnostic for phantom detections: how often, at most, to log what YOLO is
+# actually reporting. Set to 0 to silence it once the question is settled.
+_POSE_DEBUG_INTERVAL_SEC = 2.0
+_pose_debug_last_log: float = 0.0
+
+# A genuine camera switch happens when someone changes a setting, so at most
+# every few seconds. Flipping faster than this means two capture sources are
+# both feeding inference at once, which is a bug in stream lifecycle rather
+# than something to compensate for here - see _release_stream_client.
+_POSE_SOURCE_FLAP_SEC = 1.0
+_pose_source_last_change: float = 0.0
+
+# Which capture source the frontend is actually displaying, set via
+# POST /pose_source. Inference from any other source is dropped.
+#
+# This exists because "is this stream still being watched" turned out not to
+# be answerable from the backend alone: an RTSP reader thread could outlive
+# its viewers and keep broadcasting poses for a camera nobody was looking at,
+# which put skeletons on screen for people standing in front of the OTHER
+# camera. The frontend is the only component that authoritatively knows which
+# feed is on screen, so it says so, and this is believed over any inference
+# the backend could make from connection bookkeeping.
+#
+# Empty means "not yet told" - everything is accepted, so a frontend that
+# never checks in behaves exactly as before.
+_active_pose_source: str = ""
+_pose_drop_last_log: float = 0.0
+
+# Last time each source actually delivered a frame to inference.
+_pose_source_last_seen: dict = {}
+
+# How long the declared source may go silent before another source is let
+# through anyway.
+#
+# The gate above must never be able to blank the booth. If the frontend's
+# declaration is stale or was missed - it is only re-sent on a source change
+# or a ROS reconnect - then failing closed drops every pose, and the symptom
+# is a live picture with no skeleton and no characters, recoverable only by
+# reloading the page. Suppressing an unwatched camera is worth doing; doing
+# it to the ONLY camera producing frames is not, so silence on the declared
+# source hands the gate back to whoever is actually running.
+#
+# Generous on purpose. Inference on a big webcam frame can take a while, and
+# handle_video skips frames whose predecessor is still in flight, so the gap
+# between two accepted 'local' frames is not small. Too short a window makes
+# the gate hand back and forth between two live sources, which looks exactly
+# like the churn it is supposed to prevent.
+_POSE_SOURCE_TAKEOVER_SEC = 5.0
+_pose_takeover_last_log: float = 0.0
+# When the current declaration was made. Staleness is measured from the LATER
+# of this and the source's last frame, so a source that has just been
+# declared but hasn't delivered yet still gets its full grace period - -
+# otherwise "never seen" reads as infinitely stale and the gate stands aside
+# immediately, letting the suppressed camera through in exactly the window
+# after a switch where it does the most damage.
+_active_pose_source_since: float = 0.0
+
+def reset_pose_tracker():
+    """Drop all BoT-SORT tracking state, for when the scene changes wholesale.
+
+    Called on a capture-source switch. Every attribute is probed defensively
+    because `predictor` only exists once .track() has run at least once, and
+    both it and `trackers` are Ultralytics internals rather than public API
+    (they are assigned in ultralytics/trackers/track.py) - a version bump
+    could move them, and failing to reset is far better than crashing the
+    pose loop over it.
+    """
+    with _yolo_lock:
+        try:
+            predictor = getattr(_yolo, "predictor", None)
+            trackers = getattr(predictor, "trackers", None) if predictor else None
+            for tracker in trackers or ():
+                tracker.reset()
+        except Exception:
+            log.exception("Failed to reset YOLO/BoT-SORT state")
+
+    # ViTPose keypoints are cached per track id, and those ids belonged to
+    # the previous camera - left in place they would be merged onto whoever
+    # happens to be assigned the same id next.
+    _vitpose_cache.clear()
+
+    log.info("Pose tracker reset after camera switch")
 
 def run_pose_detection(
     frame: np.ndarray,
     qr_frame: np.ndarray = None,
     hands_frame: np.ndarray = None,
-) -> dict:
+    source: str = "local",
+) -> dict | None:
     """Detect poses/hands on a BGR frame, gated by _detection_mode.
+
+    Returns None when this frame's capture source is being suppressed (see
+    _active_pose_source) - callers must NOT broadcast in that case.
 
     `frame` must be a *consistent* size across calls — YOLO's BoT-SORT
     tracker keeps internal state (including a previous-frame pyramid for its
@@ -860,9 +958,78 @@ def run_pose_detection(
     merged in when fresh (< 2 s old) — otherwise YOLO keypoints are used.
     The function always returns at YOLO speed regardless of ViTPose++ load.
     """
+    global _current_pose_source, _pose_debug_last_log, _pose_source_last_change
+    global _pose_drop_last_log, _pose_takeover_last_log
+
+    now = time.monotonic()
+    _pose_source_last_seen[source] = now
+
+    # Drop frames from a camera the frontend isn't showing. Cheap, and before
+    # YOLO runs, so an orphaned capture thread costs nothing and - crucially -
+    # cannot put its detections on screen. See _active_pose_source.
+    if _active_pose_source and source != _active_pose_source:
+        active_last = max(
+            _pose_source_last_seen.get(_active_pose_source, 0.0),
+            _active_pose_source_since,
+        )
+        active_age = now - active_last
+        if active_age <= _POSE_SOURCE_TAKEOVER_SEC:
+            # The declared source is alive, so this one really is the
+            # leftover: suppress it.
+            if now - _pose_drop_last_log >= 5.0:
+                _pose_drop_last_log = now
+                log.warning(
+                    "Dropping pose inference from '%s' - frontend is showing "
+                    "'%s'. A capture source is still running unwatched.",
+                    source, _active_pose_source,
+                )
+            # None, NOT an empty result. An empty one is indistinguishable
+            # from "looked and nobody is there", and callers broadcast it -
+            # so the suppressed camera's frames wiped the skeleton in the gap
+            # between two real detections from the camera being watched. That
+            # is the skeleton flickering on and off. Callers must skip
+            # broadcasting entirely when they get None.
+            return None
+
+        # Declared source has gone quiet - see _POSE_SOURCE_TAKEOVER_SEC.
+        if now - _pose_takeover_last_log >= 5.0:
+            _pose_takeover_last_log = now
+            log.warning(
+                "Accepting pose inference from '%s': declared source '%s' has "
+                "sent nothing for %.1fs, so the gate is standing aside rather "
+                "than dropping every pose.",
+                source, _active_pose_source, active_age,
+            )
+
+    # Switching capture source hands YOLO a completely unrelated scene, and
+    # BoT-SORT would otherwise carry its tracks straight across the cut —
+    # ghost skeletons on an empty frame for as long as track_buffer allows.
+    if source != _current_pose_source:
+        previous_source = _current_pose_source
+        _current_pose_source = source
+        now = time.monotonic()
+        since = now - _pose_source_last_change
+        _pose_source_last_change = now
+
+        if not previous_source:
+            # First call of the process - no tracker state exists yet.
+            log.info("Pose source: %s", source)
+        elif since < _POSE_SOURCE_FLAP_SEC:
+            # Two sources are inferring concurrently. Resetting here would
+            # fire every frame and guarantee no track ever keeps its id, so
+            # say so plainly instead of quietly making it worse - the fix is
+            # to stop whichever stream nobody is watching.
+            log.warning(
+                "Pose source flapping %s <-> %s (%.2fs apart) - two capture "
+                "sources are inferring at once; skipping tracker reset",
+                previous_source, source, since,
+            )
+        else:
+            log.info("Pose source changed: %s -> %s", previous_source, source)
+            reset_pose_tracker()
+
     mode = _detection_mode
     poses: list = []
-
     # QR mode also needs pose (specifically the nose keypoint) for the
     # sticky drone lock-on — once a guest shows the QR code, the drone
     # locks onto their face/head and keeps following it, so pose detection
@@ -873,6 +1040,21 @@ def run_pose_detection(
         # never needs YOLO's tracker/hands/QR.
         poses = mediapipe_pose.detect(frame)
     elif mode in ('pose', 'both', 'qr'):
+        # YOLO/BoT-SORT must see exactly the same frame size on every call:
+        # persist=True keeps tracker state between them, and the configured
+        # GMC (sparseOptFlow, see botsort_photobooth.yaml) derives camera
+        # motion by comparing this frame against the previous one. A size
+        # change makes that comparison meaningless, so tracks get shoved
+        # around by garbage transforms instead of following anybody.
+        #
+        # This is normalised here rather than at each call site because the
+        # sources disagreed: the RTSP reader downscaled while the webcam
+        # path passed frames through untouched. Deliberately NOT applied to
+        # the challenge67 branch above — MediaPipe holds no tracker state
+        # across calls and tracks better at native resolution.
+        if frame.shape[1] != _POSE_WIDTH or frame.shape[0] != _POSE_HEIGHT:
+            frame = cv2.resize(frame, _POSE_SIZE, interpolation=cv2.INTER_AREA)
+
         with _yolo_lock:
             results = _yolo.track(
                 frame,
@@ -890,6 +1072,28 @@ def run_pose_detection(
             kps_conf = (r.keypoints.conf.cpu().numpy()
                         if r.keypoints.conf is not None else None)
             boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+
+            # Phantom-detection diagnostic. Point the camera at an empty
+            # scene and read this: real detections above conf=0.4 mean the
+            # model is genuinely hallucinating people and the threshold (or
+            # a keypoint-quality gate) is the lever. Detections that keep
+            # appearing with ids surviving a source switch mean stale
+            # tracker state instead, and track_buffer is the lever.
+            if _POSE_DEBUG_INTERVAL_SEC:
+                now = time.monotonic()
+                if now - _pose_debug_last_log >= _POSE_DEBUG_INTERVAL_SEC:
+                    _pose_debug_last_log = now
+                    box_conf_dbg = (r.boxes.conf.cpu().numpy()
+                                    if r.boxes.conf is not None else None)
+                    log.info(
+                        "pose[%s] %dx%d n=%d box_conf=%s kp_mean=%s tracked=%s",
+                        source, frame.shape[1], frame.shape[0], len(kps_xyn),
+                        ([round(float(c), 2) for c in box_conf_dbg]
+                         if box_conf_dbg is not None else 'n/a'),
+                        ([round(float(k.mean()), 2) for k in kps_conf]
+                         if kps_conf is not None else 'n/a'),
+                        r.boxes.id is not None,
+                    )
             if r.boxes.id is not None:
                 ids = r.boxes.id.cpu().numpy().astype(int).tolist()
             else:
@@ -1111,7 +1315,6 @@ _stream_size: tuple[int, int] = (1920, 1080)   # (width, height) for JPEG encode
 _rtsp_pose_busy: bool = False  # drop RTSP pose frames while inference is running
 
 
-
 # ---------------------------------------------------------------------------
 # Rosbridge helpers
 # ---------------------------------------------------------------------------
@@ -1181,10 +1384,13 @@ async def handle_video(ws):
         nonlocal inferring, pose_count
         inferring = True
         try:
-            pose_msg = await asyncio.to_thread(run_pose_detection, frame)
-            if pose_msg["poses"]:
-                pose_count += 1
-            await broadcast("/pose_out", pose_msg)
+            pose_msg = await asyncio.to_thread(
+                run_pose_detection, frame, source="local",
+            )
+            if pose_msg is not None:
+                if pose_msg["poses"]:
+                    pose_count += 1
+                await broadcast("/pose_out", pose_msg)
         finally:
             inferring = False
 
@@ -1448,42 +1654,51 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                 mode == 'hands' or (mode in ('pose', 'both', 'qr', 'challenge67') and frame_count % 3 == 0)
             )
             if should_infer:
+
                 global _rtsp_pose_busy
-                # YOLO always gets a fixed 320x240 frame regardless of mode —
-                # its tracker keeps state between calls and breaks (repeating
-                # "GMC failed" errors) if the frame size changes call to
-                # call. QR codes need much more pixel density than that to
-                # decode, so QR mode passes the full-resolution frame
-                # separately, only for QR decoding — never into YOLO.
-                small = cv2.resize(frame, (320, 240))
-                # 67 Mode's MediaPipe Pose Landmarker has no such size-lock
-                # (no persistent tracker state between calls, unlike YOLO's
-                # BoT-SORT) and tracks much better at native resolution, so
-                # it gets the untouched frame instead of the 320x240 one.
+
+                # Bounds what crosses into the worker thread. The
+                # authoritative size-lock for YOLO now lives in
+                # run_pose_detection (see the resize in its YOLO branch), so
+                # this matching size just makes that a no-op rather than a
+                # second copy. QR needs far more pixel density than this, so
+                # QR mode passes the full-resolution frame separately below
+                # for decoding only - never into YOLO.
+                small = cv2.resize(frame, _POSE_SIZE)
+
                 pose_frame = frame if mode == 'challenge67' else small
                 qr_frame = frame if mode == 'qr' else None
-                # Hands get their own aspect-correct, higher-resolution frame;
-                # see _HANDS_WIDTH for the measurements that motivated it.
+
                 hands_frame = (
                     _frame_for_hands(frame)
                     if _HANDS_WIDTH and mode in ('hands', 'both') else None
                 )
+
                 if not _rtsp_pose_busy:
                     _rtsp_pose_busy = True
+
                     def _rtsp_infer(f, qf, hf):
                         global _rtsp_pose_busy
+
                         try:
-                            asyncio.run_coroutine_threadsafe(
-                                broadcast("/pose_out", run_pose_detection(f, qf, hf)),
-                                _loop,
-                            ).result()
+                            pose_msg = run_pose_detection(
+                                f, qf, hf, source="rtsp",
+                            )
+                            if pose_msg is not None:
+                                asyncio.run_coroutine_threadsafe(
+                                    broadcast("/pose_out", pose_msg),
+                                    _loop,
+                                ).result()
+
                         finally:
                             _rtsp_pose_busy = False
+
                     threading.Thread(
                         target=_rtsp_infer,
                         args=(pose_frame, qr_frame, hands_frame),
                         daemon=True,
                     ).start()
+
     finally:
         stop_event.set()
         ffmpeg_thread.join(timeout=10)
@@ -1521,8 +1736,36 @@ async def switch_rtsp_reader(rtsp_url: str, force: bool = False):
 
 def stop_rtsp_reader():
     global _current_rtsp_url
+    # Logged with whether a thread was actually alive to stop: a reader that
+    # keeps inferring after this is called is the difference between "the
+    # stop never ran" and "the stop ran and was ignored", and guessing
+    # between those has cost real debugging time.
+    alive = bool(_rtsp_thread and _rtsp_thread.is_alive())
+    log.info("stop_rtsp_reader: reader thread alive=%s", alive)
     _rtsp_stop_event.set()
     _current_rtsp_url = ""
+
+
+def _release_stream_client(q, label: str):
+    """Drop a stream viewer, and stop the RTSP reader once none are left.
+
+    Without this the reader thread outlives the last viewer: switching the
+    booth from an RTSP camera back to the USB webcam merely stops opening the
+    stream socket, it never tells the backend to stop reading. The thread then
+    keeps pulling frames from the IP camera and keeps broadcasting poses for
+    them on /pose_out - so the frontend renders skeletons for whoever is in
+    the OTHER camera's view, on top of a webcam feed with nobody in it.
+
+    It also breaks pose tracking outright: with both sources inferring, every
+    call to run_pose_detection alternates source, so the source-change guard
+    there resets BoT-SORT on literally every frame and no track ever survives
+    long enough to keep an id.
+    """
+    _stream_clients.discard(q)
+    log.info("%s disconnected (total: %d)", label, len(_stream_clients))
+    if not _stream_clients:
+        stop_rtsp_reader()
+        log.info("Last stream viewer gone - RTSP reader stopped")
 
 # ---------------------------------------------------------------------------
 # HTTP + WebSocket server (aiohttp, port 8081)
@@ -1589,8 +1832,7 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
     except (asyncio.TimeoutError, ConnectionResetError, asyncio.CancelledError):
         pass
     finally:
-        _stream_clients.discard(q)
-        log.info(f"WS stream client disconnected (total: {len(_stream_clients)})")
+        _release_stream_client(q, "WS stream client")
 
     return ws
 
@@ -1622,8 +1864,7 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
     except (asyncio.TimeoutError, ConnectionResetError, asyncio.CancelledError):
         pass
     finally:
-        _stream_clients.discard(q)
-        log.info(f"MJPEG client disconnected (total: {len(_stream_clients)})")
+        _release_stream_client(q, "MJPEG client")
 
     return response
 
@@ -1806,6 +2047,44 @@ async def configure_camera_handler(request: web.Request) -> web.Response:
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
+async def pose_source_handler(request: web.Request) -> web.Response:
+    """POST {"source": "local"|"rtsp"} - which feed the frontend is showing.
+
+    GET is a diagnostic: it reports both the declared source and the one that
+    last actually reached inference, which is how you catch a capture thread
+    still running for a camera nobody is watching.
+    """
+    global _active_pose_source, _active_pose_source_since
+    if request.method == 'GET':
+        return web.json_response(
+            {'active': _active_pose_source, 'last_seen': _current_pose_source},
+            headers=_CORS,
+        )
+    try:
+        data = await request.json()
+        source = data.get('source', '')
+        if source not in ('local', 'rtsp'):
+            return web.Response(status=400, text='Invalid source', headers=_CORS)
+        if source != _active_pose_source:
+            _active_pose_source = source
+            _active_pose_source_since = time.monotonic()
+            log.info("Active pose source set to: %s", source)
+            if source == 'local':
+                # Nothing should be reading the IP camera while the booth is
+                # showing the webcam. Stopping it HERE is what actually ends
+                # the orphaned reader: releasing it when the last stream
+                # viewer disconnects was not enough in practice - a reader
+                # kept running, kept inferring, and the two sources then
+                # alternated into one tracker, resetting it on every frame
+                # so no track ever held an id. That is the skeleton visibly
+                # stopping and starting.
+                stop_rtsp_reader()
+        return web.Response(text='ok', headers=_CORS)
+    except Exception as e:
+        log.error(f"Pose source error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
 async def detection_mode_handler(request: web.Request) -> web.Response:
     """POST: frontend calls this whenever the selected GIF character changes,
     so the backend only runs the model(s) that character actually needs.
@@ -1957,6 +2236,7 @@ def make_http_app() -> web.Application:
     app.router.add_get('/browse', browse_handler)
     app.router.add_route('*', '/camera/configure', configure_camera_handler)
     app.router.add_route('*', '/detection_mode', detection_mode_handler)
+    app.router.add_route('*', '/pose_source', pose_source_handler)
     app.router.add_get('/qr_debug', qr_debug_handler)
     app.router.add_post('/challenge67/submit', challenge67_submit_handler)
     app.router.add_get('/challenge67/leaderboard', challenge67_leaderboard_handler)

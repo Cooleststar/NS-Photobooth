@@ -14,43 +14,33 @@ const ANIM = {
 }
 
 const KF_PARAMS = { R: 0.03, Q: 2 }
+const ORBIT_SPEED = 0.8
+const ORBIT_RADIUS_FACTOR = 0.9
+const ORBIT_Y_SQUISH = 0.5
 
-// One full revolution every half second. Screen y grows DOWNWARD, so a
-// positive sin term on y sweeps right -> bottom -> left -> top as the angle
-// increases, which reads as clockwise on screen.
-const ORBIT_PERIOD_SEC = 0.5
-const ORBIT_SPEED = (Math.PI * 2) / ORBIT_PERIOD_SEC
+// The orbit runs as a full circle now, read as an ellipse tilted away from
+// the camera. sin(angle) is the depth cue and drives everything below: +1 at
+// the near point (lowest on screen, sweeping in front of the body), -1 at
+// the far point (highest on screen, passing behind it).
+//
+// How much the globe grows toward the camera and shrinks away from it, as a
+// fraction of its base size. This perspective change is what sells the path
+// as a loop through depth rather than a flat arc across the body.
+const DEPTH_SCALE = 0.25
 
-// A true circle. This was 0.5, which drew a flattened ellipse — that reads as
-// an orbit tilted away into depth, i.e. one passing behind the head, and
-// there's no person-segmentation mask in this pipeline to actually occlude
-// the globe when it does. A round path in the screen plane reads as going
-// *around* the head instead, which is the intent.
-const ORBIT_Y_SQUISH = 1
-
-// Orbit radius, in multiples of the globe's own size. Has to leave the
-// globe's inner edge clear of the head, or it crosses the face rather than
-// circling it. A head is roughly 0.45 of shoulder width and the globe 0.25
-// (GLOBE_SIZE_FACTOR), so the head is ~1.8 globes wide: clearing it needs at
-// least half the head (0.9) plus half the globe (0.5) = 1.4 here. 1.8 leaves
-// a visible gap. Raise this for a wider ring.
-const ORBIT_RADIUS_FACTOR = 1.8
-
-// Globe size relative to shoulder width. Was 0.7, which made the globe about
-// 1.5x wider than the head itself — at that size a ring around the head
-// spans nearly two shoulder widths, runs off the top of the frame, and gets
-// flattened by the clampPos() bounds instead of staying round. A quarter of
-// shoulder width reads as a satellite circling the head.
-const GLOBE_SIZE_FACTOR = 0.25
-
-// Both offsets are fractions of SHOULDER width, not of ear-to-ear distance:
-// ear separation collapses toward zero the moment someone turns their head,
-// which would drag the orbit's center around mid-spin. Shoulder width holds
-// steady through head rotation. The nose sits below the head's true center,
-// and the head sits above the shoulder line.
-const NOSE_TO_HEAD_CENTER = 0.1
-const SHOULDER_TO_HEAD_CENTER = 0.55
-
+// Depth at which the globe has faded out completely. It starts fading as it
+// crosses the side of the body (depth 0), is fully gone by this much depth,
+// and stays gone across the deepest part of the pass before easing back in
+// on the other side.
+//
+// There's no person-segmentation mask in this pipeline, so "behind the body"
+// has to be sold with opacity rather than real occlusion. This replaced a
+// hard cut at a fixed angle followed by a timed absence, which read as the
+// globe blinking out rather than travelling anywhere. At the default orbit
+// speed the globe is fully hidden for roughly 2.5s with about 0.7s of fade
+// at each end — raise this to shorten the hidden stretch and lengthen the
+// fades, lower it for the reverse.
+const BEHIND_FADE_DEPTH = 0.55
 const BOB_SPEED = 2.5
 const BOB_AMPLITUDE = 0.08
 
@@ -123,42 +113,8 @@ function getHandsApart(
   return undefined
 }
 
-/** Center of the orbit: the head, falling back to a point above the shoulder
- * line when the face isn't detected.
- *
- * The fallback matters — the globe is triggered by the torso being visible
- * (see hasPerson below), so anchoring the orbit strictly to the face would
- * make it vanish the instant someone turned away from the camera. Same
- * nose/ear landmarks and same visibility thresholds every other
- * face-anchored character in this codebase uses; the ears are only read as a
- * "is this face actually facing us" signal, since the position itself comes
- * off the nose. */
-function getHeadCenter(
-  pose: NormalizedLandmarkList,
-  height: number,
-  width: number,
-  torso: { x: number; y: number; shoulderWidth: number },
-) {
-  const nose = pose[0]
-  const leftEar = pose[7]
-  const rightEar = pose[8]
-  const faceVisible =
-    !!nose && !!leftEar && !!rightEar &&
-    (nose.visibility ?? 1) >= 0.5 &&
-    ((leftEar.visibility ?? 1) >= 0.3 || (rightEar.visibility ?? 1) >= 0.3)
-
-  if (faceVisible) {
-    const n = convertPoint(nose, height, width)
-    return { x: n.x, y: n.y - torso.shoulderWidth * NOSE_TO_HEAD_CENTER }
-  }
-  return {
-    x: torso.x,
-    y: torso.y - torso.shoulderWidth * SHOULDER_TO_HEAD_CENTER,
-  }
-}
-
 function calculateGlobeSize(shoulderWidth: number) {
-  return Math.max(60, shoulderWidth * GLOBE_SIZE_FACTOR)
+  return Math.max(100, shoulderWidth * 0.7)
 }
 
 // ---------------------------------------------------------------------------
@@ -208,25 +164,31 @@ export async function createGlobeAnim(
   let globeSize = 150
   let orbitAngle = 0
   let bobTime = 0
-  let headX = 0
-  let headY = 0
+  let torsoX = 0
+  let torsoY = 0
   const animManager = new AnimStateManager()
 
-  // Modulo rather than a single subtraction: at 4π rad/s one stalled frame
-  // can advance the angle by more than a full turn, which a lone `-= 2π`
-  // would fail to wrap.
   const advanceOrbit = (dt: number) => {
     orbitAngle = (orbitAngle + dt * ORBIT_SPEED) % (Math.PI * 2)
   }
 
-  /** Unclamped point on the orbit for the current angle — callers clamp.
-   * Shared by every state that draws the orbit so they can't drift apart. */
-  const orbitPoint = (bobOffset: number) => {
+  /** Where the globe sits, how big it is and how solid it looks at the
+   * current orbit angle. Shared by 'entered' and 'lost' so the two can't
+   * drift apart. */
+  const orbitFrame = (bobOffset: number) => {
+    const depth = Math.sin(orbitAngle)
+    const size = globeSize * (1 + DEPTH_SCALE * depth)
     const orbitR = globeSize * ORBIT_RADIUS_FACTOR
-    return {
-      x: headX + Math.cos(orbitAngle) * orbitR,
-      y: headY + Math.sin(orbitAngle) * orbitR * ORBIT_Y_SQUISH + bobOffset,
-    }
+    const p = clampPos(
+      torsoX + Math.cos(orbitAngle) * orbitR,
+      torsoY + depth * orbitR * ORBIT_Y_SQUISH + bobOffset,
+      size, bounds,
+    )
+    // Smoothstep over the clamped ramp: a bare linear fade leaves a visible
+    // corner where it meets full opacity and full transparency, which is the
+    // same kind of abruptness this is meant to get rid of.
+    const t = lerpLinear(depth, -BEHIND_FADE_DEPTH, 0)
+    return { x: p.x, y: p.y, size, alpha: t * t * (3 - 2 * t) }
   }
 
   const update = (pose: NormalizedLandmarkList) => {
@@ -235,9 +197,8 @@ export async function createGlobeAnim(
     const hasPerson = !!torso
 
     if (torso) {
-      const head = getHeadCenter(pose, height, width, torso)
-      headX = kf.x.filter(head.x)
-      headY = kf.y.filter(head.y)
+      torsoX = kf.x.filter(torso.x)
+      torsoY = kf.y.filter(torso.y)
       globeSize = kf.size.filter(calculateGlobeSize(torso.shoulderWidth))
     }
 
@@ -258,17 +219,12 @@ export async function createGlobeAnim(
         if (!sprite.playing) sprite.play()
         sprite.alpha = lerpLinear(time, 0, ANIM.FADE)
 
-        // Fly in toward the moving orbit point rather than the head's center,
-        // so the globe joins the ring already in motion instead of landing at
-        // the middle and popping outward when 'entered' takes over.
-        advanceOrbit(ticker.deltaMS / 1000)
         const progress = lerpEO(time, 0, ANIM.FADE)
-        const target = orbitPoint(0)
-        const startX = headX + width * 0.3
-        const startY = headY - height * 0.2
+        const startX = torsoX + width * 0.3
+        const startY = torsoY - height * 0.2
         const ep = clampPos(
-          startX + (target.x - startX) * progress,
-          startY + (target.y - startY) * progress,
+          startX + (torsoX - startX) * progress,
+          startY + (torsoY - startY) * progress,
           globeSize, bounds,
         )
         container.position.set(ep.x, ep.y)
@@ -294,32 +250,27 @@ export async function createGlobeAnim(
           const hp = clampPos(hx, hy + bobOffset, handGlobeSize, bounds)
           container.position.set(hp.x, hp.y)
         } else {
-          // Orbit mode: a full clockwise circle around the head, one turn
-          // every ORBIT_PERIOD_SEC. This used to sweep only the front half
-          // (angle held within [0, π)) around the torso instead, on the
-          // reasoning that a back half with nothing to occlude it was dead
-          // travel time — but the ring sits around the head now, in the
-          // screen plane, so there is no "behind" to hide in and every part
-          // of the circle is worth drawing.
+          // Orbit mode: a continuous circle around the torso. It swells as
+          // it comes toward the camera across the front, then shrinks and
+          // dissolves as it rounds the far side — see DEPTH_SCALE and
+          // BEHIND_FADE_DEPTH.
           advanceOrbit(ticker.deltaMS / 1000)
-          const p = orbitPoint(bobOffset)
-          const op = clampPos(p.x, p.y, globeSize, bounds)
-          container.position.set(op.x, op.y)
-          sprite.alpha = 1
+          const f = orbitFrame(bobOffset)
+          sprite.height = sprite.width = f.size
+          sprite.alpha = f.alpha
+          container.position.set(f.x, f.y)
         }
         break
       }
 
       case 'lost': {
-        // Keeps spinning on the last known head position through a brief
-        // tracking dropout, so a lost frame doesn't stall the globe mid-arc.
         advanceOrbit(ticker.deltaMS / 1000)
         bobTime += ticker.deltaMS / 1000
         const bobOff = Math.sin(bobTime * BOB_SPEED) * globeSize * BOB_AMPLITUDE
-        const p = orbitPoint(bobOff)
-        const lp = clampPos(p.x, p.y, globeSize, bounds)
-        container.position.set(lp.x, lp.y)
-        sprite.alpha = 1
+        const f = orbitFrame(bobOff)
+        sprite.height = sprite.width = f.size
+        sprite.alpha = f.alpha
+        container.position.set(f.x, f.y)
         if (time >= ANIM.RETRACK) animManager.transition()
         break
       }
