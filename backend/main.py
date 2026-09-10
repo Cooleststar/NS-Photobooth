@@ -309,6 +309,12 @@ _pose_debug_last = 0.0
 # less than the distance to a neighbour.
 _KEYPOINT_BOX_SLACK = 0.25
 
+# TEMPORARY A/B switch for the ViTPose box-format fix. Default on (correct).
+# VITPOSE_BOX_FIX=0 reverts to passing xyxy where COCO xywh is expected, which
+# is what shipped before fdf12c5. Exists so the owl can be compared with and
+# without the change on the same build; delete once that is decided.
+_VITPOSE_BOX_FIX = os.environ.get('VITPOSE_BOX_FIX', '1') != '0'
+
 
 def _keypoints_fit_box(kps_xyn, box, frame_shape, track_id=None) -> bool:
     """Whether these keypoints plausibly describe the person in `box`.
@@ -482,9 +488,17 @@ def _vitpose_worker():
             # Only the processor calls need converting. The cache below stores
             # xyxy, because the merge compares it with _box_iou against the
             # current xyxy box.
-            boxes_coco = [
-                [x1, y1, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes_list
-            ]
+            #
+            # TEMPORARY: set VITPOSE_BOX_FIX=0 to restore the old, incorrect
+            # behaviour for A/B comparison. Remove this switch once the owl
+            # question is settled - it exists only so the two can be compared
+            # without checking out different commits.
+            if _VITPOSE_BOX_FIX:
+                boxes_coco = [
+                    [x1, y1, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes_list
+                ]
+            else:
+                boxes_coco = boxes_list
 
             inputs = _vitpose_processor(
                 images=pil_img, boxes=[boxes_coco], return_tensors="pt",
@@ -1810,6 +1824,10 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
         log.info("DEDUPE_DEBUG on - will log every discarded detection")
     if _POSE_DEBUG:
         log.info("POSE_DEBUG on - will log per-person nose positions once a second")
+    if _vitpose_model is not None:
+        log.info("ViTPose box format: %s",
+                 "COCO xywh (corrected)" if _VITPOSE_BOX_FIX
+                 else "xyxy (OLD, incorrect - A/B comparison only)")
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)

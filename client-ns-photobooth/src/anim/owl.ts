@@ -3,7 +3,7 @@ import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
-import { calculateArmFromPose } from '../api/nicepipe/mpPose'
+import { ArmSide, calculateArmFromPose } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
 
 import owlIdleGif from '../assets/owl_anim/owl_idle_new.gif'
@@ -135,7 +135,12 @@ export async function createOwlAnim(app: PIXI.Application) {
   // make the owl flicker away. Expires after ARM_GRACE_SEC, which is what
   // stops a lowered arm from leaving the owl pinned to a stale perch.
   let lastCoords: { x: number; y: number; angle: number; length: number } | undefined
-  let lastArm: 'left' | 'right' | undefined
+  let lastArm: ArmSide | undefined
+  /** The arm the owl is currently committed to. Passed back into
+   * calculateArmFromPose so it keeps that arm while it still qualifies,
+   * instead of re-deciding every frame and hopping to whichever arm happens
+   * to look better. Cleared on exit, so the next person is picked freshly. */
+  let lockedArm: ArmSide | undefined
   /** seconds since the arm heuristic last succeeded */
   let armLostFor = 0
 
@@ -150,12 +155,13 @@ export async function createOwlAnim(app: PIXI.Application) {
   const resetPerch = () => {
     lastCoords = undefined
     lastArm = undefined
+    lockedArm = undefined
     armLostFor = 0
   }
   const animManager = new AnimStateManager()
   const update = (pose: NormalizedLandmarkList) => {
     // Determining size and location
-    let [arm, coords] = calculateArmFromPose(pose, height, width)
+    let [arm, coords] = calculateArmFromPose(pose, height, width, lockedArm)
     if (coords) {
       coords = {
         x: kf.x.filter(coords.x),
@@ -165,10 +171,15 @@ export async function createOwlAnim(app: PIXI.Application) {
       }
       lastCoords = coords
       lastArm = arm
+      lockedArm = arm
       armLostFor = 0
     } else {
       armLostFor += ticker.deltaMS / 1000
       if (armLostFor >= ARM_GRACE_SEC) {
+        // Release the arm lock with the perch: the arm has genuinely been
+        // gone for the whole grace window, so holding it would stop the owl
+        // acquiring the other arm if that is the one now raised.
+        lockedArm = undefined
         // Grace spent: stop pretending we still know where the arm is. The
         // perch is dropped here rather than only on exit so the owl cannot
         // resume from a stale position if the arm reappears elsewhere.
