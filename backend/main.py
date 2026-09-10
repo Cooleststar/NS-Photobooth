@@ -1242,6 +1242,8 @@ def run_pose_detection(
 _CHALLENGE67_FILE = pathlib.Path(__file__).parent / 'challenge67_leaderboard.json'
 _CHALLENGE67_MAX_SCORE = 400  # sanity cap against a clearly-bogus submission
 _CHALLENGE67_MAX_ENTRIES = 100  # keep the file bounded
+_CHALLENGE67_MAX_NAME_LEN = 20  # matches MAX_NAME_LEN in Challenge67UI.tsx
+_CHALLENGE67_DEFAULT_NAME = 'Anonymous'
 _challenge67_lock: asyncio.Lock | None = None  # initialised inside main(), same reason as clients_lock below
 
 
@@ -1249,10 +1251,16 @@ def _load_challenge67() -> list:
     if not _CHALLENGE67_FILE.exists():
         return []
     try:
-        return json.loads(_CHALLENGE67_FILE.read_text())
+        entries = json.loads(_CHALLENGE67_FILE.read_text())
     except Exception:
         log.error("Corrupt challenge67 leaderboard file, starting fresh")
         return []
+    # Entries saved before names existed have no "name" key - backfill so
+    # every caller can rely on it being present, and a submit's resave
+    # permanently heals the file rather than re-healing it on every read.
+    for e in entries:
+        e.setdefault('name', _CHALLENGE67_DEFAULT_NAME)
+    return entries
 
 
 def _save_challenge67(entries: list) -> None:
@@ -1260,10 +1268,11 @@ def _save_challenge67(entries: list) -> None:
 
 
 async def challenge67_submit_handler(request: web.Request) -> web.Response:
-    """POST {"score": number} - validates range, appends to the leaderboard
-    file, and returns this submission's rank. No nickname, no auth: the
-    booth is single-player and anonymous by design (see the plan this was
-    built from)."""
+    """POST {"score": number, "name"?: string} - validates range, appends to
+    the leaderboard file, and returns this submission's rank. No auth: this
+    is a single trusted kiosk (see the module comment above), so the name is
+    taken as given - trimmed and length-capped, nothing more - same trust
+    level as the score's own range check below."""
     try:
         data = await request.json()
         score = data.get('score')
@@ -1273,10 +1282,14 @@ async def challenge67_submit_handler(request: web.Request) -> web.Response:
         if not (0 <= score <= _CHALLENGE67_MAX_SCORE):
             return web.Response(status=400, text='Score out of range', headers=_CORS)
 
+        name = data.get('name', '')
+        name = name.strip()[:_CHALLENGE67_MAX_NAME_LEN] if isinstance(name, str) else ''
+        name = name or _CHALLENGE67_DEFAULT_NAME
+
         async with _challenge67_lock:
             entries = _load_challenge67()
             ts = time.time()
-            entries.append({"score": score, "ts": ts})
+            entries.append({"score": score, "ts": ts, "name": name})
             entries.sort(key=lambda e: e['score'], reverse=True)
             entries = entries[:_CHALLENGE67_MAX_ENTRIES]
             _save_challenge67(entries)
@@ -1293,8 +1306,8 @@ async def challenge67_submit_handler(request: web.Request) -> web.Response:
 
 
 async def challenge67_leaderboard_handler(request: web.Request) -> web.Response:
-    """GET: current top-10 scores, for the results screen and any idle
-    leaderboard display."""
+    """GET: current top-10 scores (with names), for the results screen and
+    any idle leaderboard display."""
     try:
         entries = _load_challenge67()
         return web.json_response({"top": entries[:10]}, headers=_CORS)

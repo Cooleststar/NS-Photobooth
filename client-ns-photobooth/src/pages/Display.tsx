@@ -965,7 +965,10 @@ tmp.toBlob(blob => {
         fetch(`${getBackendHttpUrl()}/challenge67/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ score }),
+          // playerName was confirmed by Challenge67UI's 'naming' screen
+          // before 'countdown' ever starts, so it's already sitting on the
+          // shared atom by the time a round can end.
+          body: JSON.stringify({ score, name: challenge67Game.get().playerName }),
         })
           .then((res) => res.json())
           .then((data) => {
@@ -1177,7 +1180,7 @@ tmp.toBlob(blob => {
             if (challenge67PhaseElapsed >= 3) {
               challenge67PhaseElapsed = 0
               repCounter67.reset()
-              challenge67Game.set({ phase: 'playing', timeLeft: 20, reps: 0 })
+              challenge67Game.set({ ...game, phase: 'playing', timeLeft: 20, reps: 0 })
             }
           } else if (game.phase === 'playing') {
             const pose = dataRef.current.mp_pose?.pose
@@ -1185,10 +1188,10 @@ tmp.toBlob(blob => {
             const timeLeft = game.timeLeft - app.ticker.deltaMS / 1000
             const reps = game.reps + gained
             if (timeLeft <= 0) {
-              challenge67Game.set({ phase: 'finished', timeLeft: 0, reps })
+              challenge67Game.set({ ...game, phase: 'finished', timeLeft: 0, reps, lastResult: undefined })
               submitChallenge67Score(reps)
             } else {
-              challenge67Game.set({ phase: 'playing', timeLeft, reps })
+              challenge67Game.set({ ...game, phase: 'playing', timeLeft, reps })
             }
           }
         }

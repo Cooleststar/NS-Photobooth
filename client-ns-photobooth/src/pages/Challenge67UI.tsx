@@ -1,14 +1,19 @@
 import { useStore } from '@nanostores/preact'
+import { useState } from 'react'
 import 'twin.macro'
 import { Countdown, KeybindBtn } from '../components'
 import { challenge67Game } from '../store'
+
+// Kept short: it's rendered as a leaderboard column, not a form field, and a
+// kiosk on-screen keyboard makes anything longer tedious to type anyway.
+const MAX_NAME_LEN = 20
 
 /** Full-screen overlay for 67 Mode, rendered by HUD.tsx in place of its
  * normal ready-state content (camera button/AnimPicker) when
  * challenge67Enabled is on - see store.ts's challenge67Game for why the
  * actual timer/rep-counting logic lives in Display.tsx's ticker instead of
  * here: this component is a pure reader of that shared state, plus the
- * "start" trigger that flips phase to 'countdown'. */
+ * "start"/"begin" triggers that drive phase forward. */
 export default function Challenge67UI() {
   const game = useStore(challenge67Game)
   // The leaderboard shown below comes from game.lastResult.top - the exact
@@ -20,9 +25,23 @@ export default function Challenge67UI() {
   // appeared at #1 here.
   const leaderboard = game.lastResult?.top ?? []
 
+  // Local, not on the shared atom: keystrokes here don't need to be visible
+  // to Display.tsx's ticker (nothing time-based happens during 'naming'), so
+  // routing every character through the global store would just be needless
+  // churn. Pre-filled from the last confirmed name so a repeat player
+  // doesn't have to retype it.
+  const [nameInput, setNameInput] = useState(game.playerName)
+
   const start = () => {
     if (game.phase !== 'waiting' && game.phase !== 'finished') return
-    challenge67Game.set({ phase: 'countdown', timeLeft: 0, reps: 0 })
+    setNameInput(game.playerName)
+    challenge67Game.set({ ...challenge67Game.get(), phase: 'naming', timeLeft: 0, reps: 0 })
+  }
+
+  const begin = () => {
+    if (game.phase !== 'naming') return
+    const name = nameInput.trim().slice(0, MAX_NAME_LEN) || 'Anonymous'
+    challenge67Game.set({ ...challenge67Game.get(), phase: 'countdown', playerName: name })
   }
 
   switch (game.phase) {
@@ -37,6 +56,25 @@ export default function Challenge67UI() {
           </div>
           <KeybindBtn keyCode='PageUp' onClick={start} tw='text-2xl px-8 py-4'>
             Start
+          </KeybindBtn>
+        </div>
+      )
+    case 'naming':
+      return (
+        <div tw='inset-0 fixed flex flex-col items-center justify-center gap-6'>
+          <div tw='text-white text-4xl font-bold bg-black bg-opacity-50 rounded-2xl px-12 py-8'>
+            Enter your name
+          </div>
+          <input
+            autoFocus
+            value={nameInput}
+            onChange={(e) => setNameInput((e.target as HTMLInputElement).value.slice(0, MAX_NAME_LEN))}
+            onKeyDown={(e) => { if (e.key === 'Enter') begin() }}
+            maxLength={MAX_NAME_LEN}
+            tw='text-black text-2xl rounded-xl px-6 py-3 w-96 text-center outline-none'
+          />
+          <KeybindBtn keyCode='PageUp' onClick={begin} tw='text-2xl px-8 py-4'>
+            Begin
           </KeybindBtn>
         </div>
       )
@@ -65,6 +103,9 @@ export default function Challenge67UI() {
     case 'finished':
       return (
         <div tw='inset-0 fixed flex flex-col items-center justify-center gap-4'>
+          <div tw='text-white text-3xl font-semibold bg-black bg-opacity-50 rounded-xl px-8 py-4'>
+            {game.playerName}
+          </div>
           <div tw='text-white text-5xl font-bold bg-black bg-opacity-50 rounded-2xl px-12 py-8'>
             Score: {game.lastResult?.score ?? game.reps}
           </div>
@@ -74,13 +115,16 @@ export default function Challenge67UI() {
             </div>
           )}
           {leaderboard.length > 0 && (
-            <div tw='text-white text-lg bg-black bg-opacity-50 rounded-xl px-6 py-4 flex flex-col gap-1 min-w-[200px]'>
+            <div tw='text-white text-lg bg-black bg-opacity-50 rounded-xl px-6 py-4 flex flex-col gap-1 min-w-[280px]'>
               <span tw='text-sm text-gray-400 uppercase tracking-widest mb-1'>
                 Leaderboard
               </span>
               {leaderboard.slice(0, 10).map((entry, i) => (
                 <div key={entry.ts} tw='flex justify-between gap-6'>
-                  <span>#{i + 1}</span>
+                  <span tw='flex gap-3 truncate'>
+                    <span tw='text-gray-400'>#{i + 1}</span>
+                    <span tw='truncate'>{entry.name}</span>
+                  </span>
                   <span>{entry.score}</span>
                 </div>
               ))}
