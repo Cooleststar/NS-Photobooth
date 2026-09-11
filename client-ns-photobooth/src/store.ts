@@ -32,6 +32,7 @@ export const GIF_OPTIONS = {
   sunglasses: 'Sunglasses',
   mustache: 'Mustache',
   sixseven: '67',
+  boxglove: 'Boxing Gloves',
 } as const
 export type GifOption = keyof typeof GIF_OPTIONS
 /** Every currently-active pose/hand-tracked animation and/or corner-prop —

@@ -26,6 +26,7 @@ import { createPigNoseAnim } from '../anim/pignose'
 import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
 import { createSixSevenAnim } from '../anim/sixseven'
+import { createBoxGloveAnim } from '../anim/boxglove'
 import { createSunglassesAnim } from '../anim/sunglasses'
 import { createMustacheAnim } from '../anim/mustache'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
@@ -113,13 +114,13 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'none'>, string> = {}
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>, string> = {}
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
   'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
-  'clownwignose', 'sunglasses', 'mustache', 'sixseven',
+  'clownwignose', 'sunglasses', 'mustache', 'sixseven', 'boxglove',
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
@@ -144,6 +145,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   sunglasses: 'pose',
   mustache: 'pose',
   sixseven: 'hands',
+  boxglove: 'hands',
 }
 
 /** Multiple animations can be selected at once now, each possibly wanting a
@@ -839,6 +841,13 @@ export default function Display({
         // No longer hand-tracked (see ocfusion.ts) — reads its assigned
         // person's own face pose directly, same contract as pignose/etc.
         return await createOCFusionAnim(app)
+      } else if (option === 'boxglove') {
+        // Hand-tracked like drone/sixseven: one glove per closed fist, so the
+        // animation owns all its slots and takes the raw hand list rather than
+        // a per-person pose.
+        const [container, updateGloves] = await createBoxGloveAnim(app)
+        const wrappedUpdate = (_pose: any) => updateGloves(rawRef.current.hands ?? [])
+        return [container, wrappedUpdate] as const
       } else if (option === 'sixseven') {
         const [container, updateSixSeven] = await createSixSevenAnim(app, marginOpts)
         // Same as drone/ocfusion — driven by hand landmarks, not body pose
@@ -1036,7 +1045,8 @@ export default function Display({
             // Wig & Nose/Pig Nose/Scuba/etc, gets a normal per-person
             // instance via the outer slot assigner below.
             const count =
-              isMulti && option !== 'drone' && option !== 'sixseven'
+              isMulti && option !== 'drone' && option !== 'sixseven' &&
+              option !== 'boxglove'
                 ? MAX_PEOPLE
                 : 1
             const results = await Promise.all(
@@ -1052,7 +1062,7 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>]
             // A stale option can still be sitting in the persisted
             // selectedGifs from before a character was removed from
             // GIF_OPTIONS (e.g. localStorage from an older session) — that's

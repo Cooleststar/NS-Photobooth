@@ -57,6 +57,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import types
 
 import numpy as np
@@ -106,6 +107,94 @@ WILOR_MAX_HANDS = int(os.environ.get('WILOR_MAX_HANDS', '8'))
 # a held pose rather than hovering near the line, so this is far less critical
 # than it was before.
 PALM_SKY_THRESHOLD = float(os.environ.get('PALM_SKY_THRESHOLD', '-0.4'))
+
+# --- fist detection --------------------------------------------------------
+# WiLoR predicts hand_pose - 15 finger-joint rotation matrices - alongside the
+# global wrist orientation, and it does so BEFORE the MANO layer that converts
+# parameters into a mesh. That layer is stubbed out here (MANO is separately
+# licensed), which is why there are no per-finger landmarks; the joint
+# rotations themselves are still available and are what this reads.
+#
+# Curl score is the mean rotation angle of those joints away from identity. A
+# straight finger leaves its joints near identity and scores low; a closed fist
+# flexes every joint and scores high.
+#
+# The threshold is a starting guess and MUST be measured: run with
+# FIST_DEBUG=1, hold an open hand then a fist, and read the two scores off the
+# log. Guessing at WiLoR's canonical frame has been wrong twice before.
+FIST_CURL_THRESHOLD = float(os.environ.get('FIST_CURL_THRESHOLD', '0.9'))
+FIST_DEBUG = os.environ.get('FIST_DEBUG', '0') == '1'
+_fist_debug_last = 0.0
+
+# Wrist -> fingertips in the canonical frame, measured rather than assumed:
+# with +x the old palm-to-camera gesture fired on a hand with fingertips
+# pointing DOWN, so the axis is -x. Used to rotate a hand-worn prop so it
+# points the way the fingers do.
+# Re-confirmed on a closed fist, not just the open palm it was first measured
+# on: with the forearm vertical and knuckles up, -x reads -85.6 to -88.7
+# degrees across ten samples - straight up, stable to about 3 degrees. Finger
+# curl does not move it, because global_orient describes the WRIST frame and
+# is independent of how the fingers are posed.
+_FINGER_AXIS = (-1.0, 0.0, 0.0)
+
+# --- handedness ------------------------------------------------------------
+# WiLoR cannot tell left from right - it mirrors left-hand crops before the
+# network sees them, so the whole decision rests on a small YOLO classifier
+# that was measured reporting three hands in one frame as all "Left".
+# mediapipe_handedness.py supplies that one bit instead; see its docstring.
+# Set MP_HANDEDNESS=0 to fall back to WiLoR's own label.
+MP_HANDEDNESS = os.environ.get('MP_HANDEDNESS', '1') != '0'
+MIN_MP_SCORE = float(os.environ.get('MP_HANDEDNESS_MIN_SCORE', '0.75'))
+# Minimum overlap before a MediaPipe hand and a WiLoR hand are taken to be the
+# same physical hand. Intersection over the smaller box, so a tight landmark
+# hull still matches a looser detector box around the same hand.
+_HANDEDNESS_MATCH_OVERLAP = 0.3
+
+
+def _overlap_ratio(a, b) -> float:
+    """Intersection over the SMALLER box's area. Containment-aware, unlike
+    IoU: MediaPipe's box is a hull around 21 landmarks and sits well inside
+    the detector's box for the same hand, which IoU would score poorly."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    sa = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    sb = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    smaller = min(sa, sb)
+    return float(inter / smaller) if smaller > 0 else 0.0
+
+
+def _match_handedness(boxes, mp_hands):
+    """Best MediaPipe handedness for each WiLoR box, or None.
+
+    Greedy nearest-overlap, best pair first, each MediaPipe hand used once -
+    the same shape as the animation slot assigners. Returns a list parallel to
+    `boxes` of (is_right, score) or None where nothing matched confidently.
+    """
+    result = [None] * len(boxes)
+    if not mp_hands:
+        return result
+    pairs = []
+    for i, b in enumerate(boxes):
+        for j, m in enumerate(mp_hands):
+            if m['score'] < MIN_MP_SCORE:
+                continue
+            ov = _overlap_ratio(b, m['box'])
+            if ov >= _HANDEDNESS_MATCH_OVERLAP:
+                pairs.append((ov, i, j))
+    pairs.sort(reverse=True)
+    used_box, used_mp = set(), set()
+    for ov, i, j in pairs:
+        if i in used_box or j in used_mp:
+            continue
+        result[i] = mp_hands[j]
+        used_box.add(i)
+        used_mp.add(j)
+    return result
+
 
 _available = False
 _model = None
@@ -307,6 +396,16 @@ def init() -> bool:
     _available = True
     log.info("WiLoR initialised on %s (fp16=%s, max_hands=%d)",
              _device, WILOR_FP16, WILOR_MAX_HANDS)
+    if MP_HANDEDNESS:
+        # Loaded here rather than at import so it shares WiLoR's on-demand
+        # lifecycle: nothing pays for it unless a hand character is selected.
+        try:
+            import mediapipe_handedness
+            mediapipe_handedness.ensure_loading()
+            log.info("Handedness from MediaPipe (CPU) - WiLoR's own label is unreliable")
+        except Exception as _e:
+            log.warning("MediaPipe handedness unavailable, "
+                        "falling back to WiLoR's label: %s", _e)
     threading.Thread(target=_worker, daemon=True).start()
     return True
 
@@ -350,6 +449,34 @@ def _oriented(R: np.ndarray, local: tuple, is_right: bool) -> np.ndarray:
     return v / (np.linalg.norm(v) + 1e-9)
 
 
+def _curl_score(hand_pose: np.ndarray) -> float:
+    """Mean flexion of the finger joints, in radians.
+
+    hand_pose is (15, 3, 3) - one rotation per finger joint, relative to the
+    rest pose. The angle of a rotation matrix is arccos((trace - 1) / 2), which
+    is 0 for identity (a straight finger) and grows as the joint bends. The
+    mean over all fifteen is a single "how closed is this hand" number.
+
+    Deliberately not per-finger: a fist is every finger curled, and averaging
+    is far less sensitive to one badly-estimated joint than a per-finger test
+    with fifteen chances to go wrong.
+    """
+    traces = np.trace(hand_pose, axis1=1, axis2=2)
+    angles = np.arccos(np.clip((traces - 1.0) / 2.0, -1.0, 1.0))
+    return float(np.mean(angles))
+
+
+def _screen_angle(R: np.ndarray, is_right: bool) -> float:
+    """Rotation, in radians, to lay a hand-worn prop along the fingers.
+
+    Screen space, so y grows downward and the angle is measured from the +x
+    axis - the same convention PIXI's sprite.rotation expects. The prop art
+    points UP, so the caller adds a quarter turn.
+    """
+    f = _oriented(R, _FINGER_AXIS, is_right)
+    return float(np.arctan2(f[1], f[0]))
+
+
 def _infer(frame: np.ndarray) -> list:
     import torch
     h, w = frame.shape[:2]
@@ -370,7 +497,7 @@ def _infer(frame: np.ndarray) -> list:
     ds = ViTDetDataset(_model_cfg, rgb, boxes, classes, rescale_factor=2.0)
     loader = torch.utils.data.DataLoader(ds, batch_size=8, shuffle=False)
 
-    rots, rights = [], []
+    rots, rights, poses = [], [], []
     for batch in loader:
         batch = {k: (v.to(_device) if isinstance(v, torch.Tensor) else v)
                  for k, v in batch.items()}
@@ -382,13 +509,31 @@ def _infer(frame: np.ndarray) -> list:
                 out = _model(batch)
         R = out['pred_mano_params']['global_orient'].reshape(-1, 3, 3).float()
         rots.append(R.detach().cpu().numpy())
+        # Finger-joint rotations, for the fist test. 15 joints per hand.
+        hp = out['pred_mano_params']['hand_pose'].reshape(R.shape[0], -1, 3, 3).float()
+        poses.append(hp.detach().cpu().numpy())
         rights.append(batch['right'].cpu().numpy().reshape(-1))
     rots = np.concatenate(rots, axis=0)
+    poses = np.concatenate(poses, axis=0)
     rights = np.concatenate(rights, axis=0)
+
+    # One MediaPipe pass over the same frame, matched to WiLoR's boxes by
+    # overlap. Falls back silently to WiLoR's label wherever nothing matched
+    # confidently, so a missed hand degrades rather than breaks.
+    mp_matches = [None] * len(boxes)
+    if MP_HANDEDNESS:
+        try:
+            import mediapipe_handedness
+            if mediapipe_handedness.available():
+                mp_matches = _match_handedness(boxes, mediapipe_handedness.detect(rgb))
+        except Exception as _e:
+            log.debug("handedness lookup failed: %s: %s", type(_e).__name__, _e)
 
     hands = []
     for i in range(min(len(rots), len(boxes))):
-        is_right = bool(rights[i] > 0.5)
+        wilor_right = bool(rights[i] > 0.5)
+        match = mp_matches[i] if i < len(mp_matches) else None
+        is_right = match['is_right'] if match else wilor_right
         ny = _palm_normal_y(rots[i], is_right)
 
         # Palm centre from the bounding box, normalised. The frontend averages
@@ -396,18 +541,69 @@ def _infer(frame: np.ndarray) -> list:
         # filled with it — see the module docstring on why real per-finger
         # landmarks are not available without MANO.
         x0, y0, x1, y1 = boxes[i]
-        cx = float((x0 + x1) / 2.0 / w)
-        cy = float((y0 + y1) / 2.0 / h)
+
+        # Anchor point, and which way the hand points.
+        #
+        # Prefer MediaPipe's real landmarks when it matched this hand. WiLoR's
+        # own "landmarks" are all the detector box's centre - the MANO layer
+        # that would give joint positions is stubbed out - and a box centre is
+        # not anchored to anatomy: an axis-aligned box changes shape as a hand
+        # rotates, so its centre slides across the hand even when the hand is
+        # still. That is the off-centre drift a prop shows at some angles.
+        #
+        # The knuckle average sits in the middle of the fist and stays there
+        # through rotation, and wrist-to-knuckles measures the hand's direction
+        # directly rather than deriving it from the wrist rotation matrix.
+        if match:
+            kx, ky = match['knuckles']
+            wx, wy = match['wrist']
+            cx = float(kx / w)
+            cy = float(ky / h)
+            hand_angle = float(np.arctan2(ky - wy, kx - wx))
+            angle_src = 'mp'
+        else:
+            cx = float((x0 + x1) / 2.0 / w)
+            cy = float((y0 + y1) / 2.0 / h)
+            hand_angle = _screen_angle(rots[i], is_right)
+            angle_src = 'wilor'
+
+        curl = _curl_score(poses[i]) if i < len(poses) else 0.0
 
         hands.append({
             'x': [cx] * 21,
             'y': [cy] * 21,
             'z': [0.0] * 21,
             'label': 'Right' if is_right else 'Left',
+            # Where the label came from, so the frontend can decide how much
+            # to trust it - 'mp' is measured, 'wilor' is the unreliable one.
+            'label_src': 'mp' if match else 'wilor',
             'palm_sky': bool(ny < PALM_SKY_THRESHOLD),
             'palm_normal_y': ny,
             'conf': float(confs[i]) if i < len(confs) else 0.0,
+            # Closed fist, for hand-worn props (see boxglove.ts). curl is sent
+            # alongside so the threshold can be re-tuned from live values
+            # without a backend change.
+            'fist': bool(curl > FIST_CURL_THRESHOLD),
+            'curl': curl,
+            # Rotation to lay a prop along the fingers, and the detector box's
+            # size, so a prop can scale with how close the hand is.
+            'angle': hand_angle,
+            'angle_src': angle_src,
+            'w': float((x1 - x0) / w),
+            'h': float((y1 - y0) / h),
         })
+
+    if FIST_DEBUG and hands:
+        global _fist_debug_last
+        _now = time.time()
+        if _now - _fist_debug_last >= 1.0:
+            _fist_debug_last = _now
+            for hd in hands:
+                log.info("hand %-5s curl=%.3f %-6s angle=%+6.1f deg  box=%.2fx%.2f",
+                         hd['label'], hd['curl'],
+                         'FIST' if hd['fist'] else 'open',
+                         np.degrees(hd['angle']), hd['w'], hd['h'])
+
     return hands
 
 

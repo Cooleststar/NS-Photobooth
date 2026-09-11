@@ -22,6 +22,7 @@ import mustacheThumb from '../assets/Mustache/mustache.png'
 // Opaque white background, unlike the six/seven sprites themselves — fine on
 // this button, but never usable as an in-scene overlay.
 import sixSevenThumb from '../assets/sixseven/sixseven.png'
+import boxGloveThumb from '../assets/boxglove/boxingglove.png'
 
 const THUMBS: Partial<Record<GifOption, string>> = {
   owl: owlThumb,
@@ -35,6 +36,7 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   sunglasses: sunglassesThumb,
   mustache: mustacheThumb,
   sixseven: sixSevenThumb,
+  boxglove: boxGloveThumb,
 }
 
 /** top strip of thumbnail buttons for toggling active animations (multiple can

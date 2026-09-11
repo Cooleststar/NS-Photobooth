@@ -17,6 +17,33 @@ export type HandData = {
    * hand, like offering/presenting something on it. Used by drone.ts and
    * sixseven.ts. */
   palmSky: boolean
+  /** Closed fist. Derived from WiLoR's predicted finger-joint rotations, not
+   * from landmarks - those are all the bbox centre (see wilor_hands.py). */
+  fist: boolean
+  /** How closed the hand is, in radians of mean joint flexion. Sent alongside
+   * `fist` so the threshold can be judged from live values. */
+  curl: number
+  /** Rotation, in radians, laying a hand-worn prop along the fingers. Screen
+   * space, measured from +x with y growing downward - i.e. straight into
+   * PIXI's sprite.rotation.
+   *
+   * When angleSrc is 'mp' this is measured wrist-to-knuckles from real
+   * landmarks; when 'wilor' it is derived from the wrist rotation matrix. */
+  angle: number
+  angleSrc: 'mp' | 'wilor'
+  /** Hand box size as a fraction of the frame, for scaling a worn prop with
+   * how close the hand is. */
+  w: number
+  h: number
+  /** Detector confidence. */
+  conf: number
+  /** Where `label` came from. 'mp' is MediaPipe's handedness classifier, which
+   * predicts left/right directly and reports 0.98+ confidence on this camera.
+   * 'wilor' is its own detector's class, which is unreliable - it reported
+   * three hands in one frame as all "Left" - and is only used when MediaPipe
+   * found no matching hand. Consumers that care about handedness should check
+   * this before trusting `label`. */
+  labelSrc: 'mp' | 'wilor'
 }
 
 /** One decoded QR code (QR mode). x/y are its center — normalized 0-1 on

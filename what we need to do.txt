@@ -17,9 +17,11 @@ week after after: outside testing (light etc)
 
 
 current porblem
-fix camera application in this photobooth
+fix camera application in this photobooth 
 (fix bat and owl anims in n out)
-(fix globe)
+(fix globe) (maybe do a halo or a knocked out effect (circle around top of head))
+boxing glove animation also to compliment above
+
 --BANNER INFO--
 
 drone and 67 cannot use together
