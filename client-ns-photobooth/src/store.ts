@@ -208,6 +208,10 @@ export const qrGlobeLocked = atom(false)
 export const qrClownLocked = atom(false)
 export const qrPigNoseLocked = atom(false)
 export const qrBatEarsLocked = atom(false)
+export const qrScubaLocked = atom(false)
+export const qrOcFusionLocked = atom(false)
+export const qrSunglassesLocked = atom(false)
+export const qrMustacheLocked = atom(false)
 // QR-only, like the drone — ORDLO isn't a normal AnimPicker character
 // (see anim/ordlo.ts), so unlike the atoms above there's no matching
 // GifOption/CHARACTER_OPTIONS entry for it.
@@ -219,10 +223,25 @@ export const qrOrdloLocked = atom(false)
 // enforced in Settings.tsx (each switch clears the other on click).
 export const challenge67Enabled = persistentAtom('challenge67Enabled', false, opts)
 
+export interface Challenge67LeaderboardEntry {
+  score: number
+  ts: number
+  name: string
+}
+
 export interface Challenge67State {
-  phase: 'waiting' | 'countdown' | 'playing' | 'finished'
+  // 'naming' sits between 'waiting'/'finished' and 'countdown' - entered on
+  // pressing Start/Play Again, left once a name is confirmed. Purely a UI
+  // wait state: the ticker in Display.tsx that owns every other transition
+  // doesn't need to know about it, since nothing time-based happens here.
+  phase: 'waiting' | 'naming' | 'countdown' | 'playing' | 'finished'
   timeLeft: number
   reps: number
+  // Set once, when 'naming' -> 'countdown', and read back by
+  // submitChallenge67Score in Display.tsx when the round ends - carried on
+  // this shared atom rather than local state so the submit call (which
+  // lives in Display.tsx, not Challenge67UI.tsx) can reach it.
+  playerName: string
   lastResult?: {
     score: number
     rank: number
@@ -231,18 +250,20 @@ export interface Challenge67State {
     // the write, under its lock) rather than a separate GET fired off this
     // round's own score-writing race - see Challenge67UI.tsx for why a
     // second independent fetch used to show a stale board.
-    top: { score: number; ts: number }[]
+    top: Challenge67LeaderboardEntry[]
   }
 }
 // Ephemeral, like pointerEnabled/freezePosition below - Display.tsx's ticker
 // owns the timer/phase transitions/rep counting (it already has the per-
 // frame pose data and a running clock) and writes progress here every
-// frame; Challenge67UI just reads it and writes 'waiting' -> 'countdown' to
-// kick off a round. Not persisted: a reload shouldn't resume mid-round.
+// frame; Challenge67UI just reads it and writes 'waiting' -> 'naming' ->
+// 'countdown' to kick off a round. Not persisted: a reload shouldn't resume
+// mid-round (playerName included - a fresh reload re-asks for a name).
 export const challenge67Game = atom<Challenge67State>({
   phase: 'waiting',
   timeLeft: 0,
   reps: 0,
+  playerName: '',
 })
 
 // new backend requires video be sent to backend rather than the other way around

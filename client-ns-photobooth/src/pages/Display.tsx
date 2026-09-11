@@ -57,6 +57,10 @@ import {
   qrPigNoseLocked,
   qrBatEarsLocked,
   qrOrdloLocked,
+  qrScubaLocked,
+  qrOcFusionLocked,
+  qrSunglassesLocked,
+  qrMustacheLocked,
   qrModeEnabled,
   HIKVISION_IPS,
   RTSP_BASE,
@@ -75,18 +79,19 @@ import {
 // The drone is its own special case (a fixed fade-prop that follows a
 // point above the locked person's head, not their own pose-anchored
 // character). Every other entry below is a normal AnimPicker character
-// (owl/bat/globe/pignose/batears/clownwignose) driven through QR_CHARACTERS —
-// same "nearest wrist locks onto that person" heuristic as the drone, then
-// the character just gets fed that person's pose every frame like it would
-// via the ordinary (non-QR) per-person slot system. Locked forever once
-// acquired, same as the drone — needs the "Reset Animation" button in
-// Settings to free it up for the next guest.
+// driven through QR_CHARACTERS — same "nearest wrist locks onto that person"
+// heuristic as the drone, then the character just gets fed that person's
+// pose every frame like it would via the ordinary (non-QR) per-person slot
+// system. Locked forever once acquired, same as the drone — needs the
+// "Reset Animation" button in Settings to free it up for the next guest.
 //
-// Scuba isn't here: it already has its own dedicated gesture trigger
-// (anim/scuba.ts) rather than "just appears once selected", so it doesn't
-// fit this same "QR overrides the normal spawn condition" pattern. OC
-// Fusion isn't here either — like the drone, it's hand-driven with its own
-// internal multi-hand tracking, not a single person's pose.
+// Every AnimPicker character now has a code except 67 (sixseven), which is
+// deliberately left out: it is hand-driven and needs BOTH of a person's
+// palms, so it has nothing to do with the single-person lock this pattern is
+// built around. OC Fusion used to be excluded for the same reason, but it
+// was reworked into a face-anchored character (see anim/ocfusion.ts) and now
+// fits. Scuba keeps its own gesture trigger on top of the lock — the code
+// picks who it belongs to, the gesture still decides when it shows.
 const QR_DRONE_PAYLOAD = 'BOOTH-DRONE'
 // ORDLO is also its own special case, like the drone — a head-anchored
 // wordmark (anim/ordlo.ts) that isn't a GifOption/AnimPicker character, so
@@ -98,12 +103,16 @@ const QR_ORDLO_PAYLOAD = 'BOOTH-ORDLO'
 const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLocked }[] = [
   { payload: 'BOOTH-OWL', gif: 'owl', locked: qrOwlLocked },
   { payload: 'BOOTH-BAT', gif: 'bat', locked: qrBatLocked },
-  { payload: 'BOOTH-GLOBE', gif: 'globe', locked: qrGlobeLocked },
   // Same BOOTH-CLOWN code as before, but now summons Clown Wig & Nose
   // instead of the original Clown character.
   { payload: 'BOOTH-CLOWN', gif: 'clownwignose', locked: qrClownLocked },
   { payload: 'BOOTH-PIGNOSE', gif: 'pignose', locked: qrPigNoseLocked },
   { payload: 'BOOTH-BATEARS', gif: 'batears', locked: qrBatEarsLocked },
+  { payload: 'BOOTH-GLOBE', gif: 'globe', locked: qrGlobeLocked },
+  { payload: 'BOOTH-SCUBA', gif: 'scuba', locked: qrScubaLocked },
+  { payload: 'BOOTH-OCFUSION', gif: 'ocfusion', locked: qrOcFusionLocked },
+  { payload: 'BOOTH-SUNGLASSES', gif: 'sunglasses', locked: qrSunglassesLocked },
+  { payload: 'BOOTH-MUSTACHE', gif: 'mustache', locked: qrMustacheLocked },
 ]
 // A code-to-person lock search (drone and every QR_CHARACTERS entry) never
 // accepts a "closest available" match farther than this fraction of the
@@ -517,6 +526,45 @@ export default function Display({
   // non-default mode) would silently stop working after every backend
   // restart until the user happened to toggle something that changes
   // gifOptions/qrMode again.
+  // Tell the backend which camera feed is actually on screen.
+  //
+  // Both capture paths (the browser's webcam upload and the backend's own
+  // RTSP reader) push into the same pose broadcast, and the RTSP reader has
+  // been seen to outlive its viewers — which drew skeletons for whoever was
+  // in front of the OTHER camera, over a feed with nobody in it. The backend
+  // can't reliably tell which feed is live, but this component can, so it
+  // says so and the backend drops everything else.
+  //
+  // Resent on every reconnect for the same reason as the detection mode
+  // below: the backend holds this in memory only, so a restart would
+  // silently leave it accepting whichever source spoke first.
+  useEffect(() => {
+    if (rosState !== 'connected') return
+    let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+    const send = () => {
+      fetch(`${getBackendHttpUrl()}/pose_source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: isRtspMode ? 'rtsp' : 'local' }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        })
+        .catch((e) => {
+          console.warn('Failed to set pose source, retrying in 2s:', e)
+          if (active) retryTimer = setTimeout(send, 2000)
+        })
+    }
+    send()
+
+    return () => {
+      active = false
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [rosState, isRtspMode])
+
   useEffect(() => {
     if (rosState !== 'connected') return
     let active = true
@@ -646,10 +694,32 @@ export default function Display({
             if (!video || video.readyState < 2 || !ws || ws.readyState !== WebSocket.OPEN || sending) return
             sending = true
             const tmp = document.createElement('canvas')
-            tmp.width = 320
-            tmp.height = 240
-            tmp.getContext('2d')?.drawImage(video, 0, 0, 320, 240)
-            tmp.toBlob(blob => {
+
+// Keep the pose input resolution and aspect ratio identical
+// regardless of which local camera is being used.
+const POSE_WIDTH = 640
+const POSE_HEIGHT = 360
+
+tmp.width = POSE_WIDTH
+tmp.height = POSE_HEIGHT
+
+const ctx = tmp.getContext('2d')
+
+if (!ctx) {
+    sending = false
+    return
+}
+
+// Draw the camera frame into the fixed 16:9 pose input.
+ctx.drawImage(
+    video,
+    0,
+    0,
+    POSE_WIDTH,
+    POSE_HEIGHT
+)
+
+tmp.toBlob(blob => {
               sending = false
               if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return
               blob.arrayBuffer().then(buf => {
@@ -850,7 +920,7 @@ export default function Display({
         return [container, wrappedUpdate] as const
       } else if (option === 'sixseven') {
         const [container, updateSixSeven] = await createSixSevenAnim(app, marginOpts)
-        // Same as drone/ocfusion — driven by hand landmarks, not body pose
+        // Same as the drone — driven by hand landmarks, not body pose
         const wrappedUpdate = (_pose: any) => updateSixSeven(rawRef.current.hands ?? [])
         return [container, wrappedUpdate] as const
       } else if (option === 'pignose') {
@@ -904,7 +974,10 @@ export default function Display({
         fetch(`${getBackendHttpUrl()}/challenge67/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ score }),
+          // playerName was confirmed by Challenge67UI's 'naming' screen
+          // before 'countdown' ever starts, so it's already sitting on the
+          // shared atom by the time a round can end.
+          body: JSON.stringify({ score, name: challenge67Game.get().playerName }),
         })
           .then((res) => res.json())
           .then((data) => {
@@ -1117,7 +1190,7 @@ export default function Display({
             if (challenge67PhaseElapsed >= 3) {
               challenge67PhaseElapsed = 0
               repCounter67.reset()
-              challenge67Game.set({ phase: 'playing', timeLeft: 20, reps: 0 })
+              challenge67Game.set({ ...game, phase: 'playing', timeLeft: 20, reps: 0 })
             }
           } else if (game.phase === 'playing') {
             const pose = dataRef.current.mp_pose?.pose
@@ -1125,10 +1198,10 @@ export default function Display({
             const timeLeft = game.timeLeft - app.ticker.deltaMS / 1000
             const reps = game.reps + gained
             if (timeLeft <= 0) {
-              challenge67Game.set({ phase: 'finished', timeLeft: 0, reps })
+              challenge67Game.set({ ...game, phase: 'finished', timeLeft: 0, reps, lastResult: undefined })
               submitChallenge67Score(reps)
             } else {
-              challenge67Game.set({ phase: 'playing', timeLeft, reps })
+              challenge67Game.set({ ...game, phase: 'playing', timeLeft, reps })
             }
           }
         }
