@@ -13,10 +13,12 @@ An interactive photobooth application for events. It captures photos via a webca
 ## Features
 
 - **Camera selection page** — choose a preset RTSP IP camera, enter a custom RTSP URL, or use a local USB/built-in webcam
-- **Pose-reactive animations** — Owl, Globe, Parrot, and V15 Drone overlays that respond to body movement
-- **Photo capture flow** — countdown timer, confirm/cancel preview, automatic save
-- **QR code sharing** — scan to download or share captured photos
-- **Configurable settings** — resolution, save folder, animation toggles, debug overlay, and more
+- **Pose- and hand-reactive animations** — Owl, Bat, Globe, Drone, Scuba, OC Fusion, Pig Nose & Ears, Bat Ears, Clown Wig & Nose, Sunglasses, Mustache, and 67, all toggleable from an on-screen picker (up to 5 at once — see [`booth-field-guide.md`](booth-field-guide.md) for which pairs can't be combined and why)
+- **QR Code Mode** — an alternate mode where a guest holds up a physical QR card instead of using the picker; the matching character locks onto them
+- **67 Mode** — a standalone 20-second arm-waving minigame with name entry and a persisted leaderboard, swapping out the normal capture flow entirely
+- **Photo capture flow** — single shots or Burst Mode (3 shots into one strip), countdown timer, confirm/cancel preview, automatic save
+- **QR code sharing** — every saved photo/strip gets its own QR code linking to a downloadable online copy
+- **Configurable settings** — resolution, save folder, animation toggles, debug overlay, company banner/footer logos, and more
 
 ---
 
@@ -231,3 +233,19 @@ For complete instructions, see the **NS Photobooth – Setup & Run Guide**, whic
 - Full usage guide — camera selection, taking photos, settings panel, keyboard shortcuts
 - How pose detection works
 - Troubleshooting common issues
+
+---
+
+## Models & Credits
+
+The backend's body/hand tracking is built on the following third-party models, run locally — no frames or keypoints are sent to any external API:
+
+| Model | Used for | Repository |
+|---|---|---|
+| **YOLO26-Pose** (`yolo26n-pose.pt`) | Real-time body pose detection and per-person tracking | [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) |
+| **BoT-SORT** | Multi-person tracking across frames (keeps the same animation on the same person) | [NirAharon/BoT-SORT](https://github.com/NirAharon/BoT-SORT) |
+| **ViTPose++ (Huge)** (`usyd-community/vitpose-plus-huge`) | Refines YOLO's keypoints for more precise arm/shoulder/wrist tracking, used when a GPU is available | [ViTAE-Transformer/ViTPose](https://github.com/ViTAE-Transformer/ViTPose) |
+| **WiLoR** | Hand detection and palm orientation, used to trigger the Drone, Scuba, OC Fusion, and 67 animations | [rolpotamias/WiLoR](https://github.com/rolpotamias/WiLoR) |
+| **MediaPipe Pose Landmarker** (lite) | Pose tracking for 67 Mode specifically — kept independent of the YOLO/ViTPose/WiLoR pipeline above | [google-ai-edge/mediapipe](https://github.com/google-ai-edge/mediapipe) |
+
+All five run as vendored/pip-installed dependencies of this project; none of their original authors are affiliated with or endorse NS Photobooth.
