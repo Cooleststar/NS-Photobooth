@@ -22,6 +22,11 @@ import {
   selectedBannerLogo,
   offlineOnly,
   cameraInitialized,
+  cameraSource,
+  getBackendHttpUrl,
+  replayReturnSource,
+  replayVideo,
+  replayVideoLabel,
   photoCountdownSec,
   pictures,
   pointerEnabled,
@@ -148,6 +153,108 @@ function BannerLogoSelect() {
       </select>
       <span tw='text-xs text-gray-500'>
         Shown on the live feed and included in every photo taken.
+      </span>
+    </div>
+  )
+}
+
+/** Plays a recorded video in place of the camera, for testing animations
+ * against the same footage repeatedly.
+ *
+ * A browser file picker only exposes the file's contents, never its path, so
+ * the video is uploaded to the backend once and played from there. Choosing
+ * the same file again skips the upload. */
+function ReplayVideoSelect() {
+  const source = useStore(cameraSource)
+  const label = useStore(replayVideoLabel)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const replaying = source === 'replay'
+
+  const startReplay = (name: string, filename: string) => {
+    if (cameraSource.get() !== 'replay') replayReturnSource.set(cameraSource.get())
+    replayVideo.set(name)
+    replayVideoLabel.set(filename)
+    cameraSource.set('replay')
+  }
+
+  const upload = (file: File, name: string) =>
+    new Promise<void>((resolve, reject) => {
+      // XMLHttpRequest rather than fetch: fetch reports no upload progress,
+      // and a recording can take a while to send from another device.
+      const xhr = new XMLHttpRequest()
+      const q = `name=${encodeURIComponent(file.name)}&size=${file.size}`
+      xhr.open('POST', `${getBackendHttpUrl()}/replay/upload?${q}`)
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          setStatus(`Uploading… ${Math.round((e.loaded / e.total) * 100)}%`)
+        }
+      }
+      xhr.onload = () =>
+        xhr.status === 200
+          ? resolve()
+          : reject(new Error(xhr.responseText || `HTTP ${xhr.status}`))
+      xhr.onerror = () => reject(new Error('Could not reach the backend'))
+      xhr.send(file)
+    }).then(() => startReplay(name, file.name))
+
+  const onPick = async (file: File | undefined) => {
+    if (!file) return
+    setBusy(true)
+    setStatus('Checking…')
+    try {
+      const q = `name=${encodeURIComponent(file.name)}&size=${file.size}`
+      const res = await fetch(`${getBackendHttpUrl()}/replay/check?${q}`)
+      if (!res.ok) throw new Error(await res.text())
+      const { name, exists } = (await res.json()) as { name: string; exists: boolean }
+      if (exists) startReplay(name, file.name)
+      else await upload(file, name)
+      setStatus('')
+    } catch (e) {
+      setStatus(`Failed: ${(e as Error).message}`)
+    } finally {
+      setBusy(false)
+      // Cleared so picking the same file again still fires onChange.
+      if (inputRef.current) inputRef.current.value = ''
+    }
+  }
+
+  return (
+    <div tw='flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>Test Video</span>
+      <input
+        ref={inputRef}
+        type='file'
+        accept='video/*,.mkv,.ts'
+        tw='hidden'
+        onChange={(e) => onPick((e.target as HTMLInputElement).files?.[0])}
+      />
+      <button
+        type='button'
+        disabled={busy}
+        tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors disabled:opacity-50'
+        onClick={() => inputRef.current?.click()}
+      >
+        {busy ? status : replaying ? 'Choose another video…' : 'Choose video…'}
+      </button>
+      {replaying && (
+        <>
+          <span tw='text-xs text-gray-400 truncate' title={label}>
+            Replaying {label || 'video'} on a loop
+          </span>
+          <button
+            type='button'
+            tw='w-full text-sm py-2 px-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-left transition-colors'
+            onClick={() => cameraSource.set(replayReturnSource.get())}
+          >
+            Stop replay (back to camera)
+          </button>
+        </>
+      )}
+      {!busy && status && <span tw='text-xs text-red-400'>{status}</span>}
+      <span tw='text-xs text-gray-500'>
+        Plays a recording through detection as if it were the camera.
       </span>
     </div>
   )
@@ -441,6 +548,10 @@ export default function Settings() {
                 Reset Animation
               </button>
             )}
+          </Section>
+
+          <Section title='Testing'>
+            <ReplayVideoSelect />
           </Section>
 
           <Section title='Actions'>

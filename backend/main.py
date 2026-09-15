@@ -1501,6 +1501,53 @@ _JPEG_SOI = b'\xff\xd8'
 _JPEG_EOI = b'\xff\xd9'
 
 
+# ---------------------------------------------------------------------------
+# Test-video replay
+# ---------------------------------------------------------------------------
+# A recorded video can stand in for the camera, so the same footage can be run
+# through the pipeline again after every fix instead of regathering people in
+# front of the booth. It goes through the RTSP reader rather than a separate
+# path on purpose: detection, throttling and broadcasting are then exactly what
+# a live camera gets, which is the whole point of testing against it.
+#
+# The browser can't hand the backend a file path - a file picker only exposes
+# the file's contents - so the video is uploaded once into REPLAY_DIR and then
+# referred to by name as `replay:<name>` wherever an RTSP URL would go.
+# REPLAY_DIR is gitignored: recordings show real people's faces.
+REPLAY_DIR = pathlib.Path(__file__).resolve().parent / 'replay_videos'
+REPLAY_PREFIX = 'replay:'
+_REPLAY_EXTS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.ts', '.m4v'}
+
+
+def _replay_name(filename: str, size: int) -> str | None:
+    """Stored name for an uploaded video, or None if it isn't a video.
+
+    The size goes into the name so a different recording that happens to share
+    a filename is kept apart rather than overwriting one that may be playing.
+    On Windows that overwrite would fail outright anyway - ffmpeg holds the
+    file open.
+    """
+    base = pathlib.Path(filename).name  # strips any directory part
+    stem, ext = pathlib.Path(base).stem, pathlib.Path(base).suffix.lower()
+    if ext not in _REPLAY_EXTS or size <= 0:
+        return None
+    safe = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in stem)[:80]
+    return f'{safe}__{size}{ext}'
+
+
+def _resolve_replay(url: str) -> pathlib.Path | None:
+    """File behind a `replay:<name>` URL, confined to REPLAY_DIR.
+
+    Only a bare name is accepted: the URL arrives in a query string from any
+    browser on the network, and must not become a way to read other files.
+    """
+    name = url[len(REPLAY_PREFIX):]
+    if not name or pathlib.Path(name).name != name:
+        return None
+    path = REPLAY_DIR / name
+    return path if path.is_file() else None
+
+
 def _ffmpeg_read_loop(
     rtsp_url: str,
     stop_event: threading.Event,
@@ -1516,18 +1563,37 @@ def _ffmpeg_read_loop(
     """
     global _current_frame, _current_jpg, _current_jpg_ts, _frame_id
 
+    if rtsp_url.startswith(REPLAY_PREFIX):
+        replay_path = _resolve_replay(rtsp_url)
+        if replay_path is None:
+            log.error("Replay video not found in %s: %s", REPLAY_DIR, rtsp_url)
+            return
+        input_args = [
+            # -re reads at the video's own frame rate. Without it ffmpeg
+            # decodes a file as fast as it can, so animations and tracking
+            # would run at several times real speed - nothing like a camera.
+            '-re',
+            # Loop forever, so a short clip can be watched as long as needed.
+            '-stream_loop', '-1',
+            '-i', str(replay_path),
+        ]
+    else:
+        input_args = [
+            '-rtsp_transport', 'tcp',
+            '-fflags', 'nobuffer',
+            '-flags', 'low_delay',
+            '-avioflags', 'direct',
+            '-probesize', '32',
+            '-analyzeduration', '0',
+            '-max_delay', '0',
+            '-reorder_queue_size', '0',
+            '-i', rtsp_url,
+        ]
+
     cmd = [
         'ffmpeg',
         '-hide_banner', '-loglevel', 'error',
-        '-rtsp_transport', 'tcp',
-        '-fflags', 'nobuffer',
-        '-flags', 'low_delay',
-        '-avioflags', 'direct',
-        '-probesize', '32',
-        '-analyzeduration', '0',
-        '-max_delay', '0',
-        '-reorder_queue_size', '0',
-        '-i', rtsp_url,
+        *input_args,
         '-vf', f'scale={width}:{height}',
         # Without an explicit output rate, skipping proper stream analysis
         # (-analyzeduration 0 -probesize 32, needed for low latency) makes
@@ -2240,6 +2306,68 @@ async def replace_photo_handler(request: web.Request) -> web.Response:
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
+async def replay_check_handler(request: web.Request) -> web.Response:
+    """Whether a video is already uploaded, so choosing it again is instant."""
+    try:
+        size = int(request.rel_url.query.get('size', '0'))
+    except ValueError:
+        size = 0
+    name = _replay_name(request.rel_url.query.get('name', ''), size)
+    if name is None:
+        return web.Response(status=400, text='Not a supported video file', headers=_CORS)
+    # A video copied straight into REPLAY_DIR (footage is shared by hand, not
+    # through git) and then picked from there is already in place under its
+    # own name - play it as is rather than uploading a duplicate beside it.
+    own = REPLAY_DIR / pathlib.Path(request.rel_url.query.get('name', '')).name
+    if own.is_file() and own.stat().st_size == size:
+        return web.json_response({'name': own.name, 'exists': True}, headers=_CORS)
+    path = REPLAY_DIR / name
+    exists = path.is_file() and path.stat().st_size == size
+    return web.json_response({'name': name, 'exists': exists}, headers=_CORS)
+
+
+async def replay_upload_handler(request: web.Request) -> web.Response:
+    """Receive a test video as the raw request body.
+
+    Streamed to disk in chunks: recordings run to hundreds of MB, past
+    client_max_size, which only limits bodies read into memory. Written to a
+    .part file and renamed at the end, so a cancelled upload never leaves a
+    truncated video that looks complete.
+    """
+    try:
+        size = int(request.rel_url.query.get('size', '0'))
+    except ValueError:
+        size = 0
+    name = _replay_name(request.rel_url.query.get('name', ''), size)
+    if name is None:
+        return web.Response(status=400, text='Not a supported video file', headers=_CORS)
+
+    REPLAY_DIR.mkdir(exist_ok=True)
+    final = REPLAY_DIR / name
+    part = final.with_name(final.name + '.part')
+    written = 0
+    try:
+        with open(part, 'wb') as f:
+            async for chunk in request.content.iter_chunked(1024 * 1024):
+                f.write(chunk)
+                written += len(chunk)
+        if written != size:
+            part.unlink(missing_ok=True)
+            return web.Response(
+                status=400,
+                text=f'Upload incomplete: got {written} of {size} bytes',
+                headers=_CORS,
+            )
+        os.replace(part, final)
+    except Exception as e:
+        part.unlink(missing_ok=True)
+        log.error("Replay upload failed: %s", e)
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+    log.info("Replay video saved: %s (%.1f MB)", final, written / 1e6)
+    return web.json_response({'name': name}, headers=_CORS)
+
+
 def make_http_app() -> web.Application:
     app = web.Application(middlewares=[cors_middleware], client_max_size=50 * 1024 * 1024)
     app.router.add_get('/ws_stream', ws_stream_handler)
@@ -2259,6 +2387,8 @@ def make_http_app() -> web.Application:
     app.router.add_delete('/photos/{filename}', delete_photo_handler)
     app.router.add_get('/photos/{filename}/strips', fetch_strips_handler)
     app.router.add_get('/gallery', gallery_client_handler)
+    app.router.add_get('/replay/check', replay_check_handler)
+    app.router.add_post('/replay/upload', replay_upload_handler)
     return app
 
 # ---------------------------------------------------------------------------
@@ -2286,7 +2416,9 @@ async def _rtsp_keepfresh_loop(interval_s: int = 300):
     while True:
         await asyncio.sleep(interval_s)
         url = _current_rtsp_url
-        if not url:
+        # A replayed file has no camera-side buffer to flush; reconnecting
+        # would only jump the video back to its start every few minutes.
+        if not url or url.startswith(REPLAY_PREFIX):
             continue
         log.info("RTSP keepfresh: reconnecting to flush camera buffer")
         await switch_rtsp_reader(url, force=True)

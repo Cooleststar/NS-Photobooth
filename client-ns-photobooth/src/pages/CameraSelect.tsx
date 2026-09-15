@@ -10,6 +10,7 @@ import {
   cameraSource,
   customRtspURL,
   getBackendHttpUrl,
+  replayVideoLabel,
   router,
   selectedDevice,
 } from '../store'
@@ -17,6 +18,7 @@ import {
 export default function CameraSelect() {
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
+  const replayLabel = useStore(replayVideoLabel)
   const [detectedCam, setDetectedCam] = useState<string>('')
   const [starting, setStarting] = useState(false)
 
@@ -95,6 +97,13 @@ export default function CameraSelect() {
             <optgroup label='Local'>
               <option value='webcam'>USB / Webcam</option>
             </optgroup>
+            {/* Chosen from Settings > Testing, which uploads the file; listed
+                here only so a saved replay still shows as selected. */}
+            {replayLabel && (
+              <optgroup label='Testing'>
+                <option value='replay'>Test video: {replayLabel}</option>
+              </optgroup>
+            )}
           </select>
         </label>
 
