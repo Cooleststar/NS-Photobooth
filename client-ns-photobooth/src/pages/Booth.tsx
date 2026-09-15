@@ -38,7 +38,7 @@ export default function Booth() {
         photographerRef={photographerRef}
       />
       <HUD photographerRef={photographerRef} />
-      <Modal locked hidden={focused}>
+      <Modal variant='modern' locked hidden={focused}>
         <h2>Click this window to regain focus</h2>
       </Modal>
     </>

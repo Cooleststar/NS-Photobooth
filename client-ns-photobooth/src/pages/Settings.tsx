@@ -555,8 +555,12 @@ export default function Settings() {
             {!qrMode && !challenge67 && (
               <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
             )}
-            <BannerLogoSelect />
-            <CoyLogoSelect />
+            {/* Neither applies in 67 Mode: it replaces the whole capture
+                flow, so there's no live-feed banner or photo strip for
+                either logo to appear on - see the matching skip in
+                Display.tsx's createBanner call. */}
+            {!challenge67 && <BannerLogoSelect />}
+            {!challenge67 && <CoyLogoSelect />}
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
             {!challenge67 && (

@@ -1171,13 +1171,19 @@ tmp.toBlob(blob => {
       // gifOptions empty (or only 'none'): no animGroups, no cornerAnims — raw video feed only
 
       const arrowCount = isMulti ? MAX_PEOPLE : 1
+      // No banner logo in 67 Mode: it replaces the whole capture flow (see
+      // HUD.tsx), so there's never a photo taken for it to appear on, and
+      // it would otherwise just sit over the arm-waving game the whole
+      // round for no reason.
       const [arrows, banner] = await Promise.all([
         Promise.all(Array.from({ length: arrowCount }, () => createArrowPointer(app))),
-        createBanner(app),
+        challenge67On ? Promise.resolve(undefined) : createBanner(app),
       ])
       for (const [container] of arrows) animLayer.addChild(container)
-      app.stage.addChild(banner.logoContainer)
-      bannerUnsubscribe = banner.unsubscribe
+      if (banner) {
+        app.stage.addChild(banner.logoContainer)
+        bannerUnsubscribe = banner.unsubscribe
+      }
 
       // Added to app.stage last (topmost), now that everything else is on
       // the stage too, so confetti renders over every character rather
@@ -1475,7 +1481,33 @@ tmp.toBlob(blob => {
         // already discarded. Either way the gif silently never appears again
         // until a full page reload resets both caches. Just destroy this
         // app instance; the shared loader/textureCache persist correctly.
-        app.destroy()
+        //
+        // { children: true } matters here, for a reason worse than a plain
+        // memory leak: every gif-based character (owl/globe/drone/scuba) is
+        // a @pixi/gif AnimatedGIF, cloned per mount from its own private
+        // <canvas> — and AnimatedGIF.destroy() starts with this.stop(),
+        // which is the ONLY thing that unhooks it from PIXI.Ticker.shared.
+        // Without { children: true }, destroy() is never called on these
+        // child sprites at all (Container.destroy only recurses into
+        // children when told to), so an abandoned character's decode loop
+        // keeps running on the shared ticker forever — redrawing an
+        // invisible canvas and re-uploading it to the GPU every frame, for
+        // the rest of the tab's life, compounding with every character
+        // toggle/camera switch/mode change for the rest of the event.
+        // Every other sprite (corner props, QR-locked instances, the banner
+        // logo row) also needs its own destroy() for the same reason on a
+        // smaller scale: every Sprite unconditionally does
+        // `texture.on('update', ...)` in its constructor, and only its own
+        // destroy() ever calls the matching `.off()` — until then that's a
+        // live reference from a texture that never goes away back to a
+        // sprite that should have, keeping its whole subtree from ever
+        // being garbage collected. This app's own renderer/GPU context is
+        // destroyed either way; { children: true } only reaches the sprites
+        // this mount OWNS. texture/baseTexture are deliberately left out
+        // (default false) - those flags would additionally destroy the
+        // shared cached resources covered by the paragraph above, which
+        // must survive this destroy for the next mount to reuse them.
+        app.destroy(false, { children: true })
       } catch (e) {
         console.warn(e)
       }

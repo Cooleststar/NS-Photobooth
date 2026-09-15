@@ -290,16 +290,20 @@ export default function HUD({ photographerRef }: HUDProps) {
       )
     case 'confirm':
       return (
-        <Modal onDismiss={cancelUpload}>
-          <h2>
-            Confirm?
-            {images.length > 1 && ` (Strip ${previewIndex + 1}/${images.length})`}
-          </h2>
+        <Modal variant='modern' onDismiss={cancelUpload}>
+          <div tw='flex items-baseline justify-center gap-3'>
+            <h2>Confirm?</h2>
+            {images.length > 1 && (
+              <span tw='text-sm font-normal text-[#98a1b0]' style={{ fontVariantNumeric: 'tabular-nums' }}>
+                Strip {previewIndex + 1} of {images.length}
+              </span>
+            )}
+          </div>
           <img
-            tw='object-scale-down max-h-full max-w-full min-h-0 min-w-0'
+            tw='object-scale-down max-h-full max-w-full min-h-0 min-w-0 rounded-lg'
             src={images[previewIndex]}
           />
-          <span tw='flex flex-row gap-5'>
+          <span tw='flex flex-row gap-3'>
             {images.length > 1 && (
               <>
                 {/* Arrow keys, matching how the rest of the preview is driven
@@ -313,6 +317,7 @@ export default function HUD({ photographerRef }: HUDProps) {
                 <KeybindBtn
                   keyCode='ArrowLeft'
                   onClick={() => setPreviewIndex((i) => Math.max(0, i - 1))}
+                  tw='rounded-lg bg-[#272c35] hover:bg-[#2c313b] text-[#cbd2dc] font-medium px-4 py-2.5 text-base disabled:(bg-[#272c35] text-[#6f7887] pointer-events-none)'
                 >
                   Prev
                 </KeybindBtn>
@@ -321,15 +326,24 @@ export default function HUD({ photographerRef }: HUDProps) {
                   onClick={() =>
                     setPreviewIndex((i) => Math.min(images.length - 1, i + 1))
                   }
+                  tw='rounded-lg bg-[#272c35] hover:bg-[#2c313b] text-[#cbd2dc] font-medium px-4 py-2.5 text-base disabled:(bg-[#272c35] text-[#6f7887] pointer-events-none)'
                 >
                   Next
                 </KeybindBtn>
               </>
             )}
-            <KeybindBtn keyCode='PageUp' onClick={confirmUpload}>
+            <KeybindBtn
+              keyCode='PageUp'
+              onClick={confirmUpload}
+              tw='rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold px-6 py-2.5 text-base disabled:(bg-[#3a404b] text-[#6f7887] pointer-events-none)'
+            >
               Confirm
             </KeybindBtn>
-            <KeybindBtn keyCode='PageDown' onClick={cancelUpload}>
+            <KeybindBtn
+              keyCode='PageDown'
+              onClick={cancelUpload}
+              tw='rounded-lg bg-transparent hover:bg-[#272c35] text-[#cbd2dc] font-semibold px-6 py-2.5 text-base border border-[#3a404b] disabled:(text-[#6f7887] pointer-events-none)'
+            >
               Cancel
             </KeybindBtn>
           </span>
@@ -343,7 +357,13 @@ export default function HUD({ photographerRef }: HUDProps) {
       )
     case 'error':
       return (
-        <Modal>
+        // onDismiss matters here, unlike the other Modals in this file:
+        // clicking the backdrop or the x only hides Modal's own internal
+        // state, it doesn't touch HUD's state machine - without this,
+        // dismissing any way other than "Done" left `state` stuck on
+        // 'error' while the modal that was rendering it had hidden itself,
+        // i.e. a blank screen with nothing clickable.
+        <Modal onDismiss={() => setState('ready')}>
           <h2>Error</h2>
           <p>{error}</p>
           <KeybindBtn keyCode='PageUp' onClick={() => setState('ready')}>
