@@ -68,10 +68,17 @@ export const MAX_SELECTED = 5
  * selecting both spawns a drone and a number on every one of the same palms,
  * overlapping rather than reading as two props.
  *
+ * sixseven + boxglove: both key off the same hand, just on opposite states of
+ * it (open palm vs. closed fist) — a hand closing into a fist is exactly the
+ * moment a glove wants to appear and a number wants to fade, so with both on,
+ * the same hand flickers between a digit and a glove instead of settling on
+ * either.
+ *
  * Add further groups here; nothing else needs changing. */
 export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
   ['owl', 'bat'],
   ['drone', 'sixseven'],
+  ['sixseven', 'boxglove'],
 ]
 
 /** Which already-selected option, if any, blocks `option` from being added.

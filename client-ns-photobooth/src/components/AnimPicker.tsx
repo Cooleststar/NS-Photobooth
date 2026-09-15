@@ -9,11 +9,16 @@ import {
   qrModeEnabled,
   selectedGifs,
 } from '../store'
-import owlThumb from '../assets/owl_anim/owl_idle_new.gif'
+// Static frames rather than the live GIFs themselves — the picker bar sits
+// on screen the whole time a guest is at the booth, and four animations
+// playing at once in a 56px button row was distracting rather than helpful.
+// Each is frame 0 of its matching gif, extracted once and committed as a
+// plain PNG (see the animation's own asset folder for the source gif).
+import owlThumb from '../assets/owl_anim/owl_thumb.png'
 import batThumb from '../assets/Bat_anim/Bat_rest.png'
-import globeThumb from '../assets/globe_anim/globe.gif'
-import droneThumb from '../assets/drone_anim/drone.gif'
-import scubaThumb from '../assets/cat_anim/scuba.gif'
+import globeThumb from '../assets/globe_anim/globe_thumb.png'
+import droneThumb from '../assets/drone_anim/drone_thumb.png'
+import scubaThumb from '../assets/cat_anim/scuba_thumb.png'
 import pigNoseThumb from '../assets/Pignose/Pignose_icon.jpg'
 import batEarsThumb from '../assets/batears/batearsicon.png'
 import clownWigNoseThumb from '../assets/ClownWigNose/ClownWig.webp'
