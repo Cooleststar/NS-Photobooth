@@ -33,10 +33,10 @@ const PALM_HOLD_TIME = 0.4
 const PALM_CONFIRM_TIME = 0.15
 const FOLLOW_RATE = 14
 
-// Two hands per pair, and the backend caps at 8 simultaneous hands
-// (WILOR_MAX_HANDS in backend/wilor_hands.py), so four pairs is the real
+// Two hands per pair, and the backend caps at 10 simultaneous hands
+// (WILOR_MAX_HANDS in backend/wilor_hands.py), so five pairs is the real
 // ceiling — anything more would be starved of data.
-const PAIR_SLOTS = 4
+const PAIR_SLOTS = 5
 
 // How far a slot may reach to re-claim one of its two hands, as a fraction of
 // screen width. Same value and same reasoning as drone.ts's constant of the
@@ -72,6 +72,8 @@ const DIAGONAL_EXIT_ANGLE = (12 * Math.PI) / 180
 const DIAGONAL_MAX_ANGLE = (72 * Math.PI) / 180
 
 interface Point { x: number; y: number }
+/** A palm-up hand: where it is, and which person it belongs to. */
+interface Palm extends Point { owner: number }
 interface FeedBounds { left: number; right: number; top: number; bottom: number }
 /** Where a pair's two numbers should sit this frame. */
 interface PairTarget { six: Point; seven: Point }
@@ -92,12 +94,27 @@ function clampPos(x: number, y: number, size: number, b: FeedBounds) {
 // the palm's center at any hand orientation. Same set drone.ts uses.
 const PALM_LANDMARKS = [0, 5, 9, 13, 17]
 
-function palmCenter(h: HandData, height: number, width: number): Point {
+function palmCenter(h: HandData, height: number, width: number): Palm {
   let x = 0, y = 0
   for (const i of PALM_LANDMARKS) { x += h.x[i]; y += h.y[i] }
   x /= PALM_LANDMARKS.length
   y /= PALM_LANDMARKS.length
-  return { x: (1 - x) * width, y: y * height }
+  return { x: (1 - x) * width, y: y * height, owner: h.owner }
+}
+
+/** Whether two hands belong to the same person, per the backend's owner tags.
+ *
+ * Position alone cannot decide this. With people standing behind each other,
+ * a front person's hand is often nearer a back person's hand than its own
+ * partner, and pairing those gave one person a 6 on both hands while the
+ * person behind got two 7s. On the 5-person test footage, 15 of the 17 pairs
+ * that could be checked were two left or two right hands.
+ *
+ * Unknown owners (-1) never pair. A hand whose wrist the pose model missed
+ * shows no number rather than risking the wrong one; the hold timer covers a
+ * brief miss on a pair already showing. */
+function sameOwner(a: Palm, b: Palm) {
+  return a.owner >= 0 && a.owner === b.owner
 }
 
 /** Tilt of the line between two palms, 0 (level) to PI/2 (stacked vertically).
@@ -157,7 +174,10 @@ function assignPairsToSlots(
   }
   for (let i = 0; i < slots.length; i++) {
     const { six, seven } = recovered[i]
-    if (six >= 0 && seven >= 0) {
+    // Both hands found AND still one person's. Each role re-claims its nearest
+    // hand independently, so when one of a pair's hands disappears, the
+    // nearest replacement can be a neighbour's.
+    if (six >= 0 && seven >= 0 && sameOwner(available[six], available[seven])) {
       // Roles stay stuck to the hand each already had — deliberately NOT
       // re-sorted by x, or crossing the hands mid-gesture would swap the
       // glyphs over.
@@ -183,6 +203,7 @@ function assignPairsToSlots(
     for (let n = m + 1; n < free.length; n++) {
       const a = available[free[m]]
       const b = available[free[n]]
+      if (!sameOwner(a, b)) continue
       const dx = Math.abs(a.x - b.x)
       if (dx < minDx || dx > maxDx) continue
       const d = Math.hypot(a.x - b.x, a.y - b.y)
@@ -193,9 +214,9 @@ function assignPairsToSlots(
     }
   }
   // Ranked by plain distance, closest first — NOT by how diagonal the pair is.
-  // Preferring the steepest diagonal would actively favour the cross-person
-  // case (one person's raised hand with another's lowered one); closeness in
-  // both axes is the cheap proxy for "same body".
+  // Owners already rule out cross-person pairs; this only matters if the pose
+  // model hands one person more than two palms, where the closest two are the
+  // likeliest real pair.
   candidates.sort((a, b) => a.d - b.d)
   const newPairs: PairTarget[] = []
   for (const { a, b } of candidates) {

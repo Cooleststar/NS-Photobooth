@@ -2177,7 +2177,11 @@ async def detection_mode_handler(request: web.Request) -> web.Response:
         if mode not in ('pose', 'hands', 'none', 'both', 'qr', 'challenge67'):
             return web.Response(status=400, text='Invalid mode', headers=_CORS)
         _detection_mode = mode
-        log.info(f"Detection mode set to: {mode}")
+        # Whether hands should be tagged with the person they belong to. Sent
+        # with every mode change, so leaving it out switches it off.
+        hand_owners = bool(data.get('hand_owners', False))
+        _wilor_hands.set_owners_enabled(hand_owners)
+        log.info(f"Detection mode set to: {mode} (hand owners: {hand_owners})")
         # Bring WiLoR up the moment a character that reads hands is selected.
         # Non-blocking, so this response is not held for the several seconds
         # the load takes; detect() returns [] until it finishes, which reads

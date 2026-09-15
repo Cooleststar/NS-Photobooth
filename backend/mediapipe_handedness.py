@@ -75,7 +75,7 @@ MIN_HANDEDNESS_SCORE = float(os.environ.get('MP_HANDEDNESS_MIN_SCORE', '0.75'))
 
 # How many hands to look for. Matches WILOR_MAX_HANDS so neither becomes the
 # limiting factor on a busy frame.
-MAX_HANDS = int(os.environ.get('MP_HANDEDNESS_MAX_HANDS', '8'))
+MAX_HANDS = int(os.environ.get('MP_HANDEDNESS_MAX_HANDS', '10'))
 
 # MediaPipe hand landmark indices.
 WRIST = 0

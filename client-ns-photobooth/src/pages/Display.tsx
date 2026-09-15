@@ -577,11 +577,16 @@ export default function Display({
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let cycleTimer: ReturnType<typeof setTimeout> | undefined
 
+    // Characters that treat two hands as one person's need the backend to
+    // tag which person each hand belongs to (see HandData.owner). Off
+    // otherwise, since it runs a pose model alongside hand detection.
+    const handOwners = !challenge67On && !qrMode && gifOptions.includes('sixseven')
+
     const send = (mode: string) => {
       fetch(`${getBackendHttpUrl()}/detection_mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, hand_owners: handOwners }),
       })
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`)

@@ -14,8 +14,8 @@ const ANIM = {
 const KF_PARAMS = { R: 0.03, Q: 2 }
 
 // Must match WILOR_MAX_HANDS in backend/wilor_hands.py, same as DRONE_SLOTS.
-// One glove per hand, so a group of four with both fists up fills it exactly.
-const GLOVE_SLOTS = 8
+// One glove per hand, so a group of five with both fists up fills it exactly.
+const GLOVE_SLOTS = 10
 
 // How long a glove survives losing its hand, and how long a fist must be held
 // before one appears. Same reasoning as drone.ts's PALM_HOLD_TIME /

@@ -100,7 +100,46 @@ WILOR_DET_CONF = float(os.environ.get('WILOR_DET_CONF', '0.3'))
 # looked like a drone teleporting; now it reads as smooth following with
 # slightly more lag. Lower this if the lag becomes noticeable, or raise it if
 # a bigger group needs covering and the extra latency is acceptable.
-WILOR_MAX_HANDS = int(os.environ.get('WILOR_MAX_HANDS', '8'))
+#
+# Raised to 10 for five people, which is as many as this camera fits in frame
+# (tested 2026-09-14). At 8, two of ten raised hands were dropped on every
+# frame, and the hands left without a partner were paired with a neighbour's
+# by sixseven.ts - one person showing a 6 on both hands. Measured on that
+# footage with MediaPipe handedness included: ~117 ms per update at 8 hands.
+WILOR_MAX_HANDS = int(os.environ.get('WILOR_MAX_HANDS', '10'))
+
+# ---------------------------------------------------------------------------
+# Hand ownership - which person each hand belongs to
+# ---------------------------------------------------------------------------
+# Hand detections carry no identity, so anything that treats two hands as one
+# person's (sixseven.ts pairs a 6 and a 7) could only guess from position, and
+# with people standing behind each other a front hand is often nearer a back
+# person's hand than its own partner. On the 5-person test footage, 15 of the
+# 17 pairs that could be checked against MediaPipe were two left or two right
+# hands - two different people.
+#
+# MediaPipe's handedness can't close that gap: it finds ~3.4 of the ~9.7
+# raised palms per frame there, at either resolution. A pose model finds the
+# people, so each hand is given to the nearest wrist instead. Measured on the
+# same footage: all 108 resulting pairs were one person's left and right wrist,
+# and every pair MediaPipe could check was one left and one right hand.
+#
+# Runs HERE, on the very frame WiLoR just processed, rather than in main.py:
+# hand results come from this worker and lag the main pose loop, so matching
+# there would pair hands with where wrists used to be. Uses its own plain YOLO
+# instance (no tracking) so it never touches the main BoT-SORT tracker's state
+# or waits on its lock. ~10 ms per update, and only while a character that
+# needs it is selected - see set_owners_enabled.
+_OWNER_POSE_WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yolo26n-pose.pt')
+_OWNER_MIN_WRIST_CONF = 0.3
+# How far a hand point (knuckles, or box centre) may sit from a wrist and still
+# belong to it, in hand-box diagonals. The wrist is about half a hand from the
+# knuckles; a whole diagonal allows for bent wrists without reaching a
+# neighbour's.
+_OWNER_MAX_DIST_DIAGONALS = 1.0
+_COCO_WRISTS = (9, 10)
+_owners_enabled = False
+_owner_pose = None
 
 # Threshold on the vertical component of the palm normal. Same convention as
 # the MediaPipe path: negative is skyward. WiLoR's readings sit near +/-0.9 on
@@ -591,7 +630,18 @@ def _infer(frame: np.ndarray) -> list:
             'angle_src': angle_src,
             'w': float((x1 - x0) / w),
             'h': float((y1 - y0) / h),
+            # Which person this hand belongs to, this update only; -1 when
+            # unknown or when tagging is off. See _assign_owners.
+            'owner': -1,
         })
+
+    if _owners_enabled and hands:
+        try:
+            _assign_owners(frame, hands)
+        except Exception as _e:
+            # Owners stay -1: consumers treat that as "can't pair", which
+            # shows fewer props rather than wrong ones.
+            log.debug("hand owner lookup failed: %s: %s", type(_e).__name__, _e)
 
     if FIST_DEBUG and hands:
         global _fist_debug_last
@@ -605,6 +655,51 @@ def _infer(frame: np.ndarray) -> list:
                          np.degrees(hd['angle']), hd['w'], hd['h'])
 
     return hands
+
+
+def set_owners_enabled(enabled: bool) -> None:
+    """Turn hand-owner tagging on or off. main.py calls this whenever the
+    frontend reports what the selected characters need."""
+    global _owners_enabled
+    _owners_enabled = bool(enabled)
+
+
+def _assign_owners(frame: np.ndarray, hands: list) -> None:
+    """Set each hand's 'owner' to the index of the person whose wrist it is
+    at, or -1. Indices are per frame: they say which hands share a person in
+    this update, not who that person is across updates."""
+    global _owner_pose
+    if _owner_pose is None:
+        from ultralytics import YOLO
+        _owner_pose = YOLO(_OWNER_POSE_WEIGHTS)
+    r = _owner_pose(frame, verbose=False)[0]
+    if r.keypoints is None or len(r.keypoints) == 0:
+        return
+    h, w = frame.shape[:2]
+    kp = r.keypoints.xy.cpu().numpy()
+    kc = (r.keypoints.conf.cpu().numpy() if r.keypoints.conf is not None
+          else np.ones(kp.shape[:2], dtype=np.float32))
+    wrists = [(p, kp[p, k]) for p in range(len(kp)) for k in _COCO_WRISTS
+              if kc[p, k] >= _OWNER_MIN_WRIST_CONF]
+
+    links = []
+    for i, hd in enumerate(hands):
+        hx, hy = hd['x'][0] * w, hd['y'][0] * h
+        reach = _OWNER_MAX_DIST_DIAGONALS * float(np.hypot(hd['w'] * w, hd['h'] * h))
+        for j, (_, (wx, wy)) in enumerate(wrists):
+            d = float(np.hypot(hx - wx, hy - wy))
+            if d <= reach:
+                links.append((d, i, j))
+    # Nearest first, one hand per wrist, so two hands near one wrist can't both
+    # claim it and a hand can't be given to a farther person over a nearer one.
+    links.sort()
+    used_hand, used_wrist = set(), set()
+    for _, i, j in links:
+        if i in used_hand or j in used_wrist:
+            continue
+        hands[i]['owner'] = int(wrists[j][0])
+        used_hand.add(i)
+        used_wrist.add(j)
 
 
 def _worker():

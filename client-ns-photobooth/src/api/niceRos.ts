@@ -37,6 +37,8 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
           palm_sky: boolean; fist: boolean; curl: number
           angle: number; w: number; h: number; conf: number
           label_src: 'mp' | 'wilor'; angle_src: 'mp' | 'wilor'
+          // Optional: an older backend doesn't send it.
+          owner?: number
         }[]
         mp_pose?: { x: number[]; y: number[]; z: number[]; scores: number[] } | null
         qr_codes?: { payload: string; x: number; y: number }[]
@@ -70,6 +72,7 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
         h: h.h,
         conf: h.conf,
         labelSrc: h.label_src,
+        owner: h.owner ?? -1,
         angleSrc: h.angle_src,
       }))
       dataRef.current.qrCodes = (qr_codes ?? []) as QrCodeDetection[]

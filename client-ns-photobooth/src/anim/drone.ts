@@ -323,8 +323,9 @@ export async function createDroneAnim(
   //
   // Both were 4, which is only two people showing both palms — an ordinary
   // group at a photo booth, so the ceiling sat in the middle of normal use.
-  // Now 8. See WILOR_MAX_HANDS for the per-hand cost this buys.
-  const DRONE_SLOTS = 8
+  // Now 10: five people, as many as the camera fits. See WILOR_MAX_HANDS for
+  // the per-hand cost this buys.
+  const DRONE_SLOTS = 10
   const drones = await Promise.all(
     Array.from({ length: DRONE_SLOTS }, () =>
       createHandDrone(app, droneSize, hoverOffset, bobAmplitude, bounds),

@@ -44,6 +44,12 @@ export type HandData = {
    * found no matching hand. Consumers that care about handedness should check
    * this before trusting `label`. */
   labelSrc: 'mp' | 'wilor'
+  /** Which person this hand belongs to, as an index valid for this update
+   * only - two hands with the same non-negative owner are one person's. -1
+   * when unknown, or when the backend isn't tagging owners (it only does
+   * while a character that asks for it is selected; see Display.tsx's
+   * detection_mode request). Matched to pose-model wrists in the backend. */
+  owner: number
 }
 
 /** One decoded QR code (QR mode). x/y are its center — normalized 0-1 on
