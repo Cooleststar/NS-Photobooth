@@ -38,6 +38,25 @@ export default function Challenge67UI() {
     challenge67Game.set({ ...challenge67Game.get(), phase: 'naming', timeLeft: 0, reps: 0 })
   }
 
+  // Same destination as begin() (phase -> 'countdown'), skipping 'naming'
+  // entirely - the whole point is going again as the same player without
+  // retyping a name that's already sitting on the shared atom from last
+  // round. lastResult is cleared for the same reason begin()'s route
+  // through 'naming' -> 'countdown' -> 'playing' ends up clearing it (via
+  // the 'finished' transition in Display.tsx's ticker): without it, a
+  // round ending early for some reason would flash the PREVIOUS round's
+  // score/rank/leaderboard instead of nothing.
+  const retry = () => {
+    if (game.phase !== 'finished') return
+    challenge67Game.set({
+      ...challenge67Game.get(),
+      phase: 'countdown',
+      timeLeft: 0,
+      reps: 0,
+      lastResult: undefined,
+    })
+  }
+
   const begin = () => {
     if (game.phase !== 'naming') return
     const name = nameInput.trim().slice(0, MAX_NAME_LEN) || 'Anonymous'
@@ -130,9 +149,24 @@ export default function Challenge67UI() {
               ))}
             </div>
           )}
-          <KeybindBtn keyCode='PageUp' onClick={start} tw='text-xl px-6 py-3'>
-            Play Again
-          </KeybindBtn>
+          <div tw='flex flex-row gap-4'>
+            <KeybindBtn keyCode='PageUp' onClick={start} tw='text-xl px-6 py-3'>
+              Play
+            </KeybindBtn>
+            {/* Not PageDown: HUD.tsx binds that globally (cycling a debug
+                pose index), gated on ITS OWN `state`, which stays 'ready'
+                the whole time 67 Mode is active - 67 Mode is an early
+                return in HUD's render, not a full component swap, so that
+                keybind is still live underneath this screen. KeyR avoids
+                the collision and doubles as a mnemonic. */}
+            <KeybindBtn
+              keyCode='KeyR'
+              onClick={retry}
+              tw='text-xl px-6 py-3 bg-green-600 hover:bg-green-800'
+            >
+              Retry
+            </KeybindBtn>
+          </div>
         </div>
       )
   }
