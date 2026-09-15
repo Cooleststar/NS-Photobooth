@@ -22,10 +22,11 @@ const NOISE_DEADBAND = 0.0005
 // all - keeps a tiny twitch from counting the same as a real arm-flap. Every
 // rep that clears this scores exactly 1 point regardless of how far past it
 // the stroke went - no partial credit for bigger flaps.
-// Lowered from 0.15 so a shorter, faster flap (not full range of motion)
-// still registers - raise this back up if it starts triggering on noise/
+// Lowered from 0.15 to 0.08 so a shorter, faster flap (not full range of
+// motion) still registers, then to 0.05 on request to make scoring a point
+// easier still - raise this back up if it starts triggering on noise/
 // incidental movement instead of a deliberate flap.
-const LOW_RELATIVE_AMPLITUDE = 0.08
+const LOW_RELATIVE_AMPLITUDE = 0.05
 // Minimum time between counted reps per arm - a real flap can't reverse
 // direction faster than this, so anything quicker is the smoothed signal
 // oscillating around the noise floor rather than a second stroke.
