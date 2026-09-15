@@ -274,9 +274,17 @@ export type HikvisionIP = typeof HIKVISION_IPS[number]
 export const RTSP_BASE = 'rtsp://admin:CV@hikvision@192.168.1.'
 export const HIKVISION_USER = 'admin'
 export const HIKVISION_PASS = 'CV@hikvision'
-export type CameraSource = HikvisionIP | 'custom' | 'webcam'
+export type CameraSource = HikvisionIP | 'custom' | 'webcam' | 'replay'
 export const cameraSource = persistentAtom<CameraSource>('cameraSource', '65', opts)
 export const customRtspURL = persistentAtom<string>('customRtspURL', '')
+
+// Test-video replay (Settings > Testing). The backend stores the uploaded
+// video and plays it through the same reader a live camera uses; replayVideo
+// is its stored name there, replayVideoLabel the original filename for
+// display. replayReturnSource is the camera to go back to on Stop.
+export const replayVideo = persistentAtom<string>('replayVideo', '')
+export const replayVideoLabel = persistentAtom<string>('replayVideoLabel', '')
+export const replayReturnSource = persistentAtom<CameraSource>('replayReturnSource', '65', opts)
 
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)

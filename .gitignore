@@ -64,3 +64,6 @@ __pycache__/
 # `git add .` will happily re-stage an untracked file, which is how it got
 # committed in dc6f917 in the first place.
 /config.json
+
+# Test videos for replay (Settings > Testing). They show real people.
+backend/replay_videos/

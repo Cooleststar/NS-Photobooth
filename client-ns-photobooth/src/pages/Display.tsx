@@ -66,6 +66,7 @@ import {
   RTSP_BASE,
   cameraSource,
   customRtspURL,
+  replayVideo,
   poseInd,
   selectedDevice,
   selectedGifs,
@@ -487,9 +488,14 @@ export default function Display({
   const camSource = useStore(cameraSource)
   const customUrl = useStore(customRtspURL)
   const isMulti = useStore(multiTarget)
+  const replayName = useStore(replayVideo)
+  // A replayed test video goes through the backend's RTSP reader, so from
+  // here on it is treated exactly like an RTSP camera.
   const rtspUrlValue = (HIKVISION_IPS as readonly string[]).includes(camSource)
     ? RTSP_BASE + camSource + '/Streaming/Channels/101'
-    : camSource === 'custom' ? customUrl : ''
+    : camSource === 'custom' ? customUrl
+    : camSource === 'replay' && replayName ? `replay:${replayName}`
+    : ''
   const isRtspMode = !!rtspUrlValue
   const wsStreamUrl = isRtspMode
     ? `ws://${window.location.hostname}:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}&multi=${isMulti ? '1' : '0'}`
