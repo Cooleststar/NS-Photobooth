@@ -2315,6 +2315,12 @@ async def replay_check_handler(request: web.Request) -> web.Response:
     name = _replay_name(request.rel_url.query.get('name', ''), size)
     if name is None:
         return web.Response(status=400, text='Not a supported video file', headers=_CORS)
+    # A video copied straight into REPLAY_DIR (footage is shared by hand, not
+    # through git) and then picked from there is already in place under its
+    # own name - play it as is rather than uploading a duplicate beside it.
+    own = REPLAY_DIR / pathlib.Path(request.rel_url.query.get('name', '')).name
+    if own.is_file() and own.stat().st_size == size:
+        return web.json_response({'name': own.name, 'exists': True}, headers=_CORS)
     path = REPLAY_DIR / name
     exists = path.is_file() and path.stat().st_size == size
     return web.json_response({'name': name, 'exists': exists}, headers=_CORS)

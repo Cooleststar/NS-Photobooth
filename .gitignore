@@ -65,5 +65,8 @@ __pycache__/
 # committed in dc6f917 in the first place.
 /config.json
 
-# Test videos for replay (Settings > Testing). They show real people.
-backend/replay_videos/
+# Test videos for replay (Settings > Testing). The folder is tracked so it
+# exists on every clone; the videos are not - they show real people and
+# this repo is public. Share footage by hand. See the folder's README.
+backend/replay_videos/*
+!backend/replay_videos/README.md
