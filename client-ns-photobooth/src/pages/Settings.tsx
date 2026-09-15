@@ -15,10 +15,9 @@ import {
   debugEnabled,
   multiTarget,
   COY_LOGOS,
-  CoyLogo,
   selectedCoyLogo,
   BANNER_LOGOS,
-  BannerLogo,
+  BANNER_LOGO_ORDER,
   selectedBannerLogo,
   offlineOnly,
   cameraInitialized,
@@ -96,65 +95,116 @@ function SwitchRow({
   )
 }
 
-/** Dropdown that opens into a checkbox list — lets several animations be
- * selected at once (see selectedGifs) while still collapsing to a single
- * closed control like a normal dropdown. */
-/** The middle logo in the photo strip footer, which is [11logo] [this] [QR].
- * 11logo is fixed; this slot holds fusionlogo by default and a company logo
- * when one is chosen.
- *
- * A plain single-select, unlike AnimMultiSelect above: exactly one logo
- * applies at a time, and it is set once per event rather than adjusted during
- * one. */
-function CoyLogoSelect() {
-  const current = useStore(selectedCoyLogo)
+/** Dropdown that opens into a checkbox list — lets several logos (or, above,
+ * several animations) be selected at once while still collapsing to a
+ * single closed control like a normal dropdown. Selecting several grows the
+ * row they're drawn in outward rather than shrinking logos to fit — see
+ * anim/banner.ts and lib/photoStrip.ts's drawFooter. */
+function LogoMultiSelect<K extends string>({
+  label,
+  helperText,
+  options,
+  order,
+  selectedAtom,
+}: {
+  label: string
+  helperText: string
+  options: Record<K, string>
+  /** Display order, when it's not safe to rely on Object.keys(options) - see
+   * BANNER_LOGO_ORDER in store.ts. Defaults to Object.keys(options), which
+   * is fine for options with no integer-like keys (e.g. COY_LOGOS). */
+  order?: readonly K[]
+  selectedAtom: WritableAtom<K[]>
+}) {
+  const selected = useStore(selectedAtom)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  const keys = order ?? (Object.keys(options) as K[])
+  const entries = keys.filter((key) => key !== 'none').map((key): [K, string] => [key, options[key]])
+  const summary = selected.length === 0
+    ? 'No logo'
+    : selected.map((k) => options[k]).join(', ')
+
   return (
-    <div tw='flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>Footer Logo</span>
-      <select
-        value={current}
-        onChange={(e) =>
-          selectedCoyLogo.set((e.target as HTMLSelectElement).value as CoyLogo)
-        }
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
+    <div ref={rootRef} tw='relative flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>{label}</span>
+      <button
+        type='button'
+        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 text-left truncate flex items-center justify-between gap-2'
+        onClick={() => setOpen((o) => !o)}
       >
-        {Object.entries(COY_LOGOS).map(([key, label]) => (
-          <option key={key} value={key}>{label}</option>
-        ))}
-      </select>
-      <span tw='text-xs text-gray-500'>
-        Sits beside the 11 logo on photo strips taken from now on; strips
-        already taken keep the logo they were made with.
-      </span>
+        <span tw='truncate'>{summary}</span>
+        <span tw='text-gray-500 flex-shrink-0'>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div tw='absolute top-full left-0 right-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto p-1'>
+          {entries.map(([key, optLabel]) => {
+            const checked = selected.includes(key)
+            return (
+              <label
+                key={key}
+                tw='flex items-center gap-2 text-sm text-gray-300 px-2 py-1.5 rounded hover:bg-gray-700 cursor-pointer'
+              >
+                <input
+                  type='checkbox'
+                  checked={checked}
+                  onChange={() =>
+                    selectedAtom.set(
+                      checked
+                        ? selected.filter((k) => k !== key)
+                        : [...selected, key],
+                    )
+                  }
+                />
+                {optLabel}
+              </label>
+            )
+          })}
+        </div>
+      )}
+      <span tw='text-xs text-gray-500'>{helperText}</span>
     </div>
   )
 }
 
-/** The logo shown over the live feed, at the bottom of the banner frame.
+/** The middle slot in the photo strip footer, which is [11logo] [these, side
+ * by side] [QR]. 11logo is fixed; this slot holds zero or more company logos,
+ * fusionlogo by default. */
+function CoyLogoSelect() {
+  return (
+    <LogoMultiSelect
+      label='Footer Logo'
+      helperText='Sits beside the 11 logo on photo strips taken from now on; strips already taken keep the logos they were made with.'
+      options={COY_LOGOS}
+      selectedAtom={selectedCoyLogo}
+    />
+  )
+}
+
+/** The logo(s) shown over the live feed, at the bottom of the banner frame.
  *
  * Separate from the footer selector: this one appears in every captured photo
  * (the frame hides during capture, the logo does not), while the footer one
  * appears on the printed strip. They can differ. */
 function BannerLogoSelect() {
-  const current = useStore(selectedBannerLogo)
   return (
-    <div tw='flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>Banner Logo</span>
-      <select
-        value={current}
-        onChange={(e) =>
-          selectedBannerLogo.set((e.target as HTMLSelectElement).value as BannerLogo)
-        }
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
-      >
-        {Object.entries(BANNER_LOGOS).map(([key, label]) => (
-          <option key={key} value={key}>{label}</option>
-        ))}
-      </select>
-      <span tw='text-xs text-gray-500'>
-        Shown on the live feed and included in every photo taken.
-      </span>
-    </div>
+    <LogoMultiSelect
+      label='Banner Logo'
+      helperText='Shown on the live feed and included in every photo taken.'
+      options={BANNER_LOGOS}
+      order={BANNER_LOGO_ORDER}
+      selectedAtom={selectedBannerLogo}
+    />
   )
 }
 

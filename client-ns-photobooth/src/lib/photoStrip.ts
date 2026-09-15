@@ -1,13 +1,22 @@
 import QRCode from 'qrcode'
+import { contentBox } from './imageBounds'
 import { LOGO_URLS, LogoKey } from './logos'
-import { CoyLogo, selectedCoyLogo } from '../store'
+import { COY_LOGOS, CoyLogo, selectedCoyLogo } from '../store'
 
 const logo11Url = LOGO_URLS['11']
 
-/** The middle slot's file, or null for 'none' - which draws nothing rather
- * than a blank. 11logo is never selectable here: it is the fixed slot. */
-function coyLogoUrl(key: CoyLogo): string | null {
-  return key === 'none' ? null : LOGO_URLS[key as LogoKey] ?? null
+// Fixed draw order (same list Settings/TopControls show), independent of the
+// order logos were clicked in - so toggling one off and back on doesn't
+// reshuffle the row. 'none' is filtered out: it has no file in LOGO_URLS,
+// and is never itself a member of a selection - see COY_LOGOS in store.ts.
+const COY_ORDER = (Object.keys(COY_LOGOS) as CoyLogo[])
+  .filter((k): k is Exclude<CoyLogo, 'none'> => k in LOGO_URLS)
+
+/** The middle slot's files, in fixed draw order - empty for no selection,
+ * which draws nothing rather than a blank. 11logo is never selectable here:
+ * it is the fixed slot. */
+function coyLogoUrls(keys: readonly CoyLogo[]): LogoKey[] {
+  return COY_ORDER.filter((k) => keys.includes(k))
 }
 
 /** Split an array into chunks of at most `size` elements each. */
@@ -35,16 +44,14 @@ function loadLogo11(): Promise<HTMLImageElement> {
   return logo11Promise
 }
 
-// The middle slot can change between strips, so it is cached per key rather
-// than once globally - switching in Settings and taking another photo must not
-// keep drawing the previous selection.
-const coyLogoPromises = new Map<CoyLogo, Promise<HTMLImageElement>>()
-function loadCoyLogo(key: CoyLogo): Promise<HTMLImageElement> | null {
-  const url = coyLogoUrl(key)
-  if (!url) return null
+// The middle slot's selection can change between strips, so each logo is
+// cached per key rather than once globally - switching in Settings and
+// taking another photo must not keep drawing a stale selection.
+const coyLogoPromises = new Map<LogoKey, Promise<HTMLImageElement>>()
+function loadCoyLogo(key: LogoKey): Promise<HTMLImageElement> {
   let p = coyLogoPromises.get(key)
   if (!p) {
-    p = loadImage(url)
+    p = loadImage(LOGO_URLS[key])
     coyLogoPromises.set(key, p)
   }
   return p
@@ -93,78 +100,14 @@ function footerMetrics(imageCount: number) {
   }
 }
 
-/** Logos carry padding inside the file, and not the same kind. 11logo.png's
- * opaque content is ~880x798 of a 1152x1100 canvas while fusionlogo.png has
- * none, so drawing both into the same box renders the 11 logo visibly
- * smaller. Measure each logo's content bounds once and draw only that region.
- *
- * Padding is measured from alpha, which every logo here now has - the company
- * logos were originally opaque JPEGs on white and were re-exported as
- * transparent PNGs precisely so this works and so they do not show a pale
- * block on a coloured strip background.
- *
- * The near-white fallback below is kept as a safety net for a future logo
- * dropped in as a JPEG: without it, alpha finds nothing, the whole square
- * measures as content, and it renders noticeably larger and boxier than
- * fusionlogo beside it with no error to explain why. It trims only the OUTER
- * margin, so white inside a logo is kept and nothing is made transparent -
- * which is why a transparent PNG is still the right format to supply. */
-const opaqueBoxCache = new WeakMap<HTMLImageElement, { x: number; y: number; w: number; h: number }>()
-
-function opaqueBox(img: HTMLImageElement) {
-  const cached = opaqueBoxCache.get(img)
-  if (cached) return cached
-  const full = { x: 0, y: 0, w: img.width, h: img.height }
-  let box = full
-  try {
-    const c = document.createElement('canvas')
-    c.width = img.width
-    c.height = img.height
-    const cx = c.getContext('2d')!
-    cx.drawImage(img, 0, 0)
-    const { data } = cx.getImageData(0, 0, img.width, img.height)
-
-    // Does this image use alpha at all? Sampling the four corners is enough:
-    // padding lives at the edges, so a file with transparent padding has
-    // transparent corners. If none are transparent the file is opaque and
-    // near-white has to stand in for padding instead.
-    const cornerAlpha = [
-      data[3],
-      data[(img.width - 1) * 4 + 3],
-      data[((img.height - 1) * img.width) * 4 + 3],
-      data[((img.height - 1) * img.width + img.width - 1) * 4 + 3],
-    ]
-    const usesAlpha = cornerAlpha.some((a) => a <= 8)
-    // Generous enough to catch JPEG compression noise around the edges of a
-    // white background, tight enough not to eat pale content.
-    const WHITE = 244
-
-    let x0 = img.width, y0 = img.height, x1 = -1, y1 = -1
-    for (let y = 0; y < img.height; y++) {
-      for (let x = 0; x < img.width; x++) {
-        const i = (y * img.width + x) * 4
-        const isContent = usesAlpha
-          ? data[i + 3] > 8
-          : data[i] < WHITE || data[i + 1] < WHITE || data[i + 2] < WHITE
-        if (isContent) {
-          if (x < x0) x0 = x
-          if (x > x1) x1 = x
-          if (y < y0) y0 = y
-          if (y > y1) y1 = y
-        }
-      }
-    }
-    if (x1 >= x0 && y1 >= y0) box = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
-  } catch {
-    // Fall back to the whole image if the canvas can't be read.
-  }
-  opaqueBoxCache.set(img, box)
-  return box
-}
-
 /** Draw a logo's opaque content centred in a size x size box with its aspect
  * preserved, so both logos occupy the same footprint as each other and as
- * the QR code beside them. */
+ * the QR code beside them.
+ *
+ * Uses contentBox (lib/imageBounds.ts) rather than the raw image dimensions:
+ * logos carry different amounts of padding inside their own file - 11logo.png
+ * has real padding, fusionlogo.png has none - so drawing both into the same
+ * box by raw dimensions renders the 11 logo visibly smaller. */
 function drawFooterIcon(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -172,7 +115,7 @@ function drawFooterIcon(
   boxY: number,
   size: number,
 ) {
-  const b = opaqueBox(img)
+  const b = contentBox(img)
   const scale = Math.min(size / b.w, size / b.h)
   const w = b.w * scale
   const h = b.h * scale
@@ -221,26 +164,34 @@ async function drawFooter(
     canvasHeight,
   )
 
-  // Footer row is [11logo] [selectable] [QR], vertically centered on the same
-  // row as the brand text/timestamp above. 11logo is fixed; the middle slot
-  // holds fusionlogo by default, a company logo when one is chosen, or
-  // nothing.
+  // Footer row is [11logo] [selectable, side by side] [QR], vertically
+  // centered on the same row as the brand text/timestamp above. 11logo is
+  // fixed; the middle slot holds zero or more company logos, and that block
+  // grows outward as more are selected (each logo keeps logoSize; the block
+  // gets wider) rather than shrinking to fit a fixed footprint - same choice
+  // as the banner logo row, see anim/banner.ts. 11logo sits immediately to
+  // its left, and the QR stays fixed on the right regardless of count.
   //
   // The selection is read at draw time rather than passed in, so a strip
   // re-themed later (addQrToStrip redraws from scratch) picks up the current
   // choice like every other strip does.
   const { x: qrX } = footerQrBox(canvasWidth, canvasHeight, imageCount)
   const logoY = rowY - logoSize / 2
-  const middleX = qrX - qrMargin - logoSize
-  const logo11X = middleX - logoGap - logoSize
+
+  const coyKeys = coyLogoUrls(selectedCoyLogo.get())
+  const middleWidth = coyKeys.length
+    ? coyKeys.length * logoSize + (coyKeys.length - 1) * logoGap
+    : 0
+  const middleLeftEdge = qrX - qrMargin - middleWidth
+  const logo11X = middleLeftEdge - (coyKeys.length ? logoGap : 0) - logoSize
 
   drawFooterIcon(ctx, await loadLogo11(), logo11X, logoY, logoSize)
 
-  // 'none' draws nothing and leaves the slot empty rather than closing the
-  // gap: 11logo and the QR keep their positions, so strips with and without a
-  // middle logo still line up with each other.
-  const coyPromise = loadCoyLogo(selectedCoyLogo.get())
-  if (coyPromise) drawFooterIcon(ctx, await coyPromise, middleX, logoY, logoSize)
+  let x = middleLeftEdge
+  for (const key of coyKeys) {
+    drawFooterIcon(ctx, await loadCoyLogo(key), x, logoY, logoSize)
+    x += logoSize + logoGap
+  }
 }
 
 /** Stack photos vertically into a single strip image (data URL), on a

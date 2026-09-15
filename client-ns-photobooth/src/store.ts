@@ -124,17 +124,20 @@ export function canSelect(
 
 /** What occupies the middle logo slot in the photo strip footer.
  *
- * The footer is [11logo] [this] [QR]. 11logo is fixed and always drawn; only
- * the middle slot is selectable, and choosing a company logo replaces
- * fusionlogo there.
+ * The footer is [11logo] [these, side by side] [QR]. 11logo is fixed and
+ * always drawn; the middle slot holds zero or more company logos, and the
+ * block they form grows outward (each logo keeps its own footprint; the
+ * block widens as more are picked) rather than shrinking logos to fit a
+ * fixed width - see drawFooter in lib/photoStrip.ts.
  *
  * The files live in assets/icons and are imported by lib/photoStrip.ts - only
  * the key is stored here, so a selection persisted in a browser stays valid if
  * an image is renamed or re-exported.
  *
- * 'fusion' is the default because it is what the slot held before this became
- * selectable, so an existing booth looks unchanged on upgrade. 'none' draws
- * nothing and leaves the slot empty, for events where neither applies. */
+ * ['fusion'] is the default because that is what the slot held (as a single,
+ * fixed logo) before this became selectable, so an existing booth looks
+ * unchanged on upgrade. 'none' is a clear-all, like GifOption's 'none' above
+ * - it is never itself a member of the selected array, an empty array is. */
 export const COY_LOGOS = {
   fusion: 'Fusion (default)',
   none: 'No logo',
@@ -146,9 +149,11 @@ export const COY_LOGOS = {
 } as const
 export type CoyLogo = keyof typeof COY_LOGOS
 
-export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', 'fusion', opts)
+export const selectedCoyLogo = persistentAtom<CoyLogo[]>('coyLogo', ['fusion'], opts)
 
-/** The logo shown over the live feed.
+/** The logo(s) shown over the live feed, side by side, growing outward from
+ * the same centre point the single logo used to occupy - see createBanner in
+ * anim/banner.ts.
  *
  * It used to be painted into border_design6.png itself, which is why it could
  * not be changed and never reached a captured photo - a decorative frame
@@ -157,11 +162,11 @@ export const selectedCoyLogo = persistentAtom<CoyLogo>('coyLogo', 'fusion', opts
  * stayed visible while the frame hid, so it appeared in photos; the frame
  * itself was subsequently removed entirely (anim/banner.ts) as a redundant
  * toggle once the logo already had its own on/off control, leaving just the
- * logo described here.
+ * logo(s) described here.
  *
- * '11' is the default because that is the logo that was baked in, so a booth
- * looks unchanged on upgrade. '11' is offered here and not in the footer
- * because the footer already draws 11logo in its fixed slot. */
+ * ['11'] is the default because that is the logo that was baked in, so a
+ * booth looks unchanged on upgrade. '11' is offered here and not in the
+ * footer because the footer already draws 11logo in its fixed slot. */
 export const BANNER_LOGOS = {
   '11': '11 (default)',
   none: 'No logo',
@@ -174,18 +179,52 @@ export const BANNER_LOGOS = {
 } as const
 export type BannerLogo = keyof typeof BANNER_LOGOS
 
-export const selectedBannerLogo = persistentAtom<BannerLogo>('bannerLogo', '11', opts)
+// Display/row order for BANNER_LOGOS - NOT the same as Object.keys(BANNER_LOGOS),
+// deliberately: '11' is a key that looks like an array index ("11"), and
+// JavaScript always iterates those ahead of every other string key in
+// ascending numeric order, no matter where they sit in the object literal -
+// so reordering the object itself cannot move '11' out of first place. This
+// array is what anim/banner.ts's row, and the checkbox lists in
+// Settings.tsx/TopControls.tsx, actually iterate. 'none' is excluded - same
+// clear-all reasoning as GifOption's 'none'. Currently: '11' sits 4th,
+// swapped with 'boreas', on request - purely a display-order preference,
+// nothing about either logo specifically.
+export const BANNER_LOGO_ORDER: readonly BannerLogo[] = [
+  'boreas', 'fusion', 'atlas', '11', 'hq', 'rsta', 'signal',
+]
+
+export const selectedBannerLogo = persistentAtom<BannerLogo[]>('bannerLogo', ['11'], opts)
 
 // Self-heal, same as the GIF_OPTIONS cleanup above: a key that no longer
 // exists would otherwise sit in a browser's storage and resolve to an
 // undefined image URL, failing at draw time rather than at selection time.
 // This also catches the earlier '11' key, from when 11logo was the thing being
-// replaced rather than the fixed one.
+// replaced rather than the fixed one. 'none' is filtered out too, same as
+// selectedGifs never holding 'none' - an empty array already says that.
+//
+// These two used to be single values (selectedCoyLogo/selectedBannerLogo were
+// a plain CoyLogo/BannerLogo, not an array) before multi-select - so a
+// browser that picked a logo before that change still has a bare string like
+// "fusion" sitting in localStorage. persistentAtom's decode is just
+// JSON.parse, which happily turns that into the STRING "fusion" rather than
+// an array, and .get() below decodes lazily on first access - meaning that
+// string reaches here, at module load, before anything has rendered. Calling
+// .filter on it would throw synchronously and take the whole app down to a
+// blank page on every load thereafter (see git history for the incident this
+// guarded against). Array.isArray is the whole fix: anything else legacy
+// shaped is treated as empty rather than trusted.
 {
-  const current = selectedCoyLogo.get()
-  if (!(current in COY_LOGOS)) selectedCoyLogo.set('fusion')
+  const cleanLogos = <T extends string>(all: Record<string, string>, current: T[]): T[] => {
+    if (!Array.isArray(current)) return []
+    const seen = new Set<T>()
+    return current.filter((k) => k !== 'none' && k in all && !seen.has(k) && seen.add(k))
+  }
+  const coy = selectedCoyLogo.get()
+  const cleanedCoy = cleanLogos(COY_LOGOS, coy)
+  if (cleanedCoy.length !== (Array.isArray(coy) ? coy.length : -1)) selectedCoyLogo.set(cleanedCoy)
   const banner = selectedBannerLogo.get()
-  if (!(banner in BANNER_LOGOS)) selectedBannerLogo.set('11')
+  const cleanedBanner = cleanLogos(BANNER_LOGOS, banner)
+  if (cleanedBanner.length !== (Array.isArray(banner) ? banner.length : -1)) selectedBannerLogo.set(cleanedBanner)
 }
 
 export const pointerEnabled = atom(false)

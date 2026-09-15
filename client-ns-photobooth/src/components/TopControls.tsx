@@ -1,12 +1,78 @@
+import { useEffect, useRef, useState } from 'react'
 import tw from 'twin.macro'
 import { useStore } from '@nanostores/preact'
 import {
   BANNER_LOGOS,
+  BANNER_LOGO_ORDER,
   BannerLogo,
   burstModeEnabled,
   qrModeEnabled,
   selectedBannerLogo,
 } from '../store'
+
+/** Compact dropdown-that-opens-into-checkboxes for the banner logo, so
+ * several can be picked at once (see selectedBannerLogo) from the HUD corner
+ * without opening full Settings. Same checkbox-list idea as Settings.tsx's
+ * LogoMultiSelect, just reimplemented compactly — that one is sized for a
+ * full-width settings list, this needs to fit in a HUD corner. */
+function BannerLogoQuickSelect() {
+  const selected = useStore(selectedBannerLogo)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  // BANNER_LOGO_ORDER, not Object.entries(BANNER_LOGOS) - see its comment in
+  // store.ts for why '11' can't just be moved around the object literal.
+  const entries = BANNER_LOGO_ORDER.map((key): [BannerLogo, string] => [key, BANNER_LOGOS[key]])
+  const summary = selected.length === 0
+    ? 'No logo'
+    : selected.map((k) => BANNER_LOGOS[k]).join(', ')
+
+  return (
+    <div ref={rootRef} tw='relative'>
+      <button
+        type='button'
+        title='Banner Logo'
+        tw='bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1 rounded focus:outline-none focus:border-blue-500 max-w-[8rem] truncate'
+        onClick={() => setOpen((o) => !o)}
+      >
+        {summary}
+      </button>
+      {open && (
+        <div tw='absolute top-full right-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto p-1 min-w-[8rem]'>
+          {entries.map(([key, label]) => {
+            const checked = selected.includes(key)
+            return (
+              <label
+                key={key}
+                tw='flex items-center gap-2 text-sm text-gray-300 px-2 py-1.5 rounded hover:bg-gray-700 cursor-pointer whitespace-nowrap'
+              >
+                <input
+                  type='checkbox'
+                  checked={checked}
+                  onChange={() =>
+                    selectedBannerLogo.set(
+                      checked ? selected.filter((o) => o !== key) : [...selected, key],
+                    )
+                  }
+                />
+                {label}
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** Compact quick-access controls pinned top-right, alongside the AnimPicker
  * strip (top-center) — lets Banner Logo and Burst Mode be changed without
@@ -16,7 +82,6 @@ import {
  * full-width settings list, this needs to fit in a HUD corner. */
 export function TopControls() {
   const qrMode = useStore(qrModeEnabled)
-  const bannerLogo = useStore(selectedBannerLogo)
   const burstOn = useStore(burstModeEnabled)
 
   // Same reasoning as AnimPicker/OcFusionPicker: both controls are
@@ -27,28 +92,7 @@ export function TopControls() {
 
   return (
     <div tw='fixed top-3 right-3 z-40 flex items-center gap-3 bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2'>
-      <select
-        value={bannerLogo}
-        onChange={(e) => {
-          const target = e.target as HTMLSelectElement
-          selectedBannerLogo.set(target.value as BannerLogo)
-          // A focused <select> can swallow the next Space press into
-          // reopening its own dropdown instead of it reaching the
-          // window-level 'Space' keybind that takes a photo (see
-          // useKeybind in KeybindBtn.tsx — it never even sees the
-          // keydown, since it's consumed by the native popup). Blur
-          // immediately so focus doesn't linger here after a choice.
-          target.blur()
-        }}
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1 rounded focus:outline-none focus:border-blue-500'
-        title='Banner Logo'
-      >
-        {Object.entries(BANNER_LOGOS).map(([key, label]) => (
-          <option key={key} value={key}>
-            {label}
-          </option>
-        ))}
-      </select>
+      <BannerLogoQuickSelect />
 
       <label tw='flex items-center gap-2 cursor-pointer select-none'>
         <span tw='text-xs text-gray-300'>Burst</span>
