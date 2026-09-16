@@ -243,6 +243,11 @@ _device = 'cpu'
 
 _queue: queue.Queue = queue.Queue(maxsize=1)
 _cache: list = []
+# Held around every call into the model, whether from the background worker
+# or detect_sync below - torch/ultralytics inference isn't guaranteed safe
+# from two threads at once, and offline clip analysis calls detect_sync from
+# its own thread while the worker may still be running for a live camera.
+_infer_lock = threading.Lock()
 
 # Load state, so the model can be brought up on demand rather than at import.
 # Loading takes several seconds and ~2.5 GB of VRAM, and only two characters
@@ -710,7 +715,8 @@ def _worker():
         except queue.Empty:
             continue
         try:
-            _cache = _infer(frame)
+            with _infer_lock:
+                _cache = _infer(frame)
         except Exception as e:
             log.debug("WiLoR inference error: %s: %s", type(e).__name__, e)
 
@@ -729,6 +735,21 @@ def detect(frame: np.ndarray) -> list:
     except queue.Full:
         pass
     return _cache
+
+
+def detect_sync(frame: np.ndarray) -> list:
+    """Run hand detection synchronously and return this frame's own result.
+
+    For offline clip analysis, which needs every frame's real result rather
+    than "whatever the background worker last finished" - detect()'s queue
+    hand-off contract is right for a live, ongoing feed but would silently
+    skip or duplicate frames when walking a clip frame by frame. Shares
+    _infer_lock with the worker so the two calls never overlap.
+    """
+    if not _available:
+        return []
+    with _infer_lock:
+        return _infer(frame)
 
 
 def available() -> bool:

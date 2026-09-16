@@ -74,11 +74,17 @@ export const MAX_SELECTED = 5
  * the same hand flickers between a digit and a glove instead of settling on
  * either.
  *
+ * drone + boxglove: the same open-palm/closed-fist conflict as sixseven +
+ * boxglove above, just with the drone standing in for the number — drone
+ * wants an open palm, glove wants a fist, and a hand doing either flickers
+ * between the two instead of committing to one.
+ *
  * Add further groups here; nothing else needs changing. */
 export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
   ['owl', 'bat'],
   ['drone', 'sixseven'],
   ['sixseven', 'boxglove'],
+  ['drone', 'boxglove'],
 ]
 
 /** Which already-selected option, if any, blocks `option` from being added.

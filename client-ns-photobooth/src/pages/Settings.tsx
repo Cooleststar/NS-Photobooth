@@ -310,6 +310,161 @@ function ReplayVideoSelect() {
   )
 }
 
+type ClipAnalysis = {
+  fps: number
+  framesAnalyzed: number
+  framesTotal: number
+  detectionRate: number
+  handDetectionRate: number
+  meanKeypointConf: number | null
+  minKeypointConf: number | null
+  maxPeopleSeen: number
+  series: { t: number; people: number; meanConf: number | null; hands: number }[]
+}
+
+function ClipAnalysisChart({ series, maxPeople }: {
+  series: ClipAnalysis['series']
+  maxPeople: number
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || series.length === 0) return
+    const w = canvas.width, h = canvas.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, w, h)
+
+    const plot = (values: (number | null)[], scale: number, color: string) => {
+      ctx.beginPath()
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.5
+      let started = false
+      values.forEach((v, i) => {
+        if (v === null) return
+        const x = (i / (values.length - 1 || 1)) * w
+        const y = h - (v / scale) * h
+        if (!started) { ctx.moveTo(x, y); started = true }
+        else ctx.lineTo(x, y)
+      })
+      ctx.stroke()
+    }
+
+    // Confidence (0-1) in blue, person count (0-maxPeople) in orange - both
+    // sharing the same 0-1 vertical space so a drop in either is visible at
+    // a glance without needing two separate axes.
+    plot(series.map((r) => r.meanConf), 1, '#3b82f6')
+    plot(series.map((r) => r.people), Math.max(1, maxPeople), '#f59e0b')
+  }, [series, maxPeople])
+
+  return (
+    <div tw='flex flex-col gap-1'>
+      <canvas ref={canvasRef} width={280} height={60} tw='w-full h-[60px] bg-gray-900 rounded' />
+      <div tw='flex gap-4 text-[10px] text-gray-500'>
+        <span><span tw='text-blue-500'>■</span> keypoint confidence</span>
+        <span><span tw='text-yellow-500'>■</span> people detected (of {maxPeople})</span>
+      </div>
+    </div>
+  )
+}
+
+function ClipAnalyzer() {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<ClipAnalysis | null>(null)
+
+  const analyze = (file: File) =>
+    new Promise<ClipAnalysis>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      const q = `name=${encodeURIComponent(file.name)}`
+      xhr.open('POST', `${getBackendHttpUrl()}/testing/analyze?${q}`)
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          setStatus(`Uploading… ${Math.round((e.loaded / e.total) * 100)}%`)
+        }
+      }
+      xhr.upload.onload = () => setStatus('Analyzing… this can take a bit')
+      xhr.onload = () => {
+        if (xhr.status !== 200) {
+          reject(new Error(xhr.responseText || `HTTP ${xhr.status}`))
+          return
+        }
+        try {
+          resolve(JSON.parse(xhr.responseText))
+        } catch {
+          reject(new Error('Backend returned an unreadable response'))
+        }
+      }
+      xhr.onerror = () => reject(new Error('Could not reach the backend'))
+      xhr.send(file)
+    })
+
+  const onPick = async (file: File | undefined) => {
+    if (!file) return
+    setBusy(true)
+    setResult(null)
+    setStatus('Uploading…')
+    try {
+      setResult(await analyze(file))
+      setStatus('')
+    } catch (e) {
+      setStatus(`Failed: ${(e as Error).message}`)
+    } finally {
+      setBusy(false)
+      if (inputRef.current) inputRef.current.value = ''
+    }
+  }
+
+  return (
+    <div tw='flex flex-col gap-1'>
+      <span tw='text-xs text-gray-500'>Detection Accuracy</span>
+      <input
+        ref={inputRef}
+        type='file'
+        accept='video/*,.mkv,.ts'
+        tw='hidden'
+        onChange={(e) => onPick((e.target as HTMLInputElement).files?.[0])}
+      />
+      <button
+        type='button'
+        disabled={busy}
+        tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors disabled:opacity-50'
+        onClick={() => inputRef.current?.click()}
+      >
+        {busy ? status : 'Analyze clip…'}
+      </button>
+      {!busy && status && <span tw='text-xs text-red-400'>{status}</span>}
+      {result && (
+        <div tw='flex flex-col gap-2 mt-1 p-2 bg-gray-800 rounded-lg'>
+          <ClipAnalysisChart series={result.series} maxPeople={result.maxPeopleSeen} />
+          <div tw='grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-gray-300'>
+            <span>Frames analyzed</span>
+            <span tw='text-right'>{result.framesAnalyzed} / {result.framesTotal}</span>
+            <span>Detection rate</span>
+            <span tw='text-right'>{Math.round(result.detectionRate * 100)}%</span>
+            <span>Hand detection rate</span>
+            <span tw='text-right'>{Math.round(result.handDetectionRate * 100)}%</span>
+            <span>Mean keypoint conf.</span>
+            <span tw='text-right'>{result.meanKeypointConf ?? '—'}</span>
+            <span>Min keypoint conf.</span>
+            <span tw='text-right'>{result.minKeypointConf ?? '—'}</span>
+            <span>Max people seen</span>
+            <span tw='text-right'>{result.maxPeopleSeen}</span>
+          </div>
+        </div>
+      )}
+      <span tw='text-xs text-gray-500'>
+        Runs a short clip through pose + hand detection and reports how
+        confidently it tracked people over the clip - useful for measuring
+        how accuracy holds up at distance or with multiple people in frame.
+        Briefly pauses live pose tracking while it runs.
+      </span>
+    </div>
+  )
+}
+
 function AnimMultiSelect() {
   const gifOptions = useStore(selectedGifs)
   const [open, setOpen] = useState(false)
@@ -613,6 +768,7 @@ export default function Settings() {
 
           <Section title='Testing'>
             <ReplayVideoSelect />
+            <ClipAnalyzer />
           </Section>
 
           <Section title='Actions'>
