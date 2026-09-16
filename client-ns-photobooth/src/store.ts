@@ -289,7 +289,14 @@ export interface Challenge67State {
   // lives in Display.tsx, not Challenge67UI.tsx) can reach it.
   playerName: string
   lastResult?: {
+    // What this round actually scored - not necessarily what's on the
+    // board, since the backend only raises a name's entry when a round beats
+    // it (see main.py's challenge67_submit_handler).
     score: number
+    // This name's best score on the board, i.e. `score` if isNewBest,
+    // otherwise whatever they'd already set in an earlier round.
+    best: number
+    isNewBest: boolean
     rank: number
     total: number
     // Straight from the submit response (computed server-side right after

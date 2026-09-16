@@ -2,7 +2,7 @@ import { useStore } from '@nanostores/preact'
 import { useEffect, useRef, useState } from 'react'
 import tw from 'twin.macro'
 import { WritableAtom } from 'nanostores'
-import { useKeybind } from '../components'
+import { Challenge67LeaderboardEditor, useKeybind } from '../components'
 import {
   GIF_OPTIONS,
   GifOption,
@@ -602,6 +602,13 @@ export default function Settings() {
                 Reset Animation
               </button>
             )}
+          </Section>
+
+          {/* Always shown, not just while 67 Mode is enabled - pruning old
+              scores between events is a separate concern from whether the
+              game is currently switched on. */}
+          <Section title='67 Mode'>
+            <Challenge67LeaderboardEditor />
           </Section>
 
           <Section title='Testing'>

@@ -29,7 +29,14 @@ export function submitChallenge67Score(score: number) {
       // Challenge67State.lastResult.
       challenge67Game.set({
         ...challenge67Game.get(),
-        lastResult: { score, rank: data.rank, total: data.total, top: data.top ?? [] },
+        lastResult: {
+          score,
+          best: data.best ?? score,
+          isNewBest: data.isNewBest ?? true,
+          rank: data.rank,
+          total: data.total,
+          top: data.top ?? [],
+        },
       })
     })
     .catch((e) => console.warn('Failed to submit 67 Mode score:', e))

@@ -8,6 +8,7 @@ Photobooth pose detection backend.
 """
 import asyncio
 import base64
+import hmac
 import json
 import logging
 import os
@@ -1225,6 +1226,17 @@ def run_pose_detection(
 # single trusted kiosk (see challenge67_submit_handler), not a public
 # service, so there's no session-token/anti-cheat heartbeat like the
 # original project this was adapted from - just a sane score range check.
+#
+# One entry per name, holding that player's BEST score - not one entry per
+# round played. A name is the only identity this system has, so it does
+# double duty: the frontend's naming screen refuses to let a new player pick
+# a name already on the board (see challenge67_check_name_handler), which is
+# what makes "the same name = the same player" a safe assumption here. That
+# is also why submitting under an existing name never fails - it is either
+# this same player retrying (see Challenge67UI.tsx's retry(), which reuses
+# the confirmed name and skips the naming screen entirely) or a race past the
+# uniqueness check, and either way the sane response is to upsert rather than
+# reject a live kiosk submission.
 # ---------------------------------------------------------------------------
 _CHALLENGE67_FILE = pathlib.Path(__file__).parent / 'challenge67_leaderboard.json'
 _CHALLENGE67_MAX_SCORE = 400  # sanity cap against a clearly-bogus submission
@@ -1232,6 +1244,29 @@ _CHALLENGE67_MAX_ENTRIES = 100  # keep the file bounded
 _CHALLENGE67_MAX_NAME_LEN = 20  # matches MAX_NAME_LEN in Challenge67UI.tsx
 _CHALLENGE67_DEFAULT_NAME = 'Anonymous'
 _challenge67_lock: asyncio.Lock | None = None  # initialised inside main(), same reason as clients_lock below
+
+# Gates the leaderboard editor in Settings (challenge67_admin_entries_handler
+# and challenge67_admin_save_handler) - the one pair of 67 Mode endpoints that
+# aren't open to any caller on the local network, since they can rewrite
+# scores and names directly rather than just append a validated round.
+# Plaintext, same trust level as e.g. HIKVISION_PASS in the frontend's
+# store.ts: this booth's whole security model is "only trusted people are on
+# this network", not per-user auth.
+_CHALLENGE67_ADMIN_PASSWORD = 'Timely@Objective'
+
+
+def _challenge67_check_password(supplied) -> bool:
+    if not isinstance(supplied, str):
+        return False
+    # Stripped: this password is a fixed constant with no whitespace in it
+    # (unlike a real user-chosen password, where trimming could weaken it),
+    # so this only forgives a stray leading/trailing space from a kiosk's
+    # on-screen keyboard rather than making the check any easier to guess.
+    supplied = supplied.strip()
+    # Constant-time compare: a plain == would let a timing attack narrow the
+    # password down one character at a time. Overkill for a LAN kiosk, but
+    # free.
+    return hmac.compare_digest(supplied, _CHALLENGE67_ADMIN_PASSWORD)
 
 
 def _load_challenge67() -> list:
@@ -1254,12 +1289,52 @@ def _save_challenge67(entries: list) -> None:
     _CHALLENGE67_FILE.write_text(json.dumps(entries))
 
 
+def _name_key(name: str) -> str:
+    """Case/whitespace-insensitive identity for a player name, so "Alice",
+    " alice " and "ALICE" are all treated as the same person - both when
+    checking whether a name is taken and when matching a submission back to
+    its existing entry."""
+    return name.strip().lower()
+
+
+async def _broadcast_challenge67_leaderboard():
+    """Push the current top 10 to every connected client over the same
+    rosbridge-style WS the pose/hand data already uses (see broadcast()
+    below) - so an edit made through the Settings admin editor, or any
+    ordinary round's submit, shows up live wherever the board is on screen
+    (the idle screen and the results screen - see Challenge67UI.tsx) instead
+    of only on that screen's next mount/fetch."""
+    top = _load_challenge67()[:10]
+    await broadcast('/challenge67_leaderboard_out', {"top": top})
+
+
+async def challenge67_check_name_handler(request: web.Request) -> web.Response:
+    """GET ?name=... - whether this name is free to use, for the naming
+    screen to check before a new player is allowed to start a round. Not
+    lock-protected: it's informational only, and a submission race behind it
+    just falls through to the upsert-by-name logic in the submit handler
+    rather than corrupting anything - see the module comment above."""
+    name = request.rel_url.query.get('name', '').strip()[:_CHALLENGE67_MAX_NAME_LEN]
+    if not name:
+        return web.json_response({"available": False}, headers=_CORS)
+    try:
+        entries = _load_challenge67()
+        key = _name_key(name)
+        taken = any(_name_key(e['name']) == key for e in entries)
+        return web.json_response({"available": not taken}, headers=_CORS)
+    except Exception as e:
+        log.error(f"67 Mode check_name error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
 async def challenge67_submit_handler(request: web.Request) -> web.Response:
-    """POST {"score": number, "name"?: string} - validates range, appends to
-    the leaderboard file, and returns this submission's rank. No auth: this
-    is a single trusted kiosk (see the module comment above), so the name is
-    taken as given - trimmed and length-capped, nothing more - same trust
-    level as the score's own range check below."""
+    """POST {"score": number, "name"?: string} - validates range, then either
+    inserts a new entry or raises an existing one to this score if it's
+    higher (see the module comment above on why matching entries are upserted
+    rather than stacked). Returns this player's rank on the resulting board.
+    No auth: this is a single trusted kiosk (see the module comment above),
+    so the name is taken as given - trimmed and length-capped, nothing more -
+    same trust level as the score's own range check below."""
     try:
         data = await request.json()
         score = data.get('score')
@@ -1276,17 +1351,42 @@ async def challenge67_submit_handler(request: web.Request) -> web.Response:
         async with _challenge67_lock:
             entries = _load_challenge67()
             ts = time.time()
-            entries.append({"score": score, "ts": ts, "name": name})
+            key = _name_key(name)
+            existing = next((e for e in entries if _name_key(e['name']) == key), None)
+            if existing is None:
+                entry = {"score": score, "ts": ts, "name": name}
+                entries.append(entry)
+                is_new_best = True
+            else:
+                entry = existing
+                is_new_best = score > entry['score']
+                if is_new_best:
+                    # This round beat their standing best - replace it in
+                    # place. A worse or equal round changes nothing: the
+                    # board keeps showing their best, and this response still
+                    # reports it below so the results screen can show what
+                    # they're actually ranked on.
+                    entry['score'] = score
+                    entry['ts'] = ts
+
             entries.sort(key=lambda e: e['score'], reverse=True)
             entries = entries[:_CHALLENGE67_MAX_ENTRIES]
             _save_challenge67(entries)
-            # Matches on ts (not just score) so a tie with an existing entry
-            # doesn't always report the better-ranked one's position.
-            rank = next((i for i, e in enumerate(entries) if e['ts'] == ts), len(entries)) + 1
+            # Identity, not a field match: two entries can tie on score, and
+            # matching by object identity still finds the right one even
+            # though the slice above copies the list (not the dicts in it).
+            rank = next((i for i, e in enumerate(entries) if e is entry), len(entries)) + 1
 
-        return web.json_response(
-            {"rank": rank, "total": len(entries), "top": entries[:10]}, headers=_CORS,
-        )
+        await _broadcast_challenge67_leaderboard()
+
+        return web.json_response({
+            "score": score,           # what THIS round actually scored
+            "best": entry['score'],   # what's on the board for this name
+            "isNewBest": is_new_best,
+            "rank": rank,
+            "total": len(entries),
+            "top": entries[:10],
+        }, headers=_CORS)
     except Exception as e:
         log.error(f"67 Mode submit error: {e}")
         return web.Response(status=500, text=str(e), headers=_CORS)
@@ -1294,12 +1394,92 @@ async def challenge67_submit_handler(request: web.Request) -> web.Response:
 
 async def challenge67_leaderboard_handler(request: web.Request) -> web.Response:
     """GET: current top-10 scores (with names), for the results screen and
-    any idle leaderboard display."""
+    the idle-screen leaderboard (see Challenge67UI.tsx's 'waiting' phase)."""
     try:
         entries = _load_challenge67()
         return web.json_response({"top": entries[:10]}, headers=_CORS)
     except Exception as e:
         log.error(f"67 Mode leaderboard error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
+async def challenge67_admin_entries_handler(request: web.Request) -> web.Response:
+    """POST {"password": str} - the FULL leaderboard (not just the top 10),
+    for the editor in Settings. POST rather than GET so the password travels
+    in the request body like every other credential this backend accepts
+    (e.g. configure_camera_handler's camera password) instead of a URL query
+    string, which a plain GET would put in aiohttp's own access log."""
+    try:
+        data = await request.json()
+        if not _challenge67_check_password(data.get('password')):
+            return web.Response(status=401, text='Incorrect password', headers=_CORS)
+        entries = _load_challenge67()
+        entries.sort(key=lambda e: e['score'], reverse=True)
+        return web.json_response({"entries": entries}, headers=_CORS)
+    except Exception as e:
+        log.error(f"67 Mode admin entries error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
+async def challenge67_admin_save_handler(request: web.Request) -> web.Response:
+    """POST {"password": str, "entries": [{"name": str, "score": number,
+    "ts"?: number}, ...]} - wholesale replace of the leaderboard file, from
+    the admin editor in Settings. Unlike challenge67_submit_handler, this
+    DOES reject bad input outright rather than upserting past it: a live
+    round's own score is trustworthy-by-construction (it came from the game
+    loop, not typed in), but a hand-edited list is exactly where a duplicate
+    name or a stray score would otherwise slip in and quietly break the
+    "one entry per name" invariant everything else here relies on."""
+    try:
+        data = await request.json()
+        if not _challenge67_check_password(data.get('password')):
+            return web.Response(status=401, text='Incorrect password', headers=_CORS)
+
+        raw = data.get('entries')
+        if not isinstance(raw, list):
+            return web.Response(status=400, text='entries must be a list', headers=_CORS)
+
+        cleaned = []
+        seen = set()
+        for i, e in enumerate(raw):
+            if not isinstance(e, dict):
+                return web.Response(status=400, text=f'Entry {i + 1} is not valid', headers=_CORS)
+
+            name = e.get('name', '')
+            name = name.strip()[:_CHALLENGE67_MAX_NAME_LEN] if isinstance(name, str) else ''
+            if not name:
+                return web.Response(status=400, text=f'Entry {i + 1} needs a name', headers=_CORS)
+
+            score = e.get('score')
+            if not isinstance(score, (int, float)) or isinstance(score, bool):
+                return web.Response(status=400, text=f'"{name}" has an invalid score', headers=_CORS)
+            score = int(score)
+            if not (0 <= score <= _CHALLENGE67_MAX_SCORE):
+                return web.Response(status=400, text=f'"{name}"\'s score is out of range', headers=_CORS)
+
+            # Preserved as-is for an entry the editor already had - only a
+            # freshly-added row (nothing to preserve) gets "now".
+            ts = e.get('ts')
+            ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else time.time()
+
+            key = _name_key(name)
+            if key in seen:
+                return web.Response(status=400, text=f'Duplicate name: "{name}"', headers=_CORS)
+            seen.add(key)
+            cleaned.append({"name": name, "score": score, "ts": ts})
+
+        cleaned.sort(key=lambda e: e['score'], reverse=True)
+        truncated = len(cleaned) > _CHALLENGE67_MAX_ENTRIES
+        cleaned = cleaned[:_CHALLENGE67_MAX_ENTRIES]
+
+        async with _challenge67_lock:
+            _save_challenge67(cleaned)
+
+        await _broadcast_challenge67_leaderboard()
+
+        return web.json_response({"entries": cleaned, "truncated": truncated}, headers=_CORS)
+    except Exception as e:
+        log.error(f"67 Mode admin save error: {e}")
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
@@ -1312,6 +1492,7 @@ clients_lock: asyncio.Lock  # initialised inside main() to avoid wrong-loop bind
 TOPIC_TYPES = {
     "/pose_out": "nice_ros_msgs/WholeBodyArray",
     "/rect_out": "visualization_msgs/ImageMarkerArray",
+    "/challenge67_leaderboard_out": "std_msgs/String",
 }
 
 # ---------------------------------------------------------------------------
@@ -1863,7 +2044,22 @@ _CORS = {
 async def cors_middleware(request: web.Request, handler):
     if request.method == 'OPTIONS':
         return web.Response(headers=_CORS)
-    response = await handler(request)
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        # aiohttp's own error responses - most commonly its 404 for a route
+        # that doesn't exist (a stale frontend build calling an endpoint an
+        # older backend hasn't picked up yet, or just a typo'd URL) - are
+        # RAISED rather than returned, which skips the header-setting line
+        # below entirely. Without this, that response goes out with no CORS
+        # header at all, so the browser refuses to let the caller read it -
+        # not just the body, the status code too - and every such error
+        # surfaces to the frontend as an opaque "failed to fetch"/"could not
+        # reach the backend", indistinguishable from the backend actually
+        # being down. Confirmed against a real 404 during development: fixing
+        # this is what turns that into a normal, readable 404.
+        exc.headers.update(_CORS)
+        raise
     response.headers.update(_CORS)
     return response
 
@@ -2504,6 +2700,9 @@ def make_http_app() -> web.Application:
     app.router.add_get('/qr_debug', qr_debug_handler)
     app.router.add_post('/challenge67/submit', challenge67_submit_handler)
     app.router.add_get('/challenge67/leaderboard', challenge67_leaderboard_handler)
+    app.router.add_get('/challenge67/check_name', challenge67_check_name_handler)
+    app.router.add_post('/challenge67/admin/entries', challenge67_admin_entries_handler)
+    app.router.add_post('/challenge67/admin/save', challenge67_admin_save_handler)
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)
