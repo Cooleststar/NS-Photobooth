@@ -351,7 +351,7 @@ export default function HUD({ photographerRef }: HUDProps) {
       )
     case 'uploading':
       return (
-        <Modal locked>
+        <Modal variant='modern' locked>
           <h2>Uploading...</h2>
         </Modal>
       )
@@ -363,10 +363,14 @@ export default function HUD({ photographerRef }: HUDProps) {
         // dismissing any way other than "Done" left `state` stuck on
         // 'error' while the modal that was rendering it had hidden itself,
         // i.e. a blank screen with nothing clickable.
-        <Modal onDismiss={() => setState('ready')}>
+        <Modal variant='modern' onDismiss={() => setState('ready')}>
           <h2>Error</h2>
-          <p>{error}</p>
-          <KeybindBtn keyCode='PageUp' onClick={() => setState('ready')}>
+          <p tw='text-[#cbd2dc] text-center'>{error}</p>
+          <KeybindBtn
+            keyCode='PageUp'
+            onClick={() => setState('ready')}
+            tw='rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold px-6 py-2.5 text-base'
+          >
             Done
           </KeybindBtn>
         </Modal>
