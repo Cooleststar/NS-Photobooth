@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 import queue
+import uuid
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -2491,6 +2492,146 @@ async def replay_upload_handler(request: web.Request) -> web.Response:
     return web.json_response({'name': name}, headers=_CORS)
 
 
+# ---------------------------------------------------------------------------
+# Clip analysis — stress-test detection accuracy against an uploaded clip
+# ---------------------------------------------------------------------------
+# Settings > Testing > "Analyze clip" runs a short recording through the same
+# YOLO/BoT-SORT + WiLoR models the live booth uses and reports, per frame,
+# how many people were detected and how confident the model was — the same
+# numbers a distance test (person at 1m/2m/3m/...) or a multi-person test
+# (1 vs 4 people in frame) needs, without having to eyeball a debug overlay.
+_TESTING_DIR = pathlib.Path(__file__).resolve().parent / 'testing_uploads'
+_TESTING_EXTS = _REPLAY_EXTS
+# Bounds analysis time on a clip that's longer than expected. Frames beyond
+# this are sampled evenly across the whole clip rather than just its start,
+# so a 2-minute upload still gets full-duration coverage instead of only its
+# first few seconds.
+_TESTING_MAX_FRAMES = 240
+
+
+def _analyze_clip(path: pathlib.Path) -> dict:
+    """Run every (sampled) frame of `path` through pose + hand detection.
+
+    Runs under _yolo_lock for its entire duration, not just per frame, so a
+    concurrent live camera can't have its own tracks interleaved with the
+    clip's — BoT-SORT's persist=True state is shared with production. The
+    tracker is reset before and after so neither run contaminates the other;
+    on a live event this means the on-screen skeleton briefly pauses while a
+    clip is analyzed, which is why this is a Settings > Testing tool rather
+    than something run silently in the background.
+    """
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        raise ValueError('Could not open the uploaded file as a video')
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        step = max(1, total // _TESTING_MAX_FRAMES) if total > 0 else 1
+
+        series = []
+        frame_idx = 0
+        analyzed = 0
+        # reset_pose_tracker() takes _yolo_lock itself - a plain
+        # threading.Lock isn't reentrant, so it must never be called while
+        # this function already holds the lock below, or the same thread
+        # deadlocks on itself forever (exactly what "stuck on Analyzing"
+        # looks like from the frontend).
+        reset_pose_tracker()
+        try:
+            with _yolo_lock:
+                while True:
+                    ok = cap.grab()
+                    if not ok:
+                        break
+                    if frame_idx % step != 0:
+                        frame_idx += 1
+                        continue
+                    ok, frame = cap.retrieve()
+                    frame_idx += 1
+                    if not ok or frame is None:
+                        continue
+
+                    resized = cv2.resize(frame, _POSE_SIZE, interpolation=cv2.INTER_AREA)
+                    results = _yolo.track(
+                        resized, persist=True, verbose=False,
+                        conf=0.4, iou=0.45, imgsz=640, tracker=_TRACKER_CFG,
+                    )
+                    r = results[0] if results else None
+
+                    num_people = 0
+                    mean_conf = None
+                    if r is not None and r.keypoints is not None and len(r.keypoints) > 0:
+                        kps_conf = (r.keypoints.conf.cpu().numpy()
+                                    if r.keypoints.conf is not None else None)
+                        boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+                        box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
+                                    else np.ones(len(boxes_xyxy)))
+                        keep = (_dedupe_detections(boxes_xyxy, box_conf)
+                                if len(boxes_xyxy) > 1 else list(range(len(boxes_xyxy))))
+                        num_people = len(keep)
+                        if num_people and kps_conf is not None:
+                            mean_conf = float(np.mean([kps_conf[i].mean() for i in keep]))
+
+                    hands = _wilor_hands.detect_sync(frame)
+
+                    series.append({
+                        't': round(frame_idx / fps, 2),
+                        'people': num_people,
+                        'meanConf': round(mean_conf, 3) if mean_conf is not None else None,
+                        'hands': len(hands),
+                    })
+                    analyzed += 1
+        finally:
+            reset_pose_tracker()
+
+        confs = [row['meanConf'] for row in series if row['meanConf'] is not None]
+        frames_with_person = sum(1 for row in series if row['people'] > 0)
+        frames_with_hand = sum(1 for row in series if row['hands'] > 0)
+        return {
+            'fps': round(fps, 1),
+            'framesAnalyzed': analyzed,
+            'framesTotal': total,
+            'detectionRate': round(frames_with_person / analyzed, 3) if analyzed else 0,
+            'handDetectionRate': round(frames_with_hand / analyzed, 3) if analyzed else 0,
+            'meanKeypointConf': round(sum(confs) / len(confs), 3) if confs else None,
+            'minKeypointConf': round(min(confs), 3) if confs else None,
+            'maxPeopleSeen': max((row['people'] for row in series), default=0),
+            'series': series,
+        }
+    finally:
+        cap.release()
+
+
+async def testing_analyze_handler(request: web.Request) -> web.Response:
+    """Upload a short clip and run it through pose + hand detection.
+
+    Body is the raw video bytes (see replay_upload_handler for why a raw
+    stream rather than multipart); `?name=` supplies the original filename,
+    used only to pick a matching temp extension for OpenCV. The file is
+    deleted after analysis - this is a one-off measurement, not something to
+    keep around like a replay recording.
+    """
+    ext = pathlib.Path(request.rel_url.query.get('name', '')).suffix.lower()
+    if ext not in _TESTING_EXTS:
+        ext = '.mp4'
+
+    _TESTING_DIR.mkdir(exist_ok=True)
+    tmp_path = _TESTING_DIR / f"clip-{uuid.uuid4().hex}{ext}"
+    try:
+        with open(tmp_path, 'wb') as f:
+            async for chunk in request.content.iter_chunked(1024 * 1024):
+                f.write(chunk)
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _analyze_clip, tmp_path)
+        return web.json_response(result, headers=_CORS)
+    except Exception as e:
+        log.exception("Clip analysis failed")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def make_http_app() -> web.Application:
     app = web.Application(middlewares=[cors_middleware], client_max_size=50 * 1024 * 1024)
     app.router.add_get('/ws_stream', ws_stream_handler)
@@ -2513,6 +2654,7 @@ def make_http_app() -> web.Application:
     app.router.add_get('/gallery', gallery_client_handler)
     app.router.add_get('/replay/check', replay_check_handler)
     app.router.add_post('/replay/upload', replay_upload_handler)
+    app.router.add_post('/testing/analyze', testing_analyze_handler)
     return app
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,10 @@ CHANGES.md
 # Generated photobooth output
 backend/photos/
 
+# Clip-analysis uploads (Settings > Testing) - deleted right after analysis,
+# but the folder can be left behind if a request is interrupted mid-upload
+backend/testing_uploads/
+
 # 67 Mode leaderboard - runtime data, not source (same treatment as photos/)
 backend/challenge67_leaderboard.json
 
