@@ -1,4 +1,10 @@
 import { ComponentProps, useState } from 'react'
+// Not 'react-dom' - nothing in this project actually installs react or
+// react-dom (see package.json: only 'preact', plus '@types/react' purely for
+// typing the 'react' import alias @preact/preset-vite resolves at build
+// time). preact/compat is the real package providing createPortal here, and
+// TS can only resolve types from a package that's actually installed.
+import { createPortal } from 'preact/compat'
 import tw, { css } from 'twin.macro'
 
 // The original card look — bold red border, square-ish shadow. Kept as the
@@ -66,7 +72,15 @@ export function Modal({
     if (!(onDismiss() === false) && !locked) setShown(false)
   }
 
-  return (
+  // Portalled straight to <body> rather than rendered where the component
+  // tree happens to put it. `fixed` is only viewport-relative when nothing
+  // between here and <body> applies a transform - anything that does (e.g.
+  // Settings.tsx's sliding sidebar, which is `transform`ed for its open/close
+  // slide animation) becomes the containing block instead, and every "fixed,
+  // centered" modal opened from inside it renders squeezed into that
+  // ancestor's own box instead of centered on the screen. A portal makes
+  // that impossible regardless of where a call site happens to live.
+  return createPortal(
     <div
       tw='fixed inset-0 bg-black bg-opacity-70 p-10 flex justify-center items-center'
       onClick={handler}
@@ -98,6 +112,7 @@ export function Modal({
         </button>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
