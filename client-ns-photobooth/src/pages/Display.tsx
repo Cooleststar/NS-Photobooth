@@ -12,25 +12,15 @@ import {
 } from 'react'
 import 'twin.macro'
 import { createArrowPointer } from '../anim/arrow'
-import { createBatAnim } from '../anim/bat'
-import { createBatEarsAnim } from '../anim/batears'
-import { createClownWigNoseAnim } from '../anim/clownwignose'
 import { createBanner } from '../anim/banner'
 import { createConfettiBurst } from '../anim/confetti'
-import { createDroneAnim } from '../anim/drone'
-import { createGlobeAnim } from '../anim/globe'
-import { createOCFusionAnim } from '../anim/ocfusion'
+// Every per-character factory is reached through this one dispatch table —
+// see anim/createAnimForGif.ts.
+import { createAnimForGif as createAnimForGifShared } from '../anim/createAnimForGif'
 import { createOrdloAnim } from '../anim/ordlo'
-import { createOwlAnim } from '../anim/owl'
-import { createPigNoseAnim } from '../anim/pignose'
-import { createScubaAnim } from '../anim/scuba'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
-import { createSixSevenAnim } from '../anim/sixseven'
-import { createBoxGloveAnim } from '../anim/boxglove'
-import { createSunglassesAnim } from '../anim/sunglasses'
-import { createMustacheAnim } from '../anim/mustache'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
-import { createRepCounter } from '../anim/challenge67/repCounter'
+import { createChallenge67Loop } from '../anim/challenge67/gameLoop'
 import { drawChallenge67ArmLines } from '../anim/challenge67/drawArmLines'
 import { Analysis, PropDetection } from '../api/nicepipe'
 import { convert2mpPose } from '../api/nicepipe/mmPose'
@@ -42,7 +32,6 @@ import {
   GifOption,
   camSize,
   challenge67Enabled,
-  challenge67Game,
   debugEnabled,
   detectionCamSize,
   getBackendHttpUrl,
@@ -173,6 +162,14 @@ function computeDetectionMode(gifOptions: GifOption[]): 'pose' | 'hands' | 'none
 const MARGIN_X = 30 / 1920
 const MARGIN_T = 30 / 1080
 const MARGIN_B = 30 / 1080
+
+// Keep the pose input resolution and aspect ratio identical regardless of
+// which local camera is being used — the backend's tracker is sensitive to
+// its input changing size mid-session (see the frame-size normalisation in
+// main.py's run_pose_detection), so the webcam path must hand it one fixed
+// shape no matter what the device's native resolution is.
+const POSE_WIDTH = 640
+const POSE_HEIGHT = 360
 
 /** Stable person -> slot assignment for multi-target animations.
  *
@@ -695,6 +692,15 @@ export default function Display({
     let active = true
     let sending = false
 
+    // One scratch canvas for the whole connection rather than a fresh one
+    // every tick: this runs 10x a second for as long as the webcam is the
+    // active source, and each createElement left a canvas (plus its backing
+    // buffer) for the GC to collect.
+    const frameCanvas = document.createElement('canvas')
+    frameCanvas.width = POSE_WIDTH
+    frameCanvas.height = POSE_HEIGHT
+    const frameCtx = frameCanvas.getContext('2d')
+
     function connect() {
       if (!active) return
       try {
@@ -703,34 +709,13 @@ export default function Display({
         ws.onopen = () => {
           intervalId = window.setInterval(() => {
             if (!video || video.readyState < 2 || !ws || ws.readyState !== WebSocket.OPEN || sending) return
+            if (!frameCtx) return
             sending = true
-            const tmp = document.createElement('canvas')
 
-// Keep the pose input resolution and aspect ratio identical
-// regardless of which local camera is being used.
-const POSE_WIDTH = 640
-const POSE_HEIGHT = 360
+            // Draw the camera frame into the fixed 16:9 pose input.
+            frameCtx.drawImage(video, 0, 0, POSE_WIDTH, POSE_HEIGHT)
 
-tmp.width = POSE_WIDTH
-tmp.height = POSE_HEIGHT
-
-const ctx = tmp.getContext('2d')
-
-if (!ctx) {
-    sending = false
-    return
-}
-
-// Draw the camera frame into the fixed 16:9 pose input.
-ctx.drawImage(
-    video,
-    0,
-    0,
-    POSE_WIDTH,
-    POSE_HEIGHT
-)
-
-tmp.toBlob(blob => {
+            frameCanvas.toBlob(blob => {
               sending = false
               if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return
               blob.arrayBuffer().then(buf => {
@@ -904,49 +889,11 @@ tmp.toBlob(blob => {
     // banner-logo store subscription with the app instance.
     let bannerUnsubscribe: (() => void) | undefined
 
-    async function createAnimForGif(option: GifOption) {
-      if (option === 'owl') {
-        return await createOwlAnim(app)
-      } else if (option === 'bat') {
-        return await createBatAnim(app)
-      } else if (option === 'globe') {
-        return await createGlobeAnim(app, marginOpts)
-      } else if (option === 'drone') {
-        const [container, updateDrone] = await createDroneAnim(app, marginOpts)
-        // Drone uses MediaPipe hand landmarks, not body pose — ignore pose arg
-        const wrappedUpdate = (_pose: any) => updateDrone(rawRef.current.hands ?? [])
-        return [container, wrappedUpdate] as const
-      } else if (option === 'scuba') {
-        return await createScubaAnim(app, marginOpts)
-      } else if (option === 'ocfusion') {
-        // No longer hand-tracked (see ocfusion.ts) — reads its assigned
-        // person's own face pose directly, same contract as pignose/etc.
-        return await createOCFusionAnim(app)
-      } else if (option === 'boxglove') {
-        // Hand-tracked like drone/sixseven: one glove per closed fist, so the
-        // animation owns all its slots and takes the raw hand list rather than
-        // a per-person pose.
-        const [container, updateGloves] = await createBoxGloveAnim(app)
-        const wrappedUpdate = (_pose: any) => updateGloves(rawRef.current.hands ?? [])
-        return [container, wrappedUpdate] as const
-      } else if (option === 'sixseven') {
-        const [container, updateSixSeven] = await createSixSevenAnim(app, marginOpts)
-        // Same as the drone — driven by hand landmarks, not body pose
-        const wrappedUpdate = (_pose: any) => updateSixSeven(rawRef.current.hands ?? [])
-        return [container, wrappedUpdate] as const
-      } else if (option === 'pignose') {
-        return await createPigNoseAnim(app)
-      } else if (option === 'batears') {
-        return await createBatEarsAnim(app)
-      } else if (option === 'clownwignose') {
-        return await createClownWigNoseAnim(app)
-      } else if (option === 'sunglasses') {
-        return await createSunglassesAnim(app)
-      } else if (option === 'mustache') {
-        return await createMustacheAnim(app)
-      }
-      return null
-    }
+    // Thin binding over the shared dispatch table (anim/createAnimForGif.ts)
+    // so the many call sites below don't each have to repeat this effect's
+    // app/margins/rawRef.
+    const createAnimForGif = (option: GifOption) =>
+      createAnimForGifShared(option, app, marginOpts, rawRef)
 
     let cancelled = false
     setAnimLoading(true)
@@ -975,35 +922,11 @@ tmp.toBlob(blob => {
         assign: (allPoses: { [id: number]: NormalizedLandmarkList }) => (NormalizedLandmarkList | undefined)[]
       }[] = []
       const cornerAnims: ((hasPerson: boolean) => void)[] = []
-      // 67 Mode state - see the ticker below and store.ts's challenge67Game
-      // for why the timer/rep-counting lives here rather than in
-      // Challenge67UI (this is where the per-frame pose data and a running
-      // clock already are).
-      const repCounter67 = createRepCounter()
-      let challenge67PhaseElapsed = 0
-      const submitChallenge67Score = (score: number) => {
-        fetch(`${getBackendHttpUrl()}/challenge67/submit`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // playerName was confirmed by Challenge67UI's 'naming' screen
-          // before 'countdown' ever starts, so it's already sitting on the
-          // shared atom by the time a round can end.
-          body: JSON.stringify({ score, name: challenge67Game.get().playerName }),
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            // `top` comes straight from this response, not a separate GET -
-            // a GET fired off the 'finished' phase transition below used to
-            // race this very POST and could win, showing the leaderboard as
-            // it looked BEFORE this round's score was written. See
-            // Challenge67UI.tsx and Challenge67State.lastResult.
-            challenge67Game.set({
-              ...challenge67Game.get(),
-              lastResult: { score, rank: data.rank, total: data.total, top: data.top ?? [] },
-            })
-          })
-          .catch((e) => console.warn('Failed to submit 67 Mode score:', e))
-      }
+      // 67 Mode's timer/rep-counting/phase transitions - see
+      // anim/challenge67/gameLoop.ts. It's driven from this effect's ticker
+      // rather than from Challenge67UI because this is where the per-frame
+      // pose data and a running clock already are.
+      const challenge67Loop = createChallenge67Loop()
       // QR mode: a single fade-prop instance (drone gif). Before lock-on, it
       // fades in and follows the code's own live on-screen position (from
       // the backend's decoded QR center) while QR_DRONE_PAYLOAD is visible.
@@ -1201,26 +1124,7 @@ tmp.toBlob(blob => {
 
       app.ticker.add(() => {
         if (challenge67On) {
-          const game = challenge67Game.get()
-          if (game.phase === 'countdown') {
-            challenge67PhaseElapsed += app.ticker.deltaMS / 1000
-            if (challenge67PhaseElapsed >= 3) {
-              challenge67PhaseElapsed = 0
-              repCounter67.reset()
-              challenge67Game.set({ ...game, phase: 'playing', timeLeft: 20, reps: 0 })
-            }
-          } else if (game.phase === 'playing') {
-            const pose = dataRef.current.mp_pose?.pose
-            const gained = repCounter67.processFrame(pose, performance.now())
-            const timeLeft = game.timeLeft - app.ticker.deltaMS / 1000
-            const reps = game.reps + gained
-            if (timeLeft <= 0) {
-              challenge67Game.set({ ...game, phase: 'finished', timeLeft: 0, reps, lastResult: undefined })
-              submitChallenge67Score(reps)
-            } else {
-              challenge67Game.set({ ...game, phase: 'playing', timeLeft, reps })
-            }
-          }
+          challenge67Loop.tick(dataRef.current.mp_pose?.pose, app.ticker.deltaMS / 1000)
         }
 
         for (const group of animGroups) {

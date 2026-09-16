@@ -23,6 +23,7 @@ import {
   photoCountdownSec,
   pointerEnabled,
   poseInd,
+  selectedCoyLogo,
 } from '../store'
 import { sleep } from '../utils'
 
@@ -189,6 +190,12 @@ export default function HUD({ photographerRef }: HUDProps) {
         url,
         timestamp,
         stripPhotos: stripGroups[stripIdx],
+        // Recorded with the photo so the gallery can redraw this strip's
+        // footer exactly as it was taken. It re-renders from scratch to
+        // recolour, and without this it has to guess - which is how it
+        // ended up hardcoding one fixed logo pair that no longer matches
+        // what the booth actually draws.
+        coyLogos: selectedCoyLogo.get(),
       }),
     }).catch(() => {})
   }

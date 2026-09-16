@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 import requests
 import websockets
+import aiohttp
 from aiohttp import web
 from ultralytics import YOLO
 from PIL import Image as PILImage
@@ -1955,6 +1956,7 @@ async def stop_stream_handler(request: web.Request) -> web.Response:
 
 def _write_photo_files(
     b64img: str, directory: str, share_url: str, pic_timestamp: int, strip_photos: list,
+    coy_logos: list,
 ) -> str:
     """Blocking disk I/O for save_photo_handler, run off the event loop thread
     so a photo save doesn't stall every other in-flight request/WS message."""
@@ -1976,10 +1978,21 @@ def _write_photo_files(
     with open(filepath, 'wb') as f:
         f.write(base64.b64decode(b64data))
 
-    # Save sidecar metadata (Cloudinary URL, original timestamp)
+    # Save sidecar metadata (share URL, original timestamp, and which company
+    # logos this strip's footer was drawn with).
+    #
+    # coyLogos is recorded per-photo rather than read live because the gallery
+    # app re-renders a strip from scratch when someone recolours it. Reading
+    # the booth's CURRENT selection there would silently restamp an old strip
+    # with today's logos; the strip has to come back out looking like it did
+    # when it was taken.
     meta_path = filepath + '.json'
     with open(meta_path, 'w') as f:
-        json.dump({'url': share_url, 'timestamp': pic_timestamp}, f)
+        json.dump({
+            'url': share_url,
+            'timestamp': pic_timestamp,
+            'coyLogos': coy_logos,
+        }, f)
 
     # Save raw strip photos separately (large; only needed for recoloring)
     if strip_photos:
@@ -1998,12 +2011,16 @@ async def save_photo_handler(request: web.Request) -> web.Response:
         share_url: str = data.get('url', '')
         pic_timestamp: int = data.get('timestamp', 0)
         strip_photos: list = data.get('stripPhotos', [])
+        coy_logos: list = data.get('coyLogos', [])
+        if not isinstance(coy_logos, list):
+            coy_logos = []
 
         if not b64img:
             return web.Response(status=400, text='Missing image', headers=_CORS)
 
         filepath = await asyncio.to_thread(
             _write_photo_files, b64img, directory, share_url, pic_timestamp, strip_photos,
+            coy_logos,
         )
 
         log.info(f"Photo saved: {filepath}")
@@ -2241,15 +2258,22 @@ async def list_photos_handler(request: web.Request) -> web.Response:
     result = []
     for f in files:
         meta_path = pathlib.Path(str(f) + '.json')
-        url, pic_ts = '', 0
+        url, pic_ts, coy_logos = '', 0, []
         if meta_path.exists():
             try:
                 meta = json.loads(meta_path.read_text())
                 url = meta.get('url', '')
                 pic_ts = meta.get('timestamp', 0)
+                # Absent on photos taken before this was recorded - the gallery
+                # falls back to its own default for those rather than dropping
+                # the logos entirely.
+                coy_logos = meta.get('coyLogos') or []
             except Exception:
                 pass
-        result.append({'filename': f.name, 'mtime': f.stat().st_mtime, 'url': url, 'timestamp': pic_ts})
+        result.append({
+            'filename': f.name, 'mtime': f.stat().st_mtime, 'url': url,
+            'timestamp': pic_ts, 'coyLogos': coy_logos,
+        })
     return web.json_response(result, headers=_CORS)
 
 
@@ -2288,6 +2312,85 @@ async def fetch_strips_handler(request: web.Request) -> web.Response:
         return web.Response(status=500, text=str(e), headers=_CORS)
 
 
+# ---------------------------------------------------------------------------
+# ImgBB re-upload (gallery recolour)
+# ---------------------------------------------------------------------------
+
+# The key lives here, server-side, rather than in the gallery app: the gallery
+# is opened from other machines/phones on the LAN, and Vite inlines any
+# VITE_-prefixed var straight into the JS bundle it serves them - so a key put
+# there would be readable by every device that loads the page. The booth
+# frontend already ships its own copy for the initial upload (it runs on the
+# kiosk itself); this is the path used when a photo is RE-uploaded after being
+# recoloured in the gallery.
+#
+# Falls back to reading the booth's existing .env so there's nothing new to
+# configure for a setup that already works - set IMGBB_API_KEY to override.
+def _imgbb_api_key() -> str:
+    key = os.environ.get('IMGBB_API_KEY', '').strip()
+    if key:
+        return key
+    env_path = pathlib.Path(__file__).parent.parent / 'client-ns-photobooth' / '.env'
+    try:
+        for line in env_path.read_text(encoding='utf-8').splitlines():
+            name, _, value = line.partition('=')
+            if name.strip() == 'VITE_IMGBB_API_KEY':
+                return value.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ''
+
+
+async def reupload_photo_handler(request: web.Request) -> web.Response:
+    """POST {"image": dataURL} - uploads a recoloured strip to ImgBB and
+    returns {"url": <viewer page>}.
+
+    The image posted here must NOT have its QR baked in yet: the QR has to
+    point at the URL this call returns, which doesn't exist until the upload
+    lands. The caller bakes the QR afterwards and PUTs the finished image back
+    (see replace_photo_handler, which also records the new URL).
+
+    A re-upload always produces a NEW url - ImgBB has no replace-in-place - so
+    any QR already printed or scanned keeps resolving to the pre-recolour
+    image. That's inherent to the host, not something this endpoint can avoid.
+    """
+    key = _imgbb_api_key()
+    if not key:
+        return web.Response(
+            status=503,
+            text='No ImgBB API key configured (set IMGBB_API_KEY)',
+            headers=_CORS,
+        )
+    try:
+        data = await request.json()
+        b64img: str = data.get('image', '')
+        if not b64img:
+            return web.Response(status=400, text='Missing image', headers=_CORS)
+        # ImgBB wants the raw base64 payload, not a full data: URI.
+        if ',' in b64img:
+            b64img = b64img.split(',', 1)[1]
+
+        form = aiohttp.FormData()
+        form.add_field('key', key)
+        form.add_field('image', b64img)
+
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post('https://api.imgbb.com/1/upload', data=form) as resp:
+                payload = await resp.json()
+
+        if not payload.get('success'):
+            log.error(f"ImgBB re-upload rejected: {payload}")
+            return web.Response(status=502, text='ImgBB upload failed', headers=_CORS)
+
+        url = payload['data']['url_viewer']
+        log.info(f"Photo re-uploaded to ImgBB: {url}")
+        return web.json_response({'url': url}, headers=_CORS)
+    except Exception as e:
+        log.error(f"Re-upload error: {e}")
+        return web.Response(status=500, text=str(e), headers=_CORS)
+
+
 async def replace_photo_handler(request: web.Request) -> web.Response:
     filename = request.match_info['filename']
     filepath = pathlib.Path('./photos') / filename
@@ -2303,6 +2406,22 @@ async def replace_photo_handler(request: web.Request) -> web.Response:
         else:
             b64data = b64img
         filepath.write_bytes(base64.b64decode(b64data))
+
+        # An optional new share URL, written in the same call that replaces
+        # the bytes so the file and its sidecar can't disagree about which
+        # upload the baked-in QR actually points at.
+        new_url = data.get('url')
+        if isinstance(new_url, str) and new_url:
+            meta_path = pathlib.Path(str(filepath) + '.json')
+            meta = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except Exception:
+                    meta = {}
+            meta['url'] = new_url
+            meta_path.write_text(json.dumps(meta))
+
         log.info(f"Photo replaced: {filepath}")
         return web.json_response({'ok': True}, headers=_CORS)
     except Exception as e:
@@ -2388,6 +2507,7 @@ def make_http_app() -> web.Application:
     app.router.add_get('/photos', list_photos_handler)
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)
+    app.router.add_post('/photos/{filename}/reupload', reupload_photo_handler)
     app.router.add_delete('/photos/{filename}', delete_photo_handler)
     app.router.add_get('/photos/{filename}/strips', fetch_strips_handler)
     app.router.add_get('/gallery', gallery_client_handler)

@@ -44,8 +44,8 @@ That's it. Docker handles Python, Node, and all dependencies inside containers.
 
 > **Why Python 3.11 specifically:** that's the version `backend/requirements.txt` is pinned and tested against. Earlier revisions of this project required 3.10 (numpy had no prebuilt wheel for 3.12 under the old pins), but that constraint no longer applies with the current pins — 3.11 is simply what's verified.
 
-Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt` (see step 7 below). A couple of things worth knowing if you're setting this up for the first time:
-- Hand detection uses **WiLoR**, not MediaPipe (MediaPipe was removed). The WiLoR source is vendored at `backend/wilor_src/`; its model weights (~2.5 GB) are not pip-installable and are not committed to git — fetch them once per machine with `python backend/fetch_wilor.py` (see step 7 below). The MANO hand mesh model is deliberately not required — it's licensed separately and its loader (`chumpy`) doesn't install on modern Python, so that layer is stubbed out; this pipeline never renders a mesh anyway.
+Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt` (see step 8 below). A couple of things worth knowing if you're setting this up for the first time:
+- Hand detection uses **WiLoR**, not MediaPipe (MediaPipe was removed). The WiLoR source is vendored at `backend/wilor_src/`; its model weights (~2.5 GB) are not pip-installable and are not committed to git — fetch them once per machine with `python backend/fetch_wilor.py` (see step 8 below). The MANO hand mesh model is deliberately not required — it's licensed separately and its loader (`chumpy`) doesn't install on modern Python, so that layer is stubbed out; this pipeline never renders a mesh anyway.
 - **If you have an NVIDIA GPU, `pip install -r backend/requirements.txt` alone will NOT use it.** `torch`/`torchvision` are deliberately left unpinned in `requirements.txt` — the correct wheel depends on your CUDA version, and the default PyPI wheel on Windows is CPU-only (`torch.cuda.is_available()` returns `False` even with a GPU present), silently making pose detection (and ViTPose++, see `ENABLE_VITPOSE` in `main.py`) run 20-50x slower. **Install torch FIRST, before the rest of `requirements.txt`:**
   1. Check your driver's supported CUDA version: `nvidia-smi` (top-right of the output, e.g. `CUDA Version: 12.6`).
   2. Pick the newest `cuXXX` PyTorch index your driver supports (e.g. CUDA 12.6 → `cu124`; CUDA 12.2 → `cu118`) and install:
@@ -146,7 +146,7 @@ Close and reopen PowerShell, then verify:
 py -3.11 --version
 ```
 
-> Python 3.11 specifically is required — see note above. If you already have other Python versions installed (e.g. 3.10, 3.12), use the `py -3.11` launcher (as in step 7) to make sure the venv is created with the right one.
+> Python 3.11 specifically is required — see note above. If you already have other Python versions installed (e.g. 3.10, 3.12), use the `py -3.11` launcher (as in step 8) to make sure the venv is created with the right one.
 
 ### 4. Install FFmpeg
 
@@ -195,7 +195,23 @@ cd ../..
 
 > Same reasoning as above — `app.py` also starts `gallery` with `yarn dev` directly, with no install step of its own. `gallery` pins its own Yarn version via `packageManager` in `gallery/package.json` (`yarn@4.16.0`, vs. `3.2.3+` for `client-ns-photobooth`) — Corepack switches automatically per-directory, so no extra setup is needed for that, just run `yarn install` from inside `gallery/`.
 
-### 7. Run the App
+### 7. Create the environment file
+
+```powershell
+cd photobooth/client-ns-photobooth
+copy .env.example .env
+cd ..
+```
+
+Then open `client-ns-photobooth/.env` and paste your ImgBB API key into `VITE_IMGBB_API_KEY` (free key from [api.imgbb.com](https://api.imgbb.com/)).
+
+> **`.env` is not in the repository** — it holds an API key, so it's gitignored and every checkout has to create its own from `.env.example`. Without it the animation timings read as `NaN` and the booth won't render characters correctly, so don't skip this step.
+>
+> The key is used twice: by the frontend when a photo is first uploaded, and by the backend when a photo is re-uploaded after being recoloured in the gallery. The backend reads this same file by default, so filling it in here covers both — set `IMGBB_API_KEY` in the backend's own environment if you'd rather keep them separate.
+>
+> No key? The booth still works: turn on **Offline Only** in Settings and photos save locally, with no upload and no QR code.
+
+### 8. Run the App
 
 ```powershell
 cd photobooth

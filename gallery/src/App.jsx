@@ -2,16 +2,27 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
 import QRCode from 'qrcode'
 import logo11Url from './assets/11logo.png'
 import fusionLogoUrl from './assets/fusionlogo.png'
+import atlasLogoUrl from './assets/Atlas Logo.png'
+import boreasLogoUrl from './assets/Boreas Logo.png'
+import hqLogoUrl from './assets/HQ Logo.png'
+import rstaLogoUrl from './assets/RSTA Logo.png'
+import signalLogoUrl from './assets/Signal Logo.png'
 
 const PORT = 8081
 const POLL_MS = 5000
 const STORAGE_KEY = 'photobooth_server_ip'
 const THEME_KEY = 'photobooth_gallery_theme'
 
-// Must match photoStrip.ts constants exactly
-// Photos sit flush to the strip edge - photoStrip.ts uses SIDE_PADDING = 0 /
-// TOP_PADDING = 0. A non-zero value here drew a border of the strip's
-// background colour (white by default) around every photo on recolour.
+// Must match photoStrip.ts constants exactly.
+//
+// This file deliberately re-implements photoStrip.ts rather than importing
+// it: that module reads the booth's live nanostores state (selectedCoyLogo)
+// and is bundled by a different Vite app entirely, neither of which exists
+// here. The cost is that the two can drift, and they HAVE - three ways, all
+// fixed below: the footer used to hardcode 11+Fusion regardless of what the
+// strip was actually taken with, never scaled the footer down for
+// single-photo strips, and sat the brand text one inset too high. If you
+// change footer layout in photoStrip.ts, change it here too.
 const STRIP_BORDER = 28
 const SIDE_PADDING = STRIP_BORDER
 const TOP_PADDING = STRIP_BORDER
@@ -22,15 +33,46 @@ const FOOTER_TEXT_INSET = STRIP_BORDER
 const GAP = 10
 const FOOTER_HEIGHT = 130
 const BRAND_TEXT = 'NS Photobooth'
-// One size for the QR and both logos, so all three match in width and
+// One size for the QR and every logo, so they all match in width and
 // height. Was QR 120 / logos 180, which rendered them visibly unequal.
 const FOOTER_ICON_SIZE = 96
-const QR_SIZE = FOOTER_ICON_SIZE
 const QR_MARGIN = 16
-const LOGO_SIZE = FOOTER_ICON_SIZE
 const LOGO_GAP = 10
+const FONT_SIZE = 38
+// A single photo makes a much shorter strip overall, so the same
+// fixed-height footer sized for a 3-photo strip looks oversized - scale the
+// whole footer band down for single images (photoStrip.ts's
+// SINGLE_IMAGE_FOOTER_SCALE).
+const SINGLE_IMAGE_FOOTER_SCALE = 0.5
 const IMG_FORMAT = 'image/webp'
 const IMG_QUALITY = 0.92
+
+/** Footer dimensions, scaled down for a single-photo strip - mirrors
+ * footerMetrics() in photoStrip.ts. */
+function footerMetrics(imageCount) {
+  const scale = imageCount === 1 ? SINGLE_IMAGE_FOOTER_SCALE : 1
+  return {
+    height: FOOTER_HEIGHT * scale,
+    qrSize: FOOTER_ICON_SIZE * scale,
+    qrMargin: QR_MARGIN * scale,
+    logoSize: FOOTER_ICON_SIZE * scale,
+    logoGap: LOGO_GAP * scale,
+    fontSize: FONT_SIZE * scale,
+  }
+}
+
+// Company logos available for the footer's middle slot, keyed the same way
+// the booth stores them (see COY_LOGOS in the booth's store.ts). Fixed draw
+// order, matching COY_ORDER in photoStrip.ts.
+const COY_LOGO_URLS = {
+  fusion: fusionLogoUrl,
+  atlas: atlasLogoUrl,
+  boreas: boreasLogoUrl,
+  hq: hqLogoUrl,
+  rsta: rstaLogoUrl,
+  signal: signalLogoUrl,
+}
+const COY_ORDER = ['fusion', 'atlas', 'boreas', 'hq', 'rsta', 'signal']
 
 export const STRIP_BG_OPTIONS = ['#ffffff', '#f6dade', '#dbe8dd', '#dbe4ef', '#f2ebe1']
 
@@ -45,18 +87,31 @@ function loadImage(src) {
   })
 }
 
-let brandLogosPromise = null
-function loadBrandLogos() {
-  if (!brandLogosPromise) {
-    brandLogosPromise = Promise.all([loadImage(logo11Url), loadImage(fusionLogoUrl)])
-  }
-  return brandLogosPromise
+// 11logo is on every strip, so it is loaded once and kept; company logos are
+// cached per key, since which ones a given strip needs varies.
+let logo11Promise = null
+function loadLogo11() {
+  if (!logo11Promise) logo11Promise = loadImage(logo11Url)
+  return logo11Promise
 }
 
-function footerQrBox(canvasWidth, canvasHeight) {
-  const x = canvasWidth - QR_MARGIN - QR_SIZE
-  const y = canvasHeight - FOOTER_HEIGHT / 2 - QR_SIZE / 2
-  return { x, y, size: QR_SIZE }
+const coyLogoPromises = new Map()
+function loadCoyLogo(key) {
+  const url = COY_LOGO_URLS[key]
+  if (!url) return null
+  let p = coyLogoPromises.get(key)
+  if (!p) {
+    p = loadImage(url)
+    coyLogoPromises.set(key, p)
+  }
+  return p
+}
+
+function footerQrBox(canvasWidth, canvasHeight, imageCount) {
+  const { height, qrSize, qrMargin } = footerMetrics(imageCount)
+  const x = canvasWidth - qrMargin - qrSize
+  const y = canvasHeight - height / 2 - qrSize / 2
+  return { x, y, size: qrSize }
 }
 
 /** 11logo.png carries transparent padding inside the file (its opaque content
@@ -117,29 +172,49 @@ function formatDateTime(timestamp) {
   return `${date}  ${hours}:${minutes} ${ampm}`
 }
 
-async function drawFooter(ctx, canvasWidth, canvasHeight, timestamp) {
-  const rowY = canvasHeight - FOOTER_HEIGHT / 2
+async function drawFooter(ctx, canvasWidth, canvasHeight, timestamp, imageCount, coyLogos) {
+  const { height, qrMargin, logoSize, logoGap, fontSize } = footerMetrics(imageCount)
+  const rowY = canvasHeight - height / 2
+
   ctx.fillStyle = '#3f3a35'
-  ctx.font = 'italic 38px Georgia, serif'
+  ctx.font = `italic ${fontSize}px Georgia, serif`
   ctx.textBaseline = 'bottom'
   ctx.textAlign = 'left'
+  // Baseline is canvasHeight, not canvasHeight - FOOTER_TEXT_INSET: the
+  // inset is horizontal only. photoStrip.ts has always drawn it flush to
+  // the bottom edge, and sitting it one inset higher here is what made a
+  // recoloured strip's footer text visibly jump.
   ctx.fillText(
     `${BRAND_TEXT}   ${formatDateTime(timestamp)}`,
     FOOTER_TEXT_INSET,
-    canvasHeight - FOOTER_TEXT_INSET,
+    canvasHeight,
   )
 
-  const { x: qrX } = footerQrBox(canvasWidth, canvasHeight)
-  const logoY = rowY - LOGO_SIZE / 2
-  const fusionX = qrX - QR_MARGIN - LOGO_SIZE
-  const logo11X = fusionX - LOGO_GAP - LOGO_SIZE
+  // Footer row is [11logo] [selectable, side by side] [QR]: 11logo is fixed,
+  // the middle block holds zero or more company logos and grows outward as
+  // more are selected, and the QR stays anchored right. Mirrors drawFooter
+  // in photoStrip.ts.
+  const { x: qrX } = footerQrBox(canvasWidth, canvasHeight, imageCount)
+  const logoY = rowY - logoSize / 2
 
-  const [logo11Img, fusionLogoImg] = await loadBrandLogos()
-  drawFooterIcon(ctx, logo11Img, logo11X, logoY, LOGO_SIZE)
-  drawFooterIcon(ctx, fusionLogoImg, fusionX, logoY, LOGO_SIZE)
+  const keys = COY_ORDER.filter((k) => coyLogos.includes(k))
+  const middleWidth = keys.length
+    ? keys.length * logoSize + (keys.length - 1) * logoGap
+    : 0
+  const middleLeftEdge = qrX - qrMargin - middleWidth
+  const logo11X = middleLeftEdge - (keys.length ? logoGap : 0) - logoSize
+
+  drawFooterIcon(ctx, await loadLogo11(), logo11X, logoY, logoSize)
+
+  let x = middleLeftEdge
+  for (const key of keys) {
+    const img = await loadCoyLogo(key)
+    if (img) drawFooterIcon(ctx, img, x, logoY, logoSize)
+    x += logoSize + logoGap
+  }
 }
 
-async function createPhotoStrip(images, bgColor = '#ffffff', timestamp = Date.now()) {
+async function createPhotoStrip(images, bgColor = '#ffffff', timestamp = Date.now(), coyLogos = []) {
   const loaded = await Promise.all(images.map(loadImage))
   const photoWidth = Math.max(...loaded.map((img) => img.width))
   const totalPhotoHeight = loaded.reduce((sum, img) => sum + img.height, 0)
@@ -148,7 +223,7 @@ async function createPhotoStrip(images, bgColor = '#ffffff', timestamp = Date.no
   canvas.width = photoWidth + SIDE_PADDING * 2
   canvas.height =
     totalPhotoHeight + GAP * (loaded.length - 1) + TOP_PADDING + PRE_FOOTER_GAP +
-    FOOTER_HEIGHT
+    footerMetrics(loaded.length).height
 
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = bgColor
@@ -161,11 +236,14 @@ async function createPhotoStrip(images, bgColor = '#ffffff', timestamp = Date.no
     y += img.height + GAP
   }
 
-  await drawFooter(ctx, canvas.width, canvas.height, timestamp)
+  await drawFooter(ctx, canvas.width, canvas.height, timestamp, loaded.length, coyLogos)
   return canvas.toDataURL(IMG_FORMAT, IMG_QUALITY)
 }
 
-async function addQrToStrip(stripDataUrl, qrValue) {
+/** imageCount must match what the strip was built with (1 vs more), since
+ * that's what decides the footer's scale - same contract as photoStrip.ts's
+ * addQrToStrip. */
+async function addQrToStrip(stripDataUrl, qrValue, imageCount) {
   const strip = await loadImage(stripDataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = strip.width
@@ -173,7 +251,7 @@ async function addQrToStrip(stripDataUrl, qrValue) {
   const ctx = canvas.getContext('2d')
   ctx.drawImage(strip, 0, 0)
 
-  const { x, y, size } = footerQrBox(canvas.width, canvas.height)
+  const { x, y, size } = footerQrBox(canvas.width, canvas.height, imageCount)
   const qrPadding = 8
   ctx.fillStyle = 'white'
   ctx.fillRect(x - qrPadding, y - qrPadding, size + qrPadding * 2, size + qrPadding * 2)
@@ -345,6 +423,9 @@ function QrZoom({ url, onClose }) {
 function QrBox({ url }) {
   const canvasRef = useRef(null)
   const [zoomed, setZoomed] = useState(false)
+  // What the canvas currently has drawn on it, so the redraw guard below can
+  // tell "already up to date" from "same size, different link".
+  const drawnRef = useRef({ url: null, width: 0 })
 
   // Close the enlarged view when the photo changes (the arrow keys browse the
   // filmstrip even while it is open). Without this, stepping onto a photo that
@@ -403,8 +484,16 @@ function QrBox({ url }) {
       // Redrawing sets the canvas's own height, which changes scrollHeight and
       // re-triggers the observer below — so only redraw on a real change, or
       // the two would feed each other in a loop.
-      if (Math.abs(canvas.width - width) <= 1) return
+      //
+      // "A real change" has to include the URL, not just the size: recolouring
+      // a photo re-uploads it and mints a new share link (see
+      // handleColorChange) without altering the panel's layout at all, so a
+      // size-only check bailed out and left the PREVIOUS code on the canvas.
+      // It only corrected itself on a page refresh, where the canvas starts at
+      // its default width and the size check happens to pass.
+      if (drawnRef.current.url === url && Math.abs(canvas.width - width) <= 1) return
       QRCode.toCanvas(canvas, url, { width, margin: 1 })
+      drawnRef.current = { url, width }
     }
 
     measure()
@@ -782,21 +871,66 @@ export function App() {
         return
       }
 
-      // Regenerate the strip with the new background color
-      let newStrip = await createPhotoStrip(stripPhotos, color, photo.timestamp || Date.now())
+      // Regenerate the strip with the new background color, reusing the
+      // company logos this strip was originally taken with (recorded in its
+      // sidecar metadata at save time - see _write_photo_files in main.py).
+      // Photos taken before that was recorded come back with an empty list;
+      // fall back to Fusion, which is what the booth's own default is and
+      // what this app used to hardcode for every strip.
+      const coyLogos = photo.coyLogos?.length ? photo.coyLogos : ['fusion']
+      let newStrip = await createPhotoStrip(
+        stripPhotos, color, photo.timestamp || Date.now(), coyLogos,
+      )
 
-      // Rebake the QR using the same Cloudinary URL (no re-upload needed)
+      // Re-upload the recoloured strip so the copy guests actually scan for
+      // matches what they see here. This used to reuse the original URL
+      // without re-uploading, which meant recolouring only ever changed the
+      // local/printed copy - the hosted image stayed the colour it was taken
+      // at.
+      //
+      // Order matters: the QR has to be baked in AFTER the upload, because it
+      // points at a URL that doesn't exist until the upload lands. The upload
+      // runs on the backend (which holds the ImgBB key) rather than here -
+      // this bundle is served to other machines on the LAN.
+      //
+      // ImgBB has no replace-in-place, so this mints a NEW url and any QR
+      // already printed or scanned still resolves to the pre-recolour image.
+      // Unavoidable; the new url is recorded below so everything from here on
+      // uses it.
+      //
+      // A photo with no url was saved offline - there's nothing hosted to
+      // update, so it keeps its QR-less local-only treatment.
+      let newUrl = photo.url
       if (photo.url) {
-        newStrip = await addQrToStrip(newStrip, photo.url)
+        const upRes = await fetch(
+          `http://${serverIp}:${PORT}/photos/${encodeURIComponent(photo.filename)}/reupload`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: newStrip }),
+            signal: AbortSignal.timeout(60000),
+          },
+        )
+        if (!upRes.ok) {
+          throw new Error(
+            upRes.status === 503
+              ? 'Recolour needs an ImgBB API key on the photobooth PC (set IMGBB_API_KEY).'
+              : `Re-upload failed: HTTP ${upRes.status}`,
+          )
+        }
+        newUrl = (await upRes.json()).url
+        newStrip = await addQrToStrip(newStrip, newUrl, stripPhotos.length)
       }
 
-      // Replace the file on the backend so all viewers see the updated image
+      // Replace the file on the backend so all viewers see the updated image,
+      // recording the new share url in the same call so the saved file and
+      // its metadata agree on which upload its QR points at.
       const putRes = await fetch(
         `http://${serverIp}:${PORT}/photos/${encodeURIComponent(photo.filename)}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: newStrip }),
+          body: JSON.stringify({ image: newStrip, url: newUrl }),
         },
       )
       if (!putRes.ok) throw new Error(`HTTP ${putRes.status}`)
@@ -804,6 +938,13 @@ export function App() {
       // Track the color and bust the cache so the <img> reloads
       setStripColors((prev) => ({ ...prev, [photo.filename]: color }))
       setVersions((prev) => ({ ...prev, [photo.filename]: Date.now() }))
+      // Point the side panel's QR at the new upload straight away, rather
+      // than waiting for the next poll to bring the updated metadata round.
+      if (newUrl !== photo.url) {
+        setPhotos((prev) =>
+          prev.map((p) => (p.filename === photo.filename ? { ...p, url: newUrl } : p)),
+        )
+      }
     } catch (e) {
       setError('Recolour failed: ' + e.message)
     } finally {

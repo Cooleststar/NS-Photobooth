@@ -23,8 +23,14 @@ client-ns-photobooth/dist/
 client-ns-photobooth/.vite/
 
 # Environment variables
+# .env holds the ImgBB API key. It was previously committed (Vite's stock
+# gitignore only covers .env.local), so the key in git history should be
+# treated as compromised and rotated - untracking it here only stops future
+# commits. .env.example is the template to copy; it is deliberately tracked.
+.env
 .env.local
 .env.*.local
+!.env.example
 
 # OS files
 .DS_Store
