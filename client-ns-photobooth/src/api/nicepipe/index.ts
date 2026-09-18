@@ -52,6 +52,22 @@ export type HandData = {
   owner: number
 }
 
+/** One person's head, from the lightweight pose pass that runs inside the
+ * hand worker (see wilor_hands.py's _extract_heads). Only present while that
+ * pass is on - it is what lets a hands-only character know where heads are
+ * without the full pose pipeline running. */
+export type HeadData = {
+  /** Centre of the head, normalised to the raw camera frame (NOT mirrored -
+   * consumers flip x the same way they do for hands). */
+  x: number
+  y: number
+  /** Head width as a fraction of frame width, like HandData's `w`. Everything
+   * built on this should scale by it rather than using pixel constants, or it
+   * behaves differently for someone at the back of the booth. */
+  size: number
+  conf: number
+}
+
 /** One decoded QR code (QR mode). x/y are its center — normalized 0-1 on
  * rawRef (raw camera-frame coordinates), or remapped screen-space pixels on
  * dataRef (see the qrCodes remap in Display.tsx's createReceivingCtx,
@@ -72,6 +88,8 @@ export type Analysis = {
   }
   allPoses?: { [id: number]: NormalizedLandmarkList }
   hands?: HandData[]
+  /** Heads found on the same frame as `hands` (see HeadData). */
+  heads?: HeadData[]
   /** Every QR code currently visible in-frame (QR mode only) */
   qrCodes?: QrCodeDetection[]
   /** performance.now() timestamp of the last /pose_out message received — used to

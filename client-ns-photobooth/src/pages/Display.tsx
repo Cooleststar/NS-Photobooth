@@ -391,6 +391,50 @@ function createReceivingCtx(
       }
       dataRef.current.allPoses = allPoses
 
+      // Hands and heads get the SAME correction every other detection above
+      // gets, and for the same reason: the video is drawn into an inset rect
+      // (xMargin/yMargin above), not the whole canvas, so a detection's
+      // normalised coordinates do not address the canvas directly.
+      //
+      // The hand-driven characters (gloves, drone, 67) used to read the raw
+      // values straight off the backend and multiply by the full canvas size.
+      // That is exact at the centre of frame and drifts outward from there -
+      // about 30px at the edges, 42px in the bottom corners - which is why a
+      // glove sat cleanly on a hand mid-frame but slipped off one held out
+      // near a corner. Sizes were uniformly ~3% large for the same reason.
+      //
+      // Point positions go through remapPoint; the two scale factors below
+      // are that same mapping's linear terms, for the box dimensions it
+      // cannot carry (being a point transform).
+      const spanScale = 1 - 2 * MARGIN_X
+      const sizeScaleY = spanScale * ((width / height) / (imgWidth / imgHeight))
+      dataRef.current.hands = (data.hands ?? []).map((hand) => {
+        const rx: number[] = []
+        const ry: number[] = []
+        for (let i = 0; i < hand.x.length; i++) {
+          const [px, py] = remapPoint(
+            hand.x[i],
+            hand.y[i],
+            width / height,
+            imgWidth / imgHeight,
+          )
+          rx.push(px)
+          ry.push(py)
+        }
+        return { ...hand, x: rx, y: ry, w: hand.w * spanScale, h: hand.h * sizeScaleY }
+      })
+      dataRef.current.heads = (data.heads ?? []).map((head) => {
+        const [hx, hy] = remapPoint(
+          head.x,
+          head.y,
+          width / height,
+          imgWidth / imgHeight,
+        )
+        // size is a fraction of frame WIDTH (see HeadData), so it takes the
+        // horizontal factor.
+        return { ...head, x: hx, y: hy, size: head.size * spanScale }
+      })
+
       // recalculate prop coordinates
       const rawProps = data.kp ?? []
       const propDets = rawProps.map((det) => {
@@ -574,10 +618,14 @@ export default function Display({
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let cycleTimer: ReturnType<typeof setTimeout> | undefined
 
-    // Characters that treat two hands as one person's need the backend to
-    // tag which person each hand belongs to (see HandData.owner). Off
-    // otherwise, since it runs a pose model alongside hand detection.
-    const handOwners = !challenge67On && !qrMode && gifOptions.includes('sixseven')
+    // Switches on the lightweight pose pass inside the hand worker, which
+    // supplies both hand owners (HandData.owner, for pairing two hands as one
+    // person's) and head positions (HeadData). 67 needs the first, the boxing
+    // gloves' dizzy stars need the second. Off otherwise, since it runs a
+    // pose model alongside hand detection.
+    const handOwners =
+      !challenge67On && !qrMode &&
+      (gifOptions.includes('sixseven') || gifOptions.includes('boxglove'))
 
     const send = (mode: string) => {
       fetch(`${getBackendHttpUrl()}/detection_mode`, {
@@ -892,8 +940,13 @@ export default function Display({
     // Thin binding over the shared dispatch table (anim/createAnimForGif.ts)
     // so the many call sites below don't each have to repeat this effect's
     // app/margins/rawRef.
+    // dataRef, not rawRef: the hand-driven characters need hands already
+    // corrected for the video's inset rect, exactly as every pose-driven one
+    // gets its landmarks corrected (see the remap block in
+    // createReceivingCtx). Reading raw values here was what made gloves drift
+    // outward toward the edges of frame.
     const createAnimForGif = (option: GifOption) =>
-      createAnimForGifShared(option, app, marginOpts, rawRef)
+      createAnimForGifShared(option, app, marginOpts, dataRef)
 
     let cancelled = false
     setAnimLoading(true)

@@ -1207,8 +1207,14 @@ def run_pose_detection(
                          'ViTPose' if vit else 'YOLO', flag)
 
     hands: list = []
+    heads: list = []
     if mode in ('hands', 'both'):
         hands = run_hand_detection(hands_frame if hands_frame is not None else frame)
+        # Found by the same pose pass that tags hand owners, on the same frame
+        # as those hands - empty unless that pass is switched on. Lets a
+        # hands-only character know where people's heads are (boxglove.ts's
+        # dizzy stars) without turning on the full pose pipeline.
+        heads = _wilor_hands.heads()
 
     # qr_frame is only ever passed explicitly by the RTSP reader (see
     # _rtsp_reader) — handle_video's webcam path calls this without it, so
@@ -1220,7 +1226,7 @@ def run_pose_detection(
         else _decode_qr_codes(frame)
     ) if mode == 'qr' else []
 
-    return {"poses": poses, "hands": hands, "qr_codes": qr_codes}
+    return {"poses": poses, "hands": hands, "heads": heads, "qr_codes": qr_codes}
 
 # ---------------------------------------------------------------------------
 # 67 Mode leaderboard - a single local JSON file, no database. This is a

@@ -138,6 +138,21 @@ _OWNER_MIN_WRIST_CONF = 0.3
 # neighbour's.
 _OWNER_MAX_DIST_DIAGONALS = 1.0
 _COCO_WRISTS = (9, 10)
+
+# The same pose pass that tags hand owners also gives every person's head, at
+# no extra cost - it is the same YOLO result, and heads were simply being
+# discarded. boxglove.ts uses it to tell when a glove has swung near someone
+# (see the dizzy stars there); nothing else needs body pose, which is why this
+# stays inside the hand worker rather than turning on the main YOLO+ViTPose
+# pipeline for a hands-only character.
+_COCO_NOSE = 0
+_COCO_EYES = (1, 2)
+_COCO_EARS = (3, 4)
+_HEAD_MIN_CONF = 0.3
+# Head width as a multiple of eye separation, for the fallback when the ears
+# aren't confidently placed. Ear-to-ear IS head width; eye-to-eye is roughly
+# 45% of it on a face-on head.
+_HEAD_WIDTH_PER_EYE_SPAN = 2.2
 _owners_enabled = False
 _owner_pose = None
 
@@ -243,6 +258,7 @@ _device = 'cpu'
 
 _queue: queue.Queue = queue.Queue(maxsize=1)
 _cache: list = []
+_cache_heads: list = []
 # Held around every call into the model, whether from the background worker
 # or detect_sync below - torch/ultralytics inference isn't guaranteed safe
 # from two threads at once, and offline clip analysis calls detect_sync from
@@ -521,7 +537,9 @@ def _screen_angle(R: np.ndarray, is_right: bool) -> float:
     return float(np.arctan2(f[1], f[0]))
 
 
-def _infer(frame: np.ndarray) -> list:
+def _infer(frame: np.ndarray) -> tuple:
+    """Returns (hands, heads). heads is empty unless the pose pass is on -
+    see set_owners_enabled."""
     import torch
     h, w = frame.shape[:2]
     rgb = frame[:, :, ::-1].copy()
@@ -529,7 +547,7 @@ def _infer(frame: np.ndarray) -> list:
     det = _detector(frame, conf=WILOR_DET_CONF, verbose=False)[0]
     boxes = det.boxes.xyxy.cpu().numpy()
     if len(boxes) == 0:
-        return []
+        return [], []
     classes = det.boxes.cls.cpu().numpy()
     confs = det.boxes.conf.cpu().numpy()
 
@@ -640,13 +658,14 @@ def _infer(frame: np.ndarray) -> list:
             'owner': -1,
         })
 
+    heads: list = []
     if _owners_enabled and hands:
         try:
-            _assign_owners(frame, hands)
+            heads = _pose_assist(frame, hands)
         except Exception as _e:
-            # Owners stay -1: consumers treat that as "can't pair", which
-            # shows fewer props rather than wrong ones.
-            log.debug("hand owner lookup failed: %s: %s", type(_e).__name__, _e)
+            # Owners stay -1 and heads stay empty: consumers treat both as
+            # "can't tell", which shows fewer props rather than wrong ones.
+            log.debug("hand pose pass failed: %s: %s", type(_e).__name__, _e)
 
     if FIST_DEBUG and hands:
         global _fist_debug_last
@@ -659,7 +678,7 @@ def _infer(frame: np.ndarray) -> list:
                          'FIST' if hd['fist'] else 'open',
                          np.degrees(hd['angle']), hd['w'], hd['h'])
 
-    return hands
+    return hands, heads
 
 
 def set_owners_enabled(enabled: bool) -> None:
@@ -669,17 +688,61 @@ def set_owners_enabled(enabled: bool) -> None:
     _owners_enabled = bool(enabled)
 
 
-def _assign_owners(frame: np.ndarray, hands: list) -> None:
-    """Set each hand's 'owner' to the index of the person whose wrist it is
-    at, or -1. Indices are per frame: they say which hands share a person in
-    this update, not who that person is across updates."""
+def _extract_heads(kp, kc, w: int, h: int) -> list:
+    """Every person's head centre and width, normalised to the frame.
+
+    A head with no usable width is skipped rather than given a guessed one:
+    everything downstream is scale-relative (how near a glove must be to
+    count as a hit, how big the stars are), and a wrong scale would make a
+    far-away head trigger at a completely different real distance than a near
+    one. That is the same class of bug the 67 pairing had before hand size
+    was taken into account.
+    """
+    heads = []
+    for p in range(len(kp)):
+        ear_conf = [kc[p, i] for i in _COCO_EARS]
+        eye_conf = [kc[p, i] for i in _COCO_EYES]
+        if all(c >= _HEAD_MIN_CONF for c in ear_conf):
+            (x1, y1), (x2, y2) = kp[p, _COCO_EARS[0]], kp[p, _COCO_EARS[1]]
+            width = float(np.hypot(x1 - x2, y1 - y2))
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            conf = float(min(ear_conf))
+        elif all(c >= _HEAD_MIN_CONF for c in eye_conf):
+            # Profile or partly occluded: the ears are unreliable but the eyes
+            # still place the face, just at a different scale.
+            (x1, y1), (x2, y2) = kp[p, _COCO_EYES[0]], kp[p, _COCO_EYES[1]]
+            width = float(np.hypot(x1 - x2, y1 - y2)) * _HEAD_WIDTH_PER_EYE_SPAN
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            conf = float(min(eye_conf))
+        else:
+            continue
+        if width < 1.0:
+            continue
+        heads.append({
+            'x': float(cx / w),
+            'y': float(cy / h),
+            # As a fraction of frame WIDTH, like a hand's 'w' - the frontend
+            # multiplies it back up by the rendered width the same way.
+            'size': float(width / w),
+            'conf': conf,
+        })
+    return heads
+
+
+def _pose_assist(frame: np.ndarray, hands: list) -> list:
+    """One YOLO pose pass serving two purposes.
+
+    Tags each hand's 'owner' in place with the index of the person whose wrist
+    it sits at (or leaves it -1), and returns every person's head. Indices are
+    per frame: they say which hands share a person in this update, not who
+    that person is across updates."""
     global _owner_pose
     if _owner_pose is None:
         from ultralytics import YOLO
         _owner_pose = YOLO(_OWNER_POSE_WEIGHTS)
     r = _owner_pose(frame, verbose=False)[0]
     if r.keypoints is None or len(r.keypoints) == 0:
-        return
+        return []
     h, w = frame.shape[:2]
     kp = r.keypoints.xy.cpu().numpy()
     kc = (r.keypoints.conf.cpu().numpy() if r.keypoints.conf is not None
@@ -706,9 +769,11 @@ def _assign_owners(frame: np.ndarray, hands: list) -> None:
         used_hand.add(i)
         used_wrist.add(j)
 
+    return _extract_heads(kp, kc, w, h)
+
 
 def _worker():
-    global _cache
+    global _cache, _cache_heads
     while True:
         try:
             frame = _queue.get(timeout=1.0)
@@ -716,7 +781,10 @@ def _worker():
             continue
         try:
             with _infer_lock:
-                _cache = _infer(frame)
+                # Assigned together, so a reader can never pair this frame's
+                # hands with the previous frame's heads - the glove/head
+                # distance test depends on both describing the same moment.
+                _cache, _cache_heads = _infer(frame)
         except Exception as e:
             log.debug("WiLoR inference error: %s: %s", type(e).__name__, e)
 
@@ -737,6 +805,13 @@ def detect(frame: np.ndarray) -> list:
     return _cache
 
 
+def heads() -> list:
+    """Heads found alongside the most recent detect() result, same frame.
+
+    Empty unless the pose pass is enabled (set_owners_enabled)."""
+    return _cache_heads
+
+
 def detect_sync(frame: np.ndarray) -> list:
     """Run hand detection synchronously and return this frame's own result.
 
@@ -749,7 +824,7 @@ def detect_sync(frame: np.ndarray) -> list:
     if not _available:
         return []
     with _infer_lock:
-        return _infer(frame)
+        return _infer(frame)[0]
 
 
 def available() -> bool:

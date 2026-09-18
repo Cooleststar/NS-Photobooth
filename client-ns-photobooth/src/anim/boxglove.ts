@@ -2,10 +2,11 @@ import * as PIXI from '../pixi'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear } from './utils'
-import { HandData } from '../api/nicepipe'
+import { HandData, HeadData } from '../api/nicepipe'
 import { AnimStateManager } from './AnimState'
 
 import gloveImg from '../assets/boxglove/boxingglove.png'
+import starImg from '../assets/dizzyanimation/dizzystar.png'
 
 const ANIM = {
   FADE: parseFloat(import.meta.env.VITE_ANIM_FADE),
@@ -107,6 +108,97 @@ const MAX_CLAIM_DISTANCE_FACTOR = 0.25
 // backend's `fist` flag is the strict test used to APPEAR; once a glove is on
 // it stays on while curl holds above this looser value.
 const FIST_EXIT_CURL = 0.8
+
+// ---------------------------------------------------------------------------
+// Dizzy stars - the paired half of this character
+// ---------------------------------------------------------------------------
+// A glove swung near someone's head leaves them seeing stars. Owned by this
+// animation rather than being its own pickable character: it has no meaning
+// without gloves, and a picker entry that silently does nothing unless
+// another entry is also on is worse than no entry at all.
+//
+// Head positions come from the pose pass already running inside the hand
+// worker for owner tagging (wilor_hands.py's _pose_assist), so this needs no
+// second model and no switch to 'both' detection mode - which would drag
+// YOLO+ViTPose in alongside the hands.
+//
+// Anyone can be hit, including by their own glove: excluding self would mean
+// attributing the hit to a hand owner, and punching yourself dizzy is funnier
+// at a photo booth than it is wrong.
+
+/** As many as the hand cap allows people (WILOR_MAX_HANDS / 2). */
+const DIZZY_SLOTS = 5
+const DIZZY_STARS = 5
+
+/** How long the stars stay after the last hit. Long enough to read and to be
+ * photographed; refreshed by every further hit, so a flurry keeps them up. */
+const DIZZY_DURATION = 2.5
+
+/** A head that stops being detected keeps its stars this long before they are
+ * cut - covers detection flicker without leaving stars orbiting empty air
+ * after someone walks out of frame. Same idea as FIST_HOLD_TIME. */
+const DIZZY_HEAD_HOLD = 0.4
+
+/** Tolerance on the contact test below. 1.0 is exactly when the drawn glove
+ * and the head touch; lower demands overlap, higher fires just before they
+ * meet. A multiplier on measured geometry rather than a distance in its own
+ * right, so it stays correct at any distance from the camera. */
+const DIZZY_HIT_FACTOR = 1.0
+
+// The glove's VISIBLE extent, per unit of the slot's tracked hand size.
+//
+// Measured off boxingglove.png rather than taken from the sprite box, because
+// that box is mostly empty: the texture is square but the art fills only 44%
+// of its width and 82% of its height. Testing against the box would treat a
+// glove as nearly twice as wide as it looks, and the first version of this
+// test - a plain point-to-point distance ignoring the sprite entirely - erred
+// the other way, needing the glove to bury itself in the head before firing.
+//
+// Re-derive these if the artwork is ever replaced: they are (opaque bbox /
+// texture size) x (rendered size per unit), with the offset being how far the
+// art's centre sits from GLOVE_ANCHOR along the glove's own axis.
+const GLOVE_VISUAL_HALF_W = 0.555
+const GLOVE_VISUAL_HALF_H = 0.757
+const GLOVE_VISUAL_OFFSET_Y = 0.105
+
+/** How far a slot may reach to re-find its head between frames, in head
+ * widths. Heads carry no stable id (the pose pass indexes them per frame), so
+ * a slot re-acquires the nearest head each frame, exactly as glove slots
+ * re-acquire hands. */
+const DIZZY_MATCH_FACTOR = 1.5
+
+/** Ignore heads the pose model is unsure about, rather than showing stars
+ * over a mis-detection. */
+const DIZZY_HEAD_MIN_CONF = 0.3
+
+// Orbit shape and motion, built the same way as globe.ts: a circle read as an
+// ellipse tilted away from the camera, where sin(angle) doubles as the depth
+// cue - +1 nearest the camera (lowest on screen), -1 furthest (highest).
+const DIZZY_ORBIT_SPEED = 2.4
+const DIZZY_ORBIT_RADIUS_FACTOR = 0.85
+const DIZZY_ORBIT_Y_SQUISH = 0.33
+/** How much a star grows toward the camera and shrinks away from it, as a
+ * fraction of its base size - what sells the ring as a loop through depth
+ * rather than a flat circle drawn on the screen. */
+const DIZZY_DEPTH_SCALE = 0.3
+/** Alpha at the far point. Deliberately NOT the full fade globe.ts uses for
+ * its pass behind the body: these orbit above the head with nothing to hide
+ * behind, so dimming reads as depth where vanishing would read as flicker. */
+const DIZZY_FAR_ALPHA = 0.45
+const DIZZY_STAR_SIZE_FACTOR = 0.36
+/** How far above the head centre the ring sits, in head widths. */
+const DIZZY_HEAD_LIFT = 0.8
+/** Each star also turns on its own axis, so the ring doesn't read as one
+ * rigid object sliding around. */
+const DIZZY_STAR_SPIN = 1.1
+
+interface DizzyTarget {
+  x: number
+  y: number
+  size: number
+  /** A glove is within range THIS frame, so the timer refreshes. */
+  hit: boolean
+}
 
 interface GloveTarget {
   x: number
@@ -247,7 +339,17 @@ async function createGlove(app: PIXI.Application) {
   }
   initialState()
 
-  const getTrackedPos = () => ({ x, y, active: animManager.tracking })
+  // size and heading come along so the dizzy contact test can work against
+  // the glove as it is actually DRAWN - an oriented ellipse - rather than
+  // against the bare anchor point.
+  const getTrackedPos = () => ({
+    x,
+    y,
+    size,
+    dirX,
+    dirY,
+    active: animManager.tracking,
+  })
 
   const update = (target: GloveTarget | undefined) => {
     if (target) {
@@ -364,6 +466,223 @@ async function createGlove(app: PIXI.Application) {
   return [container, update, getTrackedPos] as const
 }
 
+/** One person's ring of orbiting stars. */
+async function createDizzy(app: PIXI.Application) {
+  const { ticker, loader } = app
+  const container = new PIXI.Container()
+
+  const { texture } = await PIXI.ensureLoaded(loader, starImg)
+  const stars = Array.from({ length: DIZZY_STARS }, () => {
+    const sprite = PIXI.Sprite.from(texture!)
+    sprite.anchor.set(0.5, 0.5)
+    container.addChild(sprite)
+    return sprite
+  })
+
+  let x = 0
+  let y = 0
+  let size = 100
+  let hasDrawn = false
+  let orbitTime = 0
+  /** Seconds of stars left. Refreshed to DIZZY_DURATION by every hit. */
+  let dizzyTimer = 0
+  /** How long this slot's head has been missing, so flicker doesn't cut it. */
+  let lostFor = 0
+
+  const animManager = new AnimStateManager()
+
+  const initialState = () => {
+    container.alpha = 0
+  }
+  initialState()
+
+  const resetEasing = () => {
+    hasDrawn = false
+    orbitTime = 0
+  }
+
+  const getTracked = () => ({ x, y, size, active: animManager.tracking })
+
+  const place = () => {
+    const cx = x
+    const cy = y - size * DIZZY_HEAD_LIFT
+    const radius = size * DIZZY_ORBIT_RADIUS_FACTOR
+    const base = size * DIZZY_STAR_SIZE_FACTOR
+    stars.forEach((sprite, i) => {
+      const angle = orbitTime * DIZZY_ORBIT_SPEED + (i * Math.PI * 2) / DIZZY_STARS
+      // +1 at the near point of the loop, -1 at the far one.
+      const depth = Math.sin(angle)
+      sprite.position.set(
+        cx + Math.cos(angle) * radius,
+        cy + depth * radius * DIZZY_ORBIT_Y_SQUISH,
+      )
+      const scale = base * (1 + depth * DIZZY_DEPTH_SCALE)
+      sprite.width = scale
+      sprite.height = scale
+      sprite.rotation = orbitTime * DIZZY_STAR_SPIN + i
+      // depth -1..1 mapped to DIZZY_FAR_ALPHA..1
+      sprite.alpha = DIZZY_FAR_ALPHA + ((depth + 1) / 2) * (1 - DIZZY_FAR_ALPHA)
+    })
+  }
+
+  const update = (target: DizzyTarget | undefined) => {
+    const dt = ticker.deltaMS / 1000
+
+    if (target) {
+      lostFor = 0
+      x = target.x
+      y = target.y
+      size = target.size
+      if (target.hit) dizzyTimer = DIZZY_DURATION
+      hasDrawn = true
+    } else {
+      lostFor += dt
+      // Gone for good rather than a dropped frame - drop the stars now
+      // instead of leaving them orbiting nothing.
+      if (lostFor > DIZZY_HEAD_HOLD) dizzyTimer = 0
+    }
+
+    dizzyTimer = Math.max(0, dizzyTimer - dt)
+    orbitTime += dt
+
+    animManager.tracking = dizzyTimer > 0 && hasDrawn
+    const { time, state } = animManager
+
+    switch (state) {
+      case 'exited':
+        initialState()
+        resetEasing()
+        break
+      case 'entering':
+        container.alpha = lerpLinear(time, 0, ANIM.FADE)
+        place()
+        if (time >= ANIM.FADE) animManager.transition()
+        break
+      case 'entered':
+        container.alpha = 1
+        place()
+        break
+      case 'lost':
+        animManager.transition()
+        break
+      case 'exiting':
+        container.alpha = 1 - lerpLinear(time, 0, ANIM.FADE)
+        place()
+        if (time >= ANIM.FADE) {
+          initialState()
+          resetEasing()
+          animManager.transition()
+        }
+        break
+    }
+
+    animManager.update(dt)
+  }
+
+  return [container, update, getTracked] as const
+}
+
+/** Match heads to dizzy slots, and work out which were hit this frame.
+ *
+ * Heads carry no identity across frames (the pose pass indexes them per
+ * frame), so a showing slot re-finds the nearest head within reach, exactly
+ * as glove slots re-find hands. A hit head belonging to no slot claims an
+ * idle one. */
+type GlovePos = {
+  x: number
+  y: number
+  size: number
+  dirX: number
+  dirY: number
+  active: boolean
+}
+
+/** Whether the drawn glove and a head are touching.
+ *
+ * The glove is treated as the oriented ellipse it visually is, not as its
+ * anchor point: it is drawn well over a head wide and rotates with the hand,
+ * so a point test fired only once the glove had pushed most of the way into
+ * the head. The head is a circle of its own radius, and a circle meets an
+ * ellipse when its centre enters that ellipse grown by the circle's radius -
+ * so the radius is simply added to each semi-axis. */
+function gloveTouchesHead(
+  g: GlovePos,
+  hx: number,
+  hy: number,
+  headRadius: number,
+): boolean {
+  // Into the glove's own frame. sprite.rotation is the heading plus
+  // ART_UP_OFFSET (see place()), so undoing it puts the art upright, with its
+  // local +y running down the glove toward the cuff.
+  const rot = Math.atan2(g.dirY, g.dirX) + ART_UP_OFFSET
+  const cos = Math.cos(-rot)
+  const sin = Math.sin(-rot)
+  const dx = hx - g.x
+  const dy = hy - g.y
+  const lx = dx * cos - dy * sin
+  // The art's centre sits a little off the anchor along that local axis.
+  const ly = dx * sin + dy * cos - g.size * GLOVE_VISUAL_OFFSET_Y
+
+  const a = g.size * GLOVE_VISUAL_HALF_W * DIZZY_HIT_FACTOR + headRadius
+  const b = g.size * GLOVE_VISUAL_HALF_H * DIZZY_HIT_FACTOR + headRadius
+  return (lx * lx) / (a * a) + (ly * ly) / (b * b) <= 1
+}
+
+function assignHeadsToDizzy(
+  heads: HeadData[],
+  gloves: GlovePos[],
+  tracked: Array<{ x: number; y: number; size: number; active: boolean }>,
+  height: number,
+  width: number,
+): Array<DizzyTarget | undefined> {
+  const available = heads
+    .filter((hd) => hd.conf >= DIZZY_HEAD_MIN_CONF)
+    .map((hd) => {
+      // Mirrored for display, the same flip the hands get above.
+      const hx = (1 - hd.x) * width
+      const hy = hd.y * height
+      const size = hd.size * width
+      const hit = gloves.some(
+        (g) => g.active && gloveTouchesHead(g, hx, hy, size / 2),
+      )
+      return { x: hx, y: hy, size, hit }
+    })
+
+  const result: Array<DizzyTarget | undefined> = tracked.map(() => undefined)
+  const claimed = new Set<number>()
+
+  // Showing slots re-acquire their own head first, so a hit somewhere else
+  // can never drag a visible ring across to a different person.
+  const pairs: Array<{ slot: number; head: number; d: number }> = []
+  for (let i = 0; i < tracked.length; i++) {
+    if (!tracked[i].active) continue
+    for (let j = 0; j < available.length; j++) {
+      const d = Math.hypot(available[j].x - tracked[i].x, available[j].y - tracked[i].y)
+      if (d <= available[j].size * DIZZY_MATCH_FACTOR) pairs.push({ slot: i, head: j, d })
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d)
+  const usedSlot = new Set<number>()
+  for (const { slot, head } of pairs) {
+    if (usedSlot.has(slot) || claimed.has(head)) continue
+    result[slot] = available[head]
+    usedSlot.add(slot)
+    claimed.add(head)
+  }
+
+  // A newly hit head takes an idle slot. Only hits do this - an unhit head
+  // isn't dizzy, so there is nothing to show.
+  const idle = result
+    .map((r, i) => (r === undefined && !tracked[i].active ? i : -1))
+    .filter((i) => i >= 0)
+  for (let j = 0; j < available.length && idle.length; j++) {
+    if (claimed.has(j) || !available[j].hit) continue
+    result[idle.shift()!] = available[j]
+    claimed.add(j)
+  }
+  return result
+}
+
 /** Boxing gloves worn on closed fists, one per detected hand.
  *
  * Mirrored per hand, but only on a handedness worth believing. WiLoR cannot
@@ -388,14 +707,27 @@ export async function createBoxGloveAnim(app: PIXI.Application) {
   const gloves = await Promise.all(
     Array.from({ length: GLOVE_SLOTS }, () => createGlove(app)),
   )
+  const dizzies = await Promise.all(
+    Array.from({ length: DIZZY_SLOTS }, () => createDizzy(app)),
+  )
 
   const parentContainer = new PIXI.Container()
+  // Stars first, gloves over them: the glove is the physical object doing the
+  // hitting, so it should not end up behind the effect it caused.
+  for (const [container] of dizzies) parentContainer.addChild(container)
   for (const [container] of gloves) parentContainer.addChild(container)
 
-  const update = (hands: HandData[]) => {
+  const update = (hands: HandData[], heads: HeadData[] = []) => {
     const tracked = gloves.map(([, , getPos]) => getPos())
     const assigned = assignHandsToGloves(hands, tracked, height, width)
     gloves.forEach(([, updateSlot], i) => updateSlot(assigned[i]))
+
+    // Read AFTER the gloves have updated, so a hit is tested against where
+    // the gloves are this frame rather than where they were last frame.
+    const glovePos = gloves.map(([, , getPos]) => getPos())
+    const dizzyTracked = dizzies.map(([, , getTracked]) => getTracked())
+    const dizzyTargets = assignHeadsToDizzy(heads, glovePos, dizzyTracked, height, width)
+    dizzies.forEach(([, updateSlot], i) => updateSlot(dizzyTargets[i]))
   }
 
   return [parentContainer, update] as const

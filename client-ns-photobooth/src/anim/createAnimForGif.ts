@@ -35,14 +35,20 @@ export interface MarginOpts {
  * Display.tsx, which otherwise imported all thirteen purely to feed this
  * one function.
  *
- * `rawRef` rather than a plain hand list: the hand-driven characters need
+ * A ref rather than a plain hand list: the hand-driven characters need
  * whatever the LATEST frame holds when their update runs, not whatever was
- * current when they were built. */
+ * current when they were built.
+ *
+ * It must be the CONVERTED analysis (Display.tsx's dataRef), not the raw one
+ * off the backend - hands and heads in it have been corrected for the inset
+ * rect the video is actually drawn into, the same correction pose landmarks
+ * get. Passing raw values here puts every glove progressively out of place
+ * toward the edges of frame. */
 export async function createAnimForGif(
   option: GifOption,
   app: PIXI.Application,
   marginOpts: MarginOpts,
-  rawRef: { current: Analysis },
+  dataRef: { current: Analysis },
 ) {
   if (option === 'owl') {
     return await createOwlAnim(app)
@@ -53,7 +59,7 @@ export async function createAnimForGif(
   } else if (option === 'drone') {
     const [container, updateDrone] = await createDroneAnim(app, marginOpts)
     // Drone uses hand landmarks, not body pose — ignore the pose arg
-    const wrappedUpdate = (_pose: any) => updateDrone(rawRef.current.hands ?? [])
+    const wrappedUpdate = (_pose: any) => updateDrone(dataRef.current.hands ?? [])
     return [container, wrappedUpdate] as const
   } else if (option === 'scuba') {
     return await createScubaAnim(app, marginOpts)
@@ -63,15 +69,18 @@ export async function createAnimForGif(
     return await createOCFusionAnim(app)
   } else if (option === 'boxglove') {
     // Hand-tracked like drone/sixseven: one glove per closed fist, so the
-    // animation owns all its slots and takes the raw hand list rather than a
-    // per-person pose.
+    // animation owns all its slots and takes the whole hand list rather than
+    // a per-person pose.
     const [container, updateGloves] = await createBoxGloveAnim(app)
-    const wrappedUpdate = (_pose: any) => updateGloves(rawRef.current.hands ?? [])
+    // Heads come from the same backend message as the hands (see
+    // HeadData) - the dizzy stars need them to know what a glove swung near.
+    const wrappedUpdate = (_pose: any) =>
+      updateGloves(dataRef.current.hands ?? [], dataRef.current.heads ?? [])
     return [container, wrappedUpdate] as const
   } else if (option === 'sixseven') {
     const [container, updateSixSeven] = await createSixSevenAnim(app, marginOpts)
     // Same as the drone — driven by hand landmarks, not body pose
-    const wrappedUpdate = (_pose: any) => updateSixSeven(rawRef.current.hands ?? [])
+    const wrappedUpdate = (_pose: any) => updateSixSeven(dataRef.current.hands ?? [])
     return [container, wrappedUpdate] as const
   } else if (option === 'pignose') {
     return await createPigNoseAnim(app)
