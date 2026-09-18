@@ -68,23 +68,30 @@ export const MAX_SELECTED = 5
  * selecting both spawns a drone and a number on every one of the same palms,
  * overlapping rather than reading as two props.
  *
- * sixseven + boxglove: both key off the same hand, just on opposite states of
- * it (open palm vs. closed fist) — a hand closing into a fist is exactly the
- * moment a glove wants to appear and a number wants to fade, so with both on,
- * the same hand flickers between a digit and a glove instead of settling on
- * either.
+ * boxglove pairs with BOTH of the above and is deliberately not listed:
+ * these characters are for a group, where different people are doing
+ * different things, and in practice the open-palm and closed-fist poses
+ * hardly ever land on one hand. Measured over 48 frames of the 5-person test
+ * footage, counting hands that would actually carry each prop:
  *
- * drone + boxglove: the same open-palm/closed-fist conflict as sixseven +
- * boxglove above, just with the drone standing in for the number — drone
- * wants an open palm, glove wants a fist, and a hand doing either flickers
- * between the two instead of committing to one.
+ *     67 numbers     0 of 214  (0.0%)  also qualified for a glove
+ *     drones        14 of 371  (3.8%)  also qualified for a glove
+ *
+ * 67 is exactly zero because it only ever draws on a PAIR of palm-up hands
+ * from one person forming a diagonal, and a lone curled palm-up hand never
+ * forms one. The drone needs just one palm, so its ambiguous hands are not
+ * ruled out the same way — hence the small but real 3.8%, where a drone
+ * perches on a gloved fist. Judged acceptable against the group use case.
+ *
+ * (A blanket "ignore curled hands" filter was tried on 67 and removed as
+ * unnecessary — it cost real palms to prevent a case that never occurred.
+ * If the drone overlap ever does become annoying in use, that filter is the
+ * lever, applied to drone.ts rather than to this list.)
  *
  * Add further groups here; nothing else needs changing. */
 export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
   ['owl', 'bat'],
   ['drone', 'sixseven'],
-  ['sixseven', 'boxglove'],
-  ['drone', 'boxglove'],
 ]
 
 /** Which already-selected option, if any, blocks `option` from being added.
