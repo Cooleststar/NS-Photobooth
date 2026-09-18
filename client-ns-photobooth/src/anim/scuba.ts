@@ -86,37 +86,53 @@ function getHeadAnchor(
 // than the path length actually walked) — the "continuously" part, so a
 // single flick/reach doesn't count, only sustained repeated swinging.
 //
-// Thresholds below are a best-effort guess, not a tuned/verified fit (no
-// live camera to test against here) — if the gesture still doesn't trigger,
-// loosen MOTION_ENERGY_FACTOR/MIN_OSCILLATION_RATIO rather than assuming the
-// landmark math itself is wrong.
+// Thresholds below started as a best-effort guess and have been retuned once
+// already on real feedback: MOTION_ENERGY_FACTOR was initially too low (fired
+// on almost no movement), then raised to 0.9, which fixed that but ended up
+// requiring a full arm swing rather than a hand-only wave — the wrist
+// landmark barely moves when only the hand rotates at the wrist, so a bigger
+// energy requirement effectively demanded moving the whole forearm to rack up
+// enough path length. Now lower again (see MOTION_ENERGY_FACTOR) to sit
+// between those two — if the gesture still doesn't trigger, loosen
+// MOTION_ENERGY_FACTOR/MIN_OSCILLATION_RATIO further rather than assuming the
+// landmark math itself is wrong; if it fires too easily, raise them back up
+// gradually rather than straight to 0.9.
 // ---------------------------------------------------------------------------
 
 const LEFT_WRIST = 15
 const RIGHT_WRIST = 16
 const VISIBILITY_MIN = 0.5
 const SHAKE_WINDOW_SEC = 1.5       // how far back the motion buffer looks
-// Total path length required within the window, in shoulder widths — a
-// wrist-only wave, not a full arm swing, but well above what pose-landmark
-// jitter alone produces (see MIN_STEP_FACTOR below for why jitter used to
-// slip through this).
-// Raised from 0.6: the gesture was firing on too little movement, so it now
-// takes roughly half as much wrist travel again before the cat appears. This
-// is the main "how much shaking" knob — raise it further to demand a bigger,
-// more deliberate wave, lower it if the gesture stops being reachable.
-const MOTION_ENERGY_FACTOR = 0.9
+// Total path length required within the window, in shoulder widths — meant
+// to be reachable by flicking just the hand at the wrist, without swinging
+// the whole forearm, since the wrist landmark itself barely translates when
+// only the hand rotates. Well above what pose-landmark jitter alone produces
+// (see MIN_STEP_FACTOR below for why jitter used to slip through this).
+// Lowered from 0.9: at that level a wrist-only flick didn't move the wrist
+// landmark far enough, and the gesture only triggered by swinging the
+// whole arm from the shoulder/elbow, which read as "swing your arm" rather
+// than "wave your hand". 0.9 itself was raised from an original 0.6 that
+// fired on too little movement — if this turns out too sensitive again,
+// come back up gradually rather than straight to 0.9.
+const MOTION_ENERGY_FACTOR = 0.4
 // How much of that path must be "wasted" back-and-forth motion rather than
 // net movement in one direction — kept fairly high so it takes sustained,
-// continuous swinging rather than one big wave to trigger.
-const MIN_OSCILLATION_RATIO = 0.4
+// continuous swinging rather than one big wave to trigger. Lowered a bit
+// alongside MOTION_ENERGY_FACTOR: a wrist-only flick has a smaller, less
+// perfectly back-and-forth arc than a full arm swing, so demanding as much
+// "wasted" motion as before would undo the point of lowering the energy
+// requirement.
+const MIN_OSCILLATION_RATIO = 0.3
 // Per-step noise floor, in shoulder widths: a still hand's landmark position
 // still wobbles a little frame to frame from pose-estimation jitter, and
 // that wobble is almost pure back-and-forth (net displacement ~0), which
 // used to satisfy MIN_OSCILLATION_RATIO on its own and let the gesture
 // trigger "out of nowhere" while someone just stood still posing. Steps
 // smaller than this are dropped before summing path length, so idle jitter
-// no longer accumulates into anything.
-const MIN_STEP_FACTOR = 0.02
+// no longer accumulates into anything. Lowered slightly alongside the two
+// thresholds above so a smaller, wrist-only flick's individual steps don't
+// themselves get filtered out as jitter.
+const MIN_STEP_FACTOR = 0.015
 // How much of the wrist's travel must be HORIZONTAL for the gesture to count,
 // as a fraction of (horizontal + vertical) path. The scuba cat's own animation
 // is a side-to-side swim, so an up-and-down wave should not summon it.
@@ -125,20 +141,22 @@ const MIN_STEP_FACTOR = 0.02
 // diagonal or vertical. Lower it if horizontal waves stop registering; raise it
 // to insist on a flatter, more deliberate side-to-side motion.
 const MIN_HORIZONTAL_RATIO = 0.65
-// How long the anim lingers after the gesture stops. Lowered from 5s: the cat
-// now clears almost as soon as you stop waving, rather than hanging around.
-// Note this also bridges brief detection dropouts mid-gesture, so setting it
-// too low can make the cat flicker while you are still waving.
-const GESTURE_HOLD_SEC = 1
 // How long the swing must be sustained, continuously, before the cat first
 // appears — on request, so a brief/accidental wave doesn't summon it.
 // Separate from SHAKE_WINDOW_SEC/MOTION_ENERGY_FACTOR above: those decide
 // whether THIS frame counts as "currently shaking" at all (energy within a
 // rolling window), this decides how long that "currently shaking" verdict
 // must hold true back-to-back before it's treated as deliberate rather than
-// a quick flick. Only gates the FIRST appearance — once already on screen,
-// continued swinging refreshes GESTURE_HOLD_SEC immediately below rather
-// than re-demanding another full confirm period each time.
+// a quick flick.
+//
+// There used to also be a GESTURE_HOLD_SEC keeping the cat on screen for a
+// bit after the gesture stopped, removed on request so it clears the instant
+// you stop waving. Brief single-frame detection dropouts mid-gesture are
+// still covered without it: AnimStateManager's own 'lost' state (see
+// ANIM.RETRACK below) already holds the cat in place for VITE_ANIM_RETRACK
+// seconds whenever animManager.tracking goes false for any reason, gesture
+// dropouts included, so removing the separate hold here doesn't bring back
+// the flicker that constant was guarding against.
 const GESTURE_CONFIRM_SEC = 1
 
 type MotionPoint = { t: number; x: number; y: number }
@@ -228,7 +246,6 @@ export async function createScubaAnim(
   }
   const buffers: Record<'left' | 'right', MotionPoint[]> = { left: [], right: [] }
   let elapsed = 0
-  let triggeredUntil = -Infinity
   // Continuous-shaking duration this frame is part of — see GESTURE_CONFIRM_SEC.
   let confirmTimer = 0
   const animManager = new AnimStateManager()
@@ -264,15 +281,10 @@ export async function createScubaAnim(
         isShaking(buffers.left, torso.shoulderWidth) || isShaking(buffers.right, torso.shoulderWidth)
       confirmTimer = shakingNow ? confirmTimer + deltaSec : 0
 
-      // Already visible (within a previous hold window): any continued
-      // swinging just refreshes the hold, no need to re-confirm 2s again.
-      // Not yet visible: only start the hold once swinging has been
-      // sustained continuously for GESTURE_CONFIRM_SEC.
-      const alreadyOnScreen = elapsed < triggeredUntil
-      if (shakingNow && (alreadyOnScreen || confirmTimer >= GESTURE_CONFIRM_SEC)) {
-        triggeredUntil = elapsed + GESTURE_HOLD_SEC
-      }
-      gestureActive = elapsed < triggeredUntil
+      // No hold-over: active only once the swing has been sustained
+      // continuously for GESTURE_CONFIRM_SEC, and only for as long as
+      // shakingNow keeps being true — stopping drops this immediately.
+      gestureActive = confirmTimer >= GESTURE_CONFIRM_SEC
 
       const { shoulderWidth } = torso
       const head = getHeadAnchor(pose, torso, height, width)
