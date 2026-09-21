@@ -68,11 +68,21 @@ export const MAX_SELECTED = 5
  * selecting both spawns a drone and a number on every one of the same palms,
  * overlapping rather than reading as two props.
  *
- * boxglove pairs with BOTH of the above and is deliberately not listed:
- * these characters are for a group, where different people are doing
- * different things, and in practice the open-palm and closed-fist poses
- * hardly ever land on one hand. Measured over 48 frames of the 5-person test
- * footage, counting hands that would actually carry each prop:
+ * scuba + boxglove: scuba triggers on continuously waving a wrist side to
+ * side (see its gesture section), and nothing about waving requires an open
+ * hand — so a wave done with a curled hand puts a glove on the very hand
+ * doing the waving, and both props fire at once. Observed in live use.
+ *
+ * Note the difference between that pairing and the two NOT listed below: the
+ * scuba clash is structural, since the glove lands on the same hand the
+ * gesture is made with every time, while 67 and the drone only clash when a
+ * particular ambiguous hand pose happens to coincide.
+ *
+ * boxglove + sixseven and boxglove + drone are deliberately absent. These
+ * characters are for a group, where different people are doing different
+ * things, and in practice the open-palm and closed-fist poses hardly ever
+ * land on one hand. Measured over 48 frames of the 5-person test footage,
+ * counting hands that would actually carry each prop:
  *
  *     67 numbers     0 of 214  (0.0%)  also qualified for a glove
  *     drones        14 of 371  (3.8%)  also qualified for a glove
@@ -92,6 +102,7 @@ export const MAX_SELECTED = 5
 export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
   ['owl', 'bat'],
   ['drone', 'sixseven'],
+  ['scuba', 'boxglove'],
 ]
 
 /** Which already-selected option, if any, blocks `option` from being added.
