@@ -40,3 +40,8 @@ enable 67 mode will allow you to play the 67 game.
 when burst mode is enabled 3 pictures will be taken into 1 photo strip
 
 top right drop down box is to select company logos 
+
+(for zi kai)
+fix gloves if still got problems, then create 2 sizing options for distances of people for 2m and 5m (close testing vs onsite testing at white zone.)
+jenas pc has the videos.
+a slider to modify the size
