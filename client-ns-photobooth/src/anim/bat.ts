@@ -1,5 +1,6 @@
 import { NormalizedLandmarkList } from '../api/landmarks'
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
@@ -268,7 +269,9 @@ export async function createBatAnim(app: PIXI.Application) {
       confirmTimer = Math.min(ARM_CONFIRM_TIME, confirmTimer + ticker.deltaMS / 1000)
       wristX = kf.x.filter(target.x)
       wristY = kf.y.filter(target.y)
-      batSize = kf.batSize.filter(calculateBatSize(pose, height, width))
+      batSize =
+        kf.batSize.filter(calculateBatSize(pose, height, width)) *
+        getAnimScale('bat')
     } else {
       holdTimer = Math.max(0, holdTimer - ticker.deltaMS / 1000)
       // Reset on any gap — confirmation must be one continuous qualifying

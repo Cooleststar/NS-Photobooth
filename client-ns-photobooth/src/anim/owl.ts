@@ -9,7 +9,7 @@ import { AnimStateManager } from './AnimState'
 import owlIdleGif from '../assets/owl_anim/owl_idle_new.gif'
 import owlFlyGif from '../assets/owl_anim/owl_flying_new.gif'
 import owlLandGif from '../assets/owl_anim/owl_landing_new.gif'
-import { freezePosition } from '../store'
+import { freezePosition, getAnimScale } from '../store'
 
 /** anim duration & timing config */
 const ANIM = {
@@ -127,7 +127,7 @@ export async function createOwlAnim(app: PIXI.Application) {
   const toLandTime = (flySprite.duration * ANIM.FLY_LOOPS) / 1000
   /** time in seconds till idle animation */
   const toIdleTime = toLandTime + landSprite.duration / 1000
-  const owlSize = OWL_FIXED_SIZE
+  const owlBaseSize = OWL_FIXED_SIZE
   // Last landing spot the arm heuristic actually found — kept around so a
   // person who's still clearly in frame (just not holding their arm in the
   // exact ~horizontal pose calculateArmFromPose requires: mid-gesture,
@@ -194,6 +194,11 @@ export async function createOwlAnim(app: PIXI.Application) {
     // momentary arm-angle miss doesn't snap the owl back to (0, 0)
     const landingCoords = coords ?? lastCoords
     const landingArm = arm ?? lastArm
+    // Read every frame so the Settings slider applies live. The margin
+    // below is a fraction of the owl's own size, so it scales with it -
+    // otherwise a smaller owl would sit at the same offset and float off
+    // the arm.
+    const owlSize = owlBaseSize * getAnimScale('owl')
     let { x, y } = landingCoords ? calculateTarget(landingCoords, landingArm!) : { x: 0, y: 0 }
     y += owlSize * OWL_MARGIN_B //adjust owl downwards
 

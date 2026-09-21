@@ -39,6 +39,50 @@ export type GifOption = keyof typeof GIF_OPTIONS
  * multiple can be on at once, all stacked on the same tracked person.
  * 'none' is never a member: an empty array means "no animation" instead. */
 export const selectedGifs = persistentAtom<GifOption[]>('selectedGifs', ['owl'], opts)
+
+// ---------------------------------------------------------------------------
+// Per-character size
+// ---------------------------------------------------------------------------
+// A multiplier on each character's own size, 1 meaning the size it was tuned
+// at. Set from Settings (pick a character, then drag), and read live every
+// frame, so a booth standing further back than usual can be trimmed on the
+// spot without a rebuild or a code change.
+//
+// Per character rather than one global scale because the characters do not
+// share a sizing basis. Most already measure themselves against the person -
+// ear separation (sunglasses, mustache, pig nose, bat ears, clown), shoulder
+// width (globe, scuba, bat), the hand box (gloves) or head width (the dizzy
+// stars) - and so already hold up at any distance. Owl, drone and sixseven
+// instead take a fixed slice of the SCREEN, which is why those are the ones
+// that read too large once people stand further away. One global knob would
+// have to shrink the correct ten to fix those three.
+export const ANIM_SIZE_MIN = 0.3
+export const ANIM_SIZE_MAX = 2.5
+
+/** Sparse: only characters actually adjusted are stored, everything else is
+ * 1. Keeps a stale entry for a removed character harmless, and means the
+ * default costs nothing. */
+export const animSizes = persistentAtom<Record<string, number>>('animSizes', {}, opts)
+
+/** This character's size multiplier, clamped. Called per frame from the
+ * animations, so it stays cheap and never throws on a hand-edited value. */
+export function getAnimScale(option: GifOption): number {
+  const v = animSizes.get()[option]
+  if (typeof v !== 'number' || !isFinite(v)) return 1
+  return Math.min(ANIM_SIZE_MAX, Math.max(ANIM_SIZE_MIN, v))
+}
+
+export function setAnimScale(option: GifOption, value: number) {
+  animSizes.set({ ...animSizes.get(), [option]: value })
+}
+
+/** Back to the tuned default by dropping the entry, not by writing 1 - so a
+ * character that is later re-tuned in code picks the new value up. */
+export function resetAnimScale(option: GifOption) {
+  const next = { ...animSizes.get() }
+  delete next[option]
+  animSizes.set(next)
+}
 // Self-heal once at load: a character removed from GIF_OPTIONS (e.g. Pig)
 // can still be sitting in an existing browser's persisted selection from
 // before the removal — silently dropping it here (rather than leaving it to

@@ -1,4 +1,5 @@
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
@@ -240,7 +241,12 @@ async function createHandDrone(
     animManager.tracking = hasPerson
     const { time, state } = animManager
 
-    const targetY = drawnY - hoverOffset
+    // Live from Settings. hoverOffset is half the sprite's height, so it
+    // has to scale with it or the drone stops resting on the palm.
+    const scale = getAnimScale('drone')
+    sprite.width = droneSize * scale
+    sprite.height = droneSize * scale
+    const targetY = drawnY - hoverOffset * scale
 
     switch (state) {
       case 'exited':

@@ -6,6 +6,12 @@ import { Challenge67LeaderboardEditor, useKeybind } from '../components'
 import {
   GIF_OPTIONS,
   GifOption,
+  ANIM_SIZE_MIN,
+  ANIM_SIZE_MAX,
+  animSizes,
+  getAnimScale,
+  setAnimScale,
+  resetAnimScale,
   burstCount,
   burstIntervalSec,
   burstModeEnabled,
@@ -465,6 +471,73 @@ function ClipAnalyzer() {
   )
 }
 
+/** Pick a character, then size it.
+ *
+ * One slider serving every character rather than a row each: thirteen
+ * sliders would not fit this panel, and in practice only the one being
+ * adjusted matters - this is a thing you reach for when the booth is set up
+ * somewhere unusual, not a per-session control.
+ *
+ * Applied live (the animations read their multiplier every frame), so the
+ * slider can be dragged while watching the feed. */
+function AnimSizeControl() {
+  const [option, setOption] = useState<GifOption>('owl')
+  // Subscribed so the readout and slider position follow the store, including
+  // a reset.
+  useStore(animSizes)
+  const scale = getAnimScale(option)
+
+  return (
+    <div tw='flex flex-col gap-2'>
+      <span tw='text-xs text-gray-500'>Animation Size</span>
+      <select
+        value={option}
+        onChange={(e) => setOption((e.target as HTMLSelectElement).value as GifOption)}
+        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
+      >
+        {Object.entries(GIF_OPTIONS)
+          .filter(([key]) => key !== 'none')
+          .map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+      </select>
+
+      <div tw='flex items-center gap-3'>
+        <input
+          type='range'
+          min={ANIM_SIZE_MIN}
+          max={ANIM_SIZE_MAX}
+          step={0.05}
+          value={scale}
+          onChange={(e) =>
+            setAnimScale(option, parseFloat((e.target as HTMLInputElement).value))
+          }
+          tw='flex-1'
+          style={{ accentColor: '#3b82f6' }}
+        />
+        <span tw='w-12 text-right text-sm text-gray-300'>
+          {scale.toFixed(2)}x
+        </span>
+      </div>
+
+      <button
+        tw='w-full text-xs py-1.5 px-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors disabled:opacity-40'
+        disabled={scale === 1}
+        onClick={() => resetAnimScale(option)}
+      >
+        Reset {GIF_OPTIONS[option]} to default
+      </button>
+
+      <span tw='text-xs text-gray-500'>
+        1.00x is the size each character was tuned at. Most size themselves
+        off the person and already hold up at any distance; the owl, drone and
+        67 take a fixed share of the screen, so those are the ones worth
+        trimming when the booth sits further back.
+      </span>
+    </div>
+  )
+}
+
 function AnimMultiSelect() {
   const gifOptions = useStore(selectedGifs)
   const [open, setOpen] = useState(false)
@@ -707,6 +780,7 @@ export default function Settings() {
 
           <Section title='Animation'>
             {!qrMode && !challenge67 && <AnimMultiSelect />}
+            {!challenge67 && <AnimSizeControl />}
             {!qrMode && !challenge67 && (
               <SwitchRow label='Multi-Person Tracking' boolVar={multiTarget} />
             )}

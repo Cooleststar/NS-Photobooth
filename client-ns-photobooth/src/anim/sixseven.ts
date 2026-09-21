@@ -1,4 +1,5 @@
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
@@ -338,7 +339,13 @@ function createNumberPair(
   })
 
   const placeGlyph = (g: Glyph, y: number) => {
-    const p = clampPos(g.drawn.x, y, size, bounds)
+    // Live from Settings; the clamp uses the scaled size too, so a
+    // resized glyph still stops at the edge of the feed rather than
+    // hanging over it.
+    const scaled = size * getAnimScale('sixseven')
+    g.sprite.width = scaled
+    g.sprite.height = scaled
+    const p = clampPos(g.drawn.x, y, scaled, bounds)
     g.sprite.position.set(p.x, p.y)
   }
 
@@ -410,7 +417,7 @@ function createNumberPair(
         container.alpha = lerpLinear(time, 0, ANIM.FADE)
         const progress = lerpEO(time, 0, ANIM.FADE)
         for (const g of glyphs) {
-          const endY = g.drawn.y - hoverOffset
+          const endY = g.drawn.y - hoverOffset * getAnimScale('sixseven')
           const startY = endY - height * 0.2
           placeGlyph(g, startY + (endY - startY) * progress)
         }
@@ -422,7 +429,7 @@ function createNumberPair(
         container.alpha = 1
         bobTime += dt
         for (const g of glyphs) {
-          placeGlyph(g, g.drawn.y - hoverOffset + Math.sin(bobTime * BOB_SPEED) * bobAmplitude)
+          placeGlyph(g, g.drawn.y - hoverOffset * getAnimScale('sixseven') + Math.sin(bobTime * BOB_SPEED) * bobAmplitude)
         }
         break
 
@@ -435,7 +442,7 @@ function createNumberPair(
       case 'exiting':
         container.alpha = 1 - lerpLinear(time, 0, ANIM.FADE)
         for (const g of glyphs) {
-          placeGlyph(g, g.drawn.y - hoverOffset + Math.sin(bobTime * BOB_SPEED) * bobAmplitude)
+          placeGlyph(g, g.drawn.y - hoverOffset * getAnimScale('sixseven') + Math.sin(bobTime * BOB_SPEED) * bobAmplitude)
         }
         if (time >= ANIM.FADE) {
           initialState()

@@ -1,5 +1,6 @@
 import { NormalizedLandmarkList } from '../api/landmarks'
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear } from './utils'
@@ -290,7 +291,9 @@ export async function createScubaAnim(
       const head = getHeadAnchor(pose, torso, height, width)
       targetX = kf.x.filter(head.x)
       targetY = kf.y.filter(head.y - shoulderWidth * HEAD_CLEARANCE)
-      scubaSize = kf.size.filter(Math.max(MIN_SIZE, shoulderWidth * SIZE_FACTOR))
+      scubaSize =
+        kf.size.filter(Math.max(MIN_SIZE, shoulderWidth * SIZE_FACTOR)) *
+        getAnimScale('scuba')
     } else {
       // No torso this frame — buffers/hold state just stop accumulating
       // until tracking resumes; AnimStateManager's own RETRACK window

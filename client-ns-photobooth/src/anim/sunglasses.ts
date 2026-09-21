@@ -1,5 +1,6 @@
 import { NormalizedLandmarkList } from '../api/landmarks'
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear } from './utils'
@@ -166,6 +167,11 @@ export async function createSunglassesAnim(app: PIXI.Application) {
       x = filters.x.filter(target.x)
       y = filters.y.filter(target.y)
       earDist = filters.size.filter(target.earDist)
+      // Settings size multiplier (store's animSizes). Applied to the
+      // SMOOTHED separation, which only feeds this prop's width - the
+      // placement above came from the raw value, so the prop grows
+      // without sliding off the face.
+      earDist *= getAnimScale('sunglasses')
       angle = filters.angle.filter(target.angle)
     }
 

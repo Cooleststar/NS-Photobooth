@@ -1,5 +1,6 @@
 import { NormalizedLandmarkList } from '../api/landmarks'
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear, lerpEO } from './utils'
@@ -199,7 +200,9 @@ export async function createGlobeAnim(
     if (torso) {
       torsoX = kf.x.filter(torso.x)
       torsoY = kf.y.filter(torso.y)
-      globeSize = kf.size.filter(calculateGlobeSize(torso.shoulderWidth))
+      globeSize =
+        kf.size.filter(calculateGlobeSize(torso.shoulderWidth)) *
+        getAnimScale('globe')
     }
 
     sprite.height = sprite.width = globeSize
