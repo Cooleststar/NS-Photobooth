@@ -61,6 +61,17 @@ export async function createBanner(app: PIXI.Application) {
     const heightPx = width * LOGO_SIZE_FRACTION
     const gapPx = width * LOGO_GAP_FRACTION
     const ordered = ORDER.filter((k) => sprites.has(k))
+    // '11' is the default/fixed logo, so it reads as the row's anchor rather
+    // than just another entry — pull it out of its slot in ORDER and
+    // reinsert it at the middle index instead. For an even count this lands
+    // one left of true centre (e.g. 2nd of 4) rather than splitting it
+    // between two positions, matching how a single centred item naturally
+    // shifts as neighbours are added one at a time.
+    const elevenIndex = ordered.indexOf('11')
+    if (elevenIndex !== -1) {
+      const [eleven] = ordered.splice(elevenIndex, 1)
+      ordered.splice(Math.floor(ordered.length / 2), 0, eleven)
+    }
     // Each sprite's own (already-cropped) texture aspect ratio decides its
     // width - see applyLogos below - so widths vary per logo even though
     // every one is sized to the same height.

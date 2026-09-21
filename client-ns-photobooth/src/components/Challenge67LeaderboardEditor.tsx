@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import 'twin.macro'
+import { useEffect, useRef, useState } from 'react'
+import tw from 'twin.macro'
 import { Modal } from './Modal'
 import { Challenge67LeaderboardEntry, getBackendHttpUrl } from '../store'
 
@@ -58,7 +58,10 @@ function EditorModal({ onClose }: { onClose: () => void }) {
   const remove = (i: number) => setEntries((es) => es.filter((_, j) => j !== i))
   const add = () => setEntries((es) => [...es, blankEntry()])
 
-  const save = async () => {
+  // Takes an explicit list rather than always reading `entries`, so
+  // clearAll below can push an empty board without a setEntries+effect
+  // round trip first - it saves exactly what it means to save.
+  const save = async (toSave: Challenge67LeaderboardEntry[] = entries) => {
     if (busy) return
     setBusy(true)
     setError('')
@@ -66,7 +69,7 @@ function EditorModal({ onClose }: { onClose: () => void }) {
       const res = await fetch(`${getBackendHttpUrl()}/challenge67/admin/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, entries }),
+        body: JSON.stringify({ password, entries: toSave }),
       })
       if (res.status === 401) {
         // The password can't have changed mid-edit - this means the request
@@ -90,6 +93,24 @@ function EditorModal({ onClose }: { onClose: () => void }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  // Two-tap guard against a stray tap wiping the whole board - this is
+  // already behind the password screen, so it's a mis-tap safety net rather
+  // than a permission check the way the editor's own unlock screen is.
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const clearArmTimer = useRef<number>()
+  useEffect(() => () => window.clearTimeout(clearArmTimer.current), [])
+  const clearAll = () => {
+    if (busy) return
+    if (!confirmingClear) {
+      setConfirmingClear(true)
+      clearArmTimer.current = window.setTimeout(() => setConfirmingClear(false), 3000)
+      return
+    }
+    window.clearTimeout(clearArmTimer.current)
+    setConfirmingClear(false)
+    void save([])
   }
 
   if (!unlocked) {
@@ -190,11 +211,19 @@ function EditorModal({ onClose }: { onClose: () => void }) {
         <button
           tw='flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm py-2 rounded-lg'
           disabled={busy}
-          onClick={save}
+          onClick={() => save()}
         >
           {busy ? 'Saving…' : 'Save changes'}
         </button>
       </div>
+      <button
+        tw='w-full bg-[#272c35] hover:bg-red-900 disabled:opacity-50 text-red-400 hover:text-red-200 text-sm py-2 rounded-lg transition-colors'
+        css={confirmingClear && tw`bg-red-600 text-white hover:bg-red-700 hover:text-white`}
+        disabled={busy || entries.length === 0}
+        onClick={clearAll}
+      >
+        {busy ? 'Clearing…' : confirmingClear ? 'Tap again to clear everything' : 'Clear leaderboard'}
+      </button>
       {error && <span tw='text-red-400 text-sm text-center'>{error}</span>}
     </Modal>
   )
