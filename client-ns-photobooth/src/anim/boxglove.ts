@@ -1,4 +1,5 @@
 import * as PIXI from '../pixi'
+import { getAnimScale } from '../store'
 import KalmanFilter from 'kalmanjs'
 
 import { lerpLinear } from './utils'
@@ -108,6 +109,25 @@ const MAX_CLAIM_DISTANCE_FACTOR = 0.25
 // backend's `fist` flag is the strict test used to APPEAR; once a glove is on
 // it stays on while curl holds above this looser value.
 const FIST_EXIT_CURL = 0.8
+
+// Glove size, as a fraction of screen height - deliberately NOT measured from
+// the hand.
+//
+// It used to be max(box width, box height). That box is axis-aligned, so it
+// genuinely changes size as a hand ROTATES, at a fixed distance and with a
+// perfectly good detection: a fist turning through 45 degrees swells and
+// shrinks its own bounding box. During a punch the hand rotates constantly,
+// so the glove pulsed. Smoothing would only have lagged that, since it is a
+// real sustained change rather than frame noise - the same axis-aligned-box
+// problem that made the box CENTRE slide across a still hand (see
+// wilor_hands.py on why the anchor moved to the knuckles).
+//
+// 0.12 is chosen to land on today's typical size: the hand box measured a
+// median 129px on the test footage against a 1080px canvas.
+//
+// The cost is that gloves no longer shrink as someone steps back, like the
+// owl, drone and sixseven. The Settings size slider is the lever for that.
+const GLOVE_FIXED_SIZE_FACTOR = 0.12
 
 // ---------------------------------------------------------------------------
 // Dizzy stars - the paired half of this character
@@ -245,7 +265,11 @@ function assignHandsToGloves(
     x: (1 - h.x[0]) * width,
     y: h.y[0] * height,
     angle: Math.PI - h.angle,
-    size: Math.max(h.w * width, h.h * height),
+    // Settings size multiplier, read per frame so the slider applies
+    // live. This is the glove's whole size basis, so the contact test
+    // against a head scales with it too - a trimmed-down glove should
+    // need to get correspondingly closer before the stars appear.
+    size: height * GLOVE_FIXED_SIZE_FACTOR * getAnimScale('boxglove'),
     isFist: h.fist,
     isRight: h.label === 'Right',
     // Only MediaPipe's answer is trusted. WiLoR's own label is the fallback
