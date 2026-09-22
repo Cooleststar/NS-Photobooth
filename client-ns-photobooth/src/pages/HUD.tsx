@@ -2,7 +2,6 @@ import { useStore } from '@nanostores/preact'
 import { MutableRefObject, useState } from 'react'
 import 'twin.macro'
 import { uploadImage } from '../api/imgbb'
-import cameraURI from '../assets/icons/camera_black_48dp.svg'
 import { AnimPicker, OcFusionPicker, TopControls, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
 import Challenge67UI from './Challenge67UI'
 import {
@@ -263,12 +262,28 @@ export default function HUD({ photographerRef }: HUDProps) {
     case 'ready':
       return (
         <>
+          {/* A shutter, not a grey square with an icon in it: a ring around a
+              disc is what a camera control looks like everywhere else, so it
+              needs no label and reads at a glance from across a booth.
+
+              Visible by default, where this used to be opacity-0 until
+              hover. That only ever worked with a mouse - the booth's own
+              screen is a touchscreen, which has no hover state at all, so
+              the control was invisible and you had to know where to tap.
+              Kept understated rather than solid so it sits over the feed
+              without competing with the person in it.
+
+              Safe to show: photos are captured from the PIXI canvas (see
+              postprocessPicture in Display.tsx), never the DOM, so nothing
+              in this overlay can end up in a picture. */}
           <KeybindBtn
             keyCode='PageUp'
             onClick={takePicture}
-            tw='fixed bottom-2 inset-x-0 m-auto rounded-full h-20 w-20 bg-white opacity-0 hover:(bg-gray-400 opacity-100)'
+            aria-label='Take photo'
+            tw='fixed bottom-8 inset-x-0 m-auto h-24 w-24 rounded-full p-0 bg-transparent hover:bg-transparent flex items-center justify-center transform transition duration-150 opacity-75 hover:(opacity-100 scale-105)'
           >
-            <img tw='h-full w-full' src={cameraURI} />
+            <span tw='absolute inset-0 rounded-full border-4 border-ink' />
+            <span tw='absolute inset-2 rounded-full bg-ink' />
           </KeybindBtn>
           <AnimPicker />
           <OcFusionPicker />
