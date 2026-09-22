@@ -1917,9 +1917,29 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
             # newest — so submitting every frame costs nothing and simply lets
             # the detector run flat out, which is the lowest latency available
             # for hand-only characters (drone).
+            #
+            # challenge67 is submitted every frame too, and is NOT part of the
+            # throttled group despite also being "pose": it takes an exclusive
+            # branch in run_pose_detection that runs ONLY MediaPipe's
+            # pose_landmarker_lite - no YOLO, no ViTPose, no tracker - which
+            # measures 10.2ms median / 10.6ms p90 on the 1080p frame this mode
+            # sends (CPU delegate, this machine). That is a quarter of the
+            # 40ms between frames at 25fps, so the throttle written for the
+            # 31ms pipeline bought nothing here and cost 67 Mode two thirds of
+            # its sample rate: 8.3 pose updates/sec instead of 25.
+            #
+            # That rate is what the rep counter is sampling, so it was the
+            # real ceiling on scoring fast flapping - a rep needs at least one
+            # sample going down and one going up, capping detection near 4
+            # reps/sec/arm, below the 5/sec that repCounter.ts's COOLDOWN_MS
+            # is meant to be the limit at. At 25fps that ceiling moves to ~12
+            # and the cooldown is the binding constraint again, as intended.
+            # _rtsp_pose_busy below still drops frames if inference ever can't
+            # keep up, so this degrades rather than backs up.
             mode = _detection_mode
             should_infer = frame is not None and (
-                mode == 'hands' or (mode in ('pose', 'both', 'qr', 'challenge67') and frame_count % 3 == 0)
+                mode in ('hands', 'challenge67')
+                or (mode in ('pose', 'both', 'qr') and frame_count % 3 == 0)
             )
             if should_infer:
 
@@ -1932,9 +1952,13 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
                 # second copy. QR needs far more pixel density than this, so
                 # QR mode passes the full-resolution frame separately below
                 # for decoding only - never into YOLO.
-                small = cv2.resize(frame, _POSE_SIZE)
-
-                pose_frame = frame if mode == 'challenge67' else small
+                #
+                # Skipped outright in challenge67, which wants the native
+                # frame (MediaPipe tracks better on it and keeps no tracker
+                # state a size change could break). It used to be computed
+                # and then discarded in that mode; harmless at every third
+                # frame, but this mode now infers on every one.
+                pose_frame = frame if mode == 'challenge67' else cv2.resize(frame, _POSE_SIZE)
                 qr_frame = frame if mode == 'qr' else None
 
                 hands_frame = (
