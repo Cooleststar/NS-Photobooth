@@ -18,6 +18,18 @@
 module.exports = {
   theme: {
     extend: {
+      fontFamily: {
+        // Headings only - Oswald (SIL OFL, bundled in src/assets/fonts with
+        // its licence). Condensed and authoritative, which suits a unit
+        // photo booth better than the system stack, and narrow enough that a
+        // long title still fits. Body text deliberately stays on the system
+        // stack: it reads better small, and costs no download.
+        //
+        // Self-hosted rather than fetched from Google - the booth runs
+        // offline at events, where a webfont request just fails and every
+        // heading silently falls back.
+        display: ['Oswald', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      },
       colors: {
         // Text, brightest to faintest.
         ink: {

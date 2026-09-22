@@ -260,7 +260,7 @@ export default function Challenge67UI() {
       return (
         <div tw='inset-0 fixed flex items-center justify-center'>
           <Panel>
-            <h1 tw='text-ink text-6xl font-bold tracking-tight'>67 Mode</h1>
+            <h1 tw='font-display text-ink text-6xl font-semibold tracking-wide uppercase'>67 Mode</h1>
             <p tw='text-ink-dim text-xl'>
               67 as fast as you can for 20 seconds
             </p>
@@ -284,7 +284,7 @@ export default function Challenge67UI() {
       return (
         <div tw='inset-0 fixed flex items-center justify-center'>
           <Panel>
-            <h1 tw='text-ink text-4xl font-bold tracking-tight'>Enter your name</h1>
+            <h1 tw='font-display text-ink text-4xl font-semibold tracking-wide uppercase'>Enter your name</h1>
             <div tw='flex flex-col items-center gap-2'>
               <input
                 autoFocus

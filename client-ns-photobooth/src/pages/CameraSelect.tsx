@@ -81,7 +81,7 @@ export default function CameraSelect() {
           lettering already inside it. */}
       <div tw='flex flex-col items-center gap-4'>
         <img src={armyCrestUrl} alt='' tw='w-28 h-28 object-contain' />
-        <h1 tw='text-5xl font-bold tracking-tight'>Photobooth</h1>
+        <h1 tw='font-display text-6xl font-semibold tracking-wide uppercase'>Photobooth</h1>
       </div>
       <p tw='text-ink-dim text-lg -mt-4'>Select a camera to get started</p>
 
