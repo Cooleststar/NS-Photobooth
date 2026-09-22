@@ -1,6 +1,6 @@
 import { useStore } from '@nanostores/preact'
 import { MutableRefObject, useState } from 'react'
-import 'twin.macro'
+import tw from 'twin.macro'
 import { uploadImage } from '../api/imgbb'
 import { AnimPicker, OcFusionPicker, TopControls, Countdown, KeybindBtn, Modal, useKeybind } from '../components'
 import Challenge67UI from './Challenge67UI'
@@ -21,6 +21,7 @@ import {
   offlineOnly,
   photoCountdownSec,
   pointerEnabled,
+  selectedBannerLogo,
   poseInd,
   selectedCoyLogo,
 } from '../store'
@@ -242,6 +243,13 @@ export default function HUD({ photographerRef }: HUDProps) {
   // runs before that return and kept firing a capture underneath the game:
   // the countdown and its dimming would start over a round in progress.
   // The early return only covers what is rendered, never the keybinds.
+  // The banner logo is drawn at 89% of canvas height, centred - which is
+  // exactly where the shutter sits. With a logo on screen the two overlap
+  // almost completely, so the button steps aside and is revealed by hovering
+  // where it would be.
+  const bannerLogos = useStore(selectedBannerLogo)
+  const bannerLogoShown = bannerLogos.length > 0
+
   useKeybind('Space', () => {
     if (challenge67On) return
     takePicture()
@@ -280,7 +288,8 @@ export default function HUD({ photographerRef }: HUDProps) {
             keyCode='PageUp'
             onClick={takePicture}
             aria-label='Take photo'
-            tw='fixed bottom-8 inset-x-0 m-auto h-24 w-24 rounded-full p-0 bg-transparent hover:bg-transparent flex items-center justify-center transform transition duration-150 opacity-75 hover:(opacity-100 scale-105)'
+            tw='fixed bottom-8 inset-x-0 m-auto h-24 w-24 rounded-full p-0 bg-transparent hover:bg-transparent flex items-center justify-center transform transition duration-150 hover:(opacity-100 scale-105)'
+            css={bannerLogoShown ? tw`opacity-0` : tw`opacity-75`}
           >
             <span tw='absolute inset-0 rounded-full border-4 border-ink' />
             <span tw='absolute inset-2 rounded-full bg-ink' />
