@@ -7,7 +7,11 @@ import 'webrtc-adapter'
 
 const GlobalStyles = css`
   body {
-    ${tw`text-white`}
+    /* Was text-white only, leaving the page itself the browser default -
+       a white flash before the first screen paints, and raw white behind
+       anything that did not cover the viewport. Both come from the shared
+       tokens now (tailwind.config.js). */
+    ${tw`text-ink bg-surface-base`}
   }
 `
 

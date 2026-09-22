@@ -41,19 +41,19 @@ function BannerLogoQuickSelect() {
       <button
         type='button'
         title='Banner Logo'
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1 rounded focus:outline-none focus:border-blue-500 max-w-[8rem] truncate'
+        tw='bg-surface-sunken border border-edge text-ink text-sm px-2 py-1 rounded focus:outline-none focus:border-blue-500 max-w-[8rem] truncate'
         onClick={() => setOpen((o) => !o)}
       >
         {summary}
       </button>
       {open && (
-        <div tw='absolute top-full right-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto p-1 min-w-[8rem]'>
+        <div tw='absolute top-full right-0 mt-1 z-50 bg-surface-sunken border border-edge rounded-lg shadow-lg max-h-60 overflow-y-auto p-1 min-w-[8rem]'>
           {entries.map(([key, label]) => {
             const checked = selected.includes(key)
             return (
               <label
                 key={key}
-                tw='flex items-center gap-2 text-sm text-gray-300 px-2 py-1.5 rounded hover:bg-gray-700 cursor-pointer whitespace-nowrap'
+                tw='flex items-center gap-2 text-sm text-ink-dim px-2 py-1.5 rounded hover:bg-edge-strong cursor-pointer whitespace-nowrap'
               >
                 <input
                   type='checkbox'
@@ -91,17 +91,17 @@ export function TopControls() {
   if (qrMode) return null
 
   return (
-    <div tw='fixed top-3 right-3 z-40 flex items-center gap-3 bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2'>
+    <div tw='fixed top-3 right-3 z-40 flex items-center gap-3 bg-surface/80 border border-edge rounded-lg px-3 py-2'>
       <BannerLogoQuickSelect />
 
       <label tw='flex items-center gap-2 cursor-pointer select-none'>
-        <span tw='text-xs text-gray-300'>Burst</span>
+        <span tw='text-xs text-ink-dim'>Burst</span>
         <button
           role='switch'
           aria-checked={burstOn}
           title='Enable Burst Mode'
           tw='relative w-10 h-[22px] rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0'
-          css={burstOn ? tw`bg-blue-600` : tw`bg-gray-600`}
+          css={burstOn ? tw`bg-accent` : tw`bg-edge-strong`}
           onClick={(e) => {
             burstModeEnabled.set(!burstOn)
             // Same reasoning as the select above — don't leave a focused

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import tw from 'twin.macro'
 import { WritableAtom } from 'nanostores'
 import { Challenge67LeaderboardEditor, useKeybind } from '../components'
+import { LOGO_URLS, LogoKey } from '../lib/logos'
 import {
   GIF_OPTIONS,
   GifOption,
@@ -58,8 +59,8 @@ import {
 
 function Section({ title, children }: { title: string; children: any }) {
   return (
-    <div tw='flex flex-col gap-2 py-4 border-b border-gray-800 last:border-0'>
-      <p tw='text-[10px] font-semibold uppercase tracking-widest text-gray-500'>{title}</p>
+    <div tw='flex flex-col gap-2 py-4 border-b border-edge last:border-0'>
+      <p tw='text-[10px] font-semibold uppercase tracking-widest text-ink-muted'>{title}</p>
       {children}
     </div>
   )
@@ -80,12 +81,12 @@ function SwitchRow({
   const value = useStore(boolVar)
   return (
     <div tw='flex items-center justify-between py-0.5'>
-      <span tw='text-sm text-gray-300'>{label}</span>
+      <span tw='text-sm text-ink-dim'>{label}</span>
       <button
         role='switch'
         aria-checked={value}
         tw='relative w-10 h-[22px] rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0'
-        css={value ? tw`bg-blue-600` : tw`bg-gray-600`}
+        css={value ? tw`bg-accent` : tw`bg-edge-strong`}
         onClick={() => {
           const next = !value
           boolVar.set(next)
@@ -143,23 +144,35 @@ function LogoMultiSelect<K extends string>({
 
   return (
     <div ref={rootRef} tw='relative flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>{label}</span>
+      <span tw='text-xs text-ink-muted'>{label}</span>
       <button
         type='button'
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 text-left truncate flex items-center justify-between gap-2'
+        tw='bg-surface-sunken border border-edge text-ink text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-accent text-left truncate flex items-center justify-between gap-2'
         onClick={() => setOpen((o) => !o)}
       >
-        <span tw='truncate'>{summary}</span>
-        <span tw='text-gray-500 flex-shrink-0'>{open ? '▲' : '▼'}</span>
+        <span tw='flex items-center gap-1.5 truncate'>
+          {selected
+            .filter((k) => k in LOGO_URLS)
+            .map((k) => (
+              <img
+                key={k}
+                src={LOGO_URLS[k as unknown as LogoKey]}
+                alt=''
+                tw='w-5 h-5 object-contain flex-shrink-0'
+              />
+            ))}
+          <span tw='truncate'>{summary}</span>
+        </span>
+        <span tw='text-ink-muted flex-shrink-0'>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div tw='absolute top-full left-0 right-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto p-1'>
+        <div tw='absolute top-full left-0 right-0 mt-1 z-50 bg-surface-sunken border border-edge rounded-lg shadow-lg max-h-60 overflow-y-auto p-1'>
           {entries.map(([key, optLabel]) => {
             const checked = selected.includes(key)
             return (
               <label
                 key={key}
-                tw='flex items-center gap-2 text-sm text-gray-300 px-2 py-1.5 rounded hover:bg-gray-700 cursor-pointer'
+                tw='flex items-center gap-2 text-sm text-ink-dim px-2 py-1.5 rounded hover:bg-edge-strong cursor-pointer'
               >
                 <input
                   type='checkbox'
@@ -172,13 +185,23 @@ function LogoMultiSelect<K extends string>({
                     )
                   }
                 />
+                {/* The crest itself, not just its name. These are unit badges
+                    with their own lettering and a motto; a text-only list gave
+                    no way to tell which one you were picking. */}
+                {key in LOGO_URLS && (
+                  <img
+                    src={LOGO_URLS[key as unknown as LogoKey]}
+                    alt=''
+                    tw='w-6 h-6 object-contain flex-shrink-0'
+                  />
+                )}
                 {optLabel}
               </label>
             )
           })}
         </div>
       )}
-      <span tw='text-xs text-gray-500'>{helperText}</span>
+      <span tw='text-xs text-ink-muted'>{helperText}</span>
     </div>
   )
 }
@@ -278,7 +301,7 @@ function ReplayVideoSelect() {
 
   return (
     <div tw='flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>Test Video</span>
+      <span tw='text-xs text-ink-muted'>Test Video</span>
       <input
         ref={inputRef}
         type='file'
@@ -289,19 +312,19 @@ function ReplayVideoSelect() {
       <button
         type='button'
         disabled={busy}
-        tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors disabled:opacity-50'
+        tw='w-full text-sm py-2 px-3 bg-surface-raised hover:bg-surface-raised text-ink rounded-lg text-left transition-colors disabled:opacity-50'
         onClick={() => inputRef.current?.click()}
       >
         {busy ? status : replaying ? 'Choose another video…' : 'Choose video…'}
       </button>
       {replaying && (
         <>
-          <span tw='text-xs text-gray-400 truncate' title={label}>
+          <span tw='text-xs text-ink-dim truncate' title={label}>
             Replaying {label || 'video'} on a loop
           </span>
           <button
             type='button'
-            tw='w-full text-sm py-2 px-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-left transition-colors'
+            tw='w-full text-sm py-2 px-3 bg-surface-sunken hover:bg-edge-strong text-ink rounded-lg text-left transition-colors'
             onClick={() => cameraSource.set(replayReturnSource.get())}
           >
             Stop replay (back to camera)
@@ -309,7 +332,7 @@ function ReplayVideoSelect() {
         </>
       )}
       {!busy && status && <span tw='text-xs text-red-400'>{status}</span>}
-      <span tw='text-xs text-gray-500'>
+      <span tw='text-xs text-ink-muted'>
         Plays a recording through detection as if it were the camera.
       </span>
     </div>
@@ -366,8 +389,8 @@ function ClipAnalysisChart({ series, maxPeople }: {
 
   return (
     <div tw='flex flex-col gap-1'>
-      <canvas ref={canvasRef} width={280} height={60} tw='w-full h-[60px] bg-gray-900 rounded' />
-      <div tw='flex gap-4 text-[10px] text-gray-500'>
+      <canvas ref={canvasRef} width={280} height={60} tw='w-full h-[60px] bg-surface rounded' />
+      <div tw='flex gap-4 text-[10px] text-ink-muted'>
         <span><span tw='text-blue-500'>■</span> keypoint confidence</span>
         <span><span tw='text-yellow-500'>■</span> people detected (of {maxPeople})</span>
       </div>
@@ -425,7 +448,7 @@ function ClipAnalyzer() {
 
   return (
     <div tw='flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>Detection Accuracy</span>
+      <span tw='text-xs text-ink-muted'>Detection Accuracy</span>
       <input
         ref={inputRef}
         type='file'
@@ -436,16 +459,16 @@ function ClipAnalyzer() {
       <button
         type='button'
         disabled={busy}
-        tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors disabled:opacity-50'
+        tw='w-full text-sm py-2 px-3 bg-surface-raised hover:bg-surface-raised text-ink rounded-lg text-left transition-colors disabled:opacity-50'
         onClick={() => inputRef.current?.click()}
       >
         {busy ? status : 'Analyze clip…'}
       </button>
       {!busy && status && <span tw='text-xs text-red-400'>{status}</span>}
       {result && (
-        <div tw='flex flex-col gap-2 mt-1 p-2 bg-gray-800 rounded-lg'>
+        <div tw='flex flex-col gap-2 mt-1 p-2 bg-surface-sunken rounded-lg'>
           <ClipAnalysisChart series={result.series} maxPeople={result.maxPeopleSeen} />
-          <div tw='grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-gray-300'>
+          <div tw='grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-ink-dim'>
             <span>Frames analyzed</span>
             <span tw='text-right'>{result.framesAnalyzed} / {result.framesTotal}</span>
             <span>Detection rate</span>
@@ -461,7 +484,7 @@ function ClipAnalyzer() {
           </div>
         </div>
       )}
-      <span tw='text-xs text-gray-500'>
+      <span tw='text-xs text-ink-muted'>
         Runs a short clip through pose + hand detection and reports how
         confidently it tracked people over the clip - useful for measuring
         how accuracy holds up at distance or with multiple people in frame.
@@ -489,11 +512,12 @@ function AnimSizeControl() {
 
   return (
     <div tw='flex flex-col gap-2'>
-      <span tw='text-xs text-gray-500'>Animation Size</span>
+      <span tw='text-xs text-ink-muted'>Animation Size</span>
+      <div tw='relative'>
       <select
         value={option}
         onChange={(e) => setOption((e.target as HTMLSelectElement).value as GifOption)}
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500'
+        tw='appearance-none w-full bg-surface-sunken border border-edge text-ink text-sm px-3 py-2 pr-9 rounded-lg focus:outline-none focus:border-accent'
       >
         {Object.entries(GIF_OPTIONS)
           .filter(([key]) => key !== 'none')
@@ -501,6 +525,10 @@ function AnimSizeControl() {
             <option key={key} value={key}>{label}</option>
           ))}
       </select>
+      <span tw='pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted text-xs'>
+        ▼
+      </span>
+      </div>
 
       <div tw='flex items-center gap-3'>
         <input
@@ -515,20 +543,20 @@ function AnimSizeControl() {
           tw='flex-1'
           style={{ accentColor: '#3b82f6' }}
         />
-        <span tw='w-12 text-right text-sm text-gray-300'>
+        <span tw='w-12 text-right text-sm text-ink-dim'>
           {scale.toFixed(2)}x
         </span>
       </div>
 
       <button
-        tw='w-full text-xs py-1.5 px-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors disabled:opacity-40'
+        tw='w-full text-xs py-1.5 px-3 bg-surface-sunken hover:bg-edge-strong text-ink-dim rounded-lg transition-colors disabled:opacity-40'
         disabled={scale === 1}
         onClick={() => resetAnimScale(option)}
       >
         Reset {GIF_OPTIONS[option]} to default
       </button>
 
-      <span tw='text-xs text-gray-500'>
+      <span tw='text-xs text-ink-muted'>
         1.00x is the size each character was tuned at. Most size themselves
         off the person and already hold up at any distance; the owl, drone and
         67 take a fixed share of the screen, so those are the ones worth
@@ -559,17 +587,17 @@ function AnimMultiSelect() {
 
   return (
     <div ref={rootRef} tw='relative flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>Animation GIF</span>
+      <span tw='text-xs text-ink-muted'>Animation GIF</span>
       <button
         type='button'
-        tw='bg-gray-800 border border-gray-700 text-white text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 text-left truncate flex items-center justify-between gap-2'
+        tw='bg-surface-sunken border border-edge text-ink text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-accent text-left truncate flex items-center justify-between gap-2'
         onClick={() => setOpen((o) => !o)}
       >
         <span tw='truncate'>{summary}</span>
-        <span tw='text-gray-500 flex-shrink-0'>{open ? '▲' : '▼'}</span>
+        <span tw='text-ink-muted flex-shrink-0'>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div tw='absolute top-full left-0 right-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto p-1'>
+        <div tw='absolute top-full left-0 right-0 mt-1 z-50 bg-surface-sunken border border-edge rounded-lg shadow-lg max-h-60 overflow-y-auto p-1'>
           {options.map(([key, label]) => {
             const option = key as GifOption
             const checked = gifOptions.includes(option)
@@ -578,7 +606,7 @@ function AnimMultiSelect() {
             return (
               <label
                 key={key}
-                tw='flex items-center gap-2 text-sm text-gray-300 px-2 py-1.5 rounded hover:bg-gray-700 cursor-pointer'
+                tw='flex items-center gap-2 text-sm text-ink-dim px-2 py-1.5 rounded hover:bg-edge-strong cursor-pointer'
               >
                 <input
                   type='checkbox'
@@ -597,7 +625,7 @@ function AnimMultiSelect() {
                 />
                 {label}
                 {blocked && (
-                  <span tw='text-xs text-gray-500'>
+                  <span tw='text-xs text-ink-muted'>
                     {clash
                       ? `— not with ${GIF_OPTIONS[clash]}`
                       : `— limit of ${MAX_SELECTED}`}
@@ -625,7 +653,7 @@ function ResRow({
   const heightRef = useRef<HTMLInputElement>(null)
   return (
     <div tw='flex flex-col gap-1'>
-      <span tw='text-xs text-gray-500'>{label}</span>
+      <span tw='text-xs text-ink-muted'>{label}</span>
       {/* String() on defaultValue below: Preact types it as string-only where
           React allows numbers, and value.width/height are numbers. The DOM
           coerces either way, so this is what was already happening
@@ -633,23 +661,23 @@ function ResRow({
       <div tw='flex items-center gap-2'>
         <input
           ref={widthRef}
-          tw='w-16 bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-blue-500'
+          tw='w-16 bg-surface-sunken border border-edge text-ink text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-accent'
           type='number'
           min={0}
           max={3840}
           defaultValue={String(value.width)}
         />
-        <span tw='text-gray-500 text-sm'>×</span>
+        <span tw='text-ink-muted text-sm'>×</span>
         <input
           ref={heightRef}
-          tw='w-16 bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-blue-500'
+          tw='w-16 bg-surface-sunken border border-edge text-ink text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-accent'
           type='number'
           min={0}
           max={2160}
           defaultValue={String(value.height)}
         />
         <button
-          tw='flex-1 bg-gray-700 hover:bg-gray-600 text-white text-sm py-1.5 rounded transition-colors'
+          tw='flex-1 bg-surface-raised hover:bg-surface-raised text-ink text-sm py-1.5 rounded transition-colors'
           onClick={() => {
             const w = parseInt(widthRef.current?.value ?? '0')
             const h = parseInt(heightRef.current?.value ?? '0')
@@ -679,9 +707,9 @@ function NumberRow({
 }) {
   return (
     <div tw='flex items-center justify-between py-0.5'>
-      <span tw='text-sm text-gray-300'>{label}</span>
+      <span tw='text-sm text-ink-dim'>{label}</span>
       <input
-        tw='w-16 bg-gray-800 border border-gray-700 text-white text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-blue-500'
+        tw='w-16 bg-surface-sunken border border-edge text-ink text-sm px-2 py-1.5 rounded text-center focus:outline-none focus:border-accent'
         type='number'
         min={min}
         max={max}
@@ -712,7 +740,7 @@ export default function Settings() {
   return (
     <>
       <button
-        tw='fixed top-5 left-5 z-50 w-10 h-10 flex items-center justify-center text-white bg-black bg-opacity-60 rounded-lg opacity-0 hover:opacity-100 transition-opacity text-xl leading-none'
+        tw='fixed top-5 left-5 z-50 w-10 h-10 flex items-center justify-center text-ink bg-black bg-opacity-60 rounded-lg opacity-0 hover:opacity-100 transition-opacity text-xl leading-none'
         onClick={() => setShown(!shown)}
       >
         ☰
@@ -726,13 +754,13 @@ export default function Settings() {
       )}
 
       <div
-        tw='fixed top-0 left-0 h-full w-72 z-50 bg-gray-900 text-white flex flex-col shadow-2xl transition-transform duration-300'
+        tw='fixed top-0 left-0 h-full w-72 z-50 bg-surface text-ink flex flex-col shadow-2xl transition-transform duration-300'
         css={!shown ? tw`-translate-x-full` : tw`translate-x-0`}
       >
-        <div tw='flex items-center justify-between px-5 py-4 border-b border-gray-800'>
+        <div tw='flex items-center justify-between px-5 py-4 border-b border-edge'>
           <h2 tw='text-base font-semibold tracking-wide'>Settings</h2>
           <button
-            tw='text-gray-400 hover:text-white transition-colors text-lg leading-none'
+            tw='text-ink-dim hover:text-white transition-colors text-lg leading-none'
             onClick={() => setShown(false)}
           >
             ✕
@@ -812,7 +840,7 @@ export default function Settings() {
             )}
             {qrMode && (
               <button
-                tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
+                tw='w-full text-sm py-2 px-3 bg-surface-raised hover:bg-surface-raised text-ink rounded-lg text-left transition-colors'
                 onClick={() => {
                   qrDroneLocked.set(false)
                   qrOwlLocked.set(false)
@@ -847,7 +875,7 @@ export default function Settings() {
 
           <Section title='Actions'>
             <button
-              tw='w-full text-sm py-2 px-3 bg-red-900 hover:bg-red-800 text-white rounded-lg text-left transition-colors'
+              tw='w-full text-sm py-2 px-3 bg-red-900 hover:bg-red-800 text-ink rounded-lg text-left transition-colors'
               onClick={() => {
                 pictures.set([])
                 textureCache.set({})

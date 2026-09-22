@@ -297,7 +297,7 @@ export default function HUD({ photographerRef }: HUDProps) {
       )
     case 'confirm':
       return (
-        <Modal variant='modern' onDismiss={cancelUpload}>
+        <Modal onDismiss={cancelUpload}>
           <div tw='flex items-baseline justify-center gap-3'>
             <h2>Confirm?</h2>
             {images.length > 1 && (
@@ -358,7 +358,7 @@ export default function HUD({ photographerRef }: HUDProps) {
       )
     case 'uploading':
       return (
-        <Modal variant='modern' locked>
+        <Modal locked>
           <h2>Uploading...</h2>
         </Modal>
       )
@@ -370,7 +370,7 @@ export default function HUD({ photographerRef }: HUDProps) {
         // dismissing any way other than "Done" left `state` stuck on
         // 'error' while the modal that was rendering it had hidden itself,
         // i.e. a blank screen with nothing clickable.
-        <Modal variant='modern' onDismiss={() => setState('ready')}>
+        <Modal onDismiss={() => setState('ready')}>
           <h2>Error</h2>
           <p tw='text-[#cbd2dc] text-center'>{error}</p>
           <KeybindBtn

@@ -115,7 +115,7 @@ function EditorModal({ onClose }: { onClose: () => void }) {
 
   if (!unlocked) {
     return (
-      <Modal onDismiss={onClose} variant='modern'>
+      <Modal onDismiss={onClose}>
         <h2>67 Mode Leaderboard</h2>
         <div tw='flex flex-col gap-3 w-72'>
           <div tw='relative'>
@@ -135,20 +135,20 @@ function EditorModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setPassword((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => { if (e.key === 'Enter') unlock() }}
               placeholder='Password'
-              tw='w-full bg-[#12151b] border border-[#2c313b] text-[#f3f4f6] text-base pl-4 pr-10 py-2 rounded-lg text-center outline-none'
+              tw='w-full bg-surface-sunken border border-edge text-ink text-base pl-4 pr-10 py-2 rounded-lg text-center outline-none'
             />
             <button
               type='button'
               tabIndex={-1}
               onClick={() => setShowPassword((s) => !s)}
               title={showPassword ? 'Hide password' : 'Show password'}
-              tw='absolute right-2 top-1/2 -translate-y-1/2 text-[#98a1b0] hover:text-[#f3f4f6] text-lg leading-none px-1'
+              tw='absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink text-lg leading-none px-1'
             >
               {showPassword ? '🙈' : '👁️'}
             </button>
           </div>
           <button
-            tw='bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm py-2 rounded-lg'
+            tw='bg-accent hover:bg-accent-hover disabled:opacity-50 text-ink text-sm py-2 rounded-lg'
             disabled={busy || !password}
             onClick={unlock}
           >
@@ -161,24 +161,24 @@ function EditorModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal onDismiss={onClose} variant='modern' wide>
+    <Modal onDismiss={onClose} wide>
       <h2>67 Mode Leaderboard</h2>
       <div tw='flex flex-col gap-2 w-full max-h-[50vh] overflow-y-auto'>
-        <div tw='flex gap-2 text-xs text-[#98a1b0] uppercase tracking-wide px-1'>
+        <div tw='flex gap-2 text-xs text-ink-muted uppercase tracking-wide px-1'>
           <span tw='flex-1'>Name</span>
           <span tw='w-20 text-center'>Score</span>
           <span tw='w-36'>Set</span>
           <span tw='w-6' />
         </div>
         {entries.length === 0 && (
-          <span tw='text-[#98a1b0] text-sm text-center py-4'>No entries yet.</span>
+          <span tw='text-ink-muted text-sm text-center py-4'>No entries yet.</span>
         )}
         {entries.map((entry, i) => (
           <div key={i} tw='flex gap-2 items-center'>
             <input
               value={entry.name}
               onChange={(e) => patch(i, { name: (e.target as HTMLInputElement).value })}
-              tw='flex-1 min-w-0 bg-[#12151b] border border-[#2c313b] text-[#f3f4f6] text-sm px-2 py-1.5 rounded'
+              tw='flex-1 min-w-0 bg-surface-sunken border border-edge text-ink text-sm px-2 py-1.5 rounded'
             />
             <input
               type='number'
@@ -186,9 +186,9 @@ function EditorModal({ onClose }: { onClose: () => void }) {
               max={400}
               value={entry.score}
               onChange={(e) => patch(i, { score: parseInt((e.target as HTMLInputElement).value) || 0 })}
-              tw='w-20 bg-[#12151b] border border-[#2c313b] text-[#f3f4f6] text-sm px-2 py-1.5 rounded text-center'
+              tw='w-20 bg-surface-sunken border border-edge text-ink text-sm px-2 py-1.5 rounded text-center'
             />
-            <span tw='w-36 text-xs text-[#98a1b0] flex-shrink-0 truncate'>
+            <span tw='w-36 text-xs text-ink-muted flex-shrink-0 truncate'>
               {new Date(entry.ts * 1000).toLocaleString()}
             </span>
             <button
@@ -203,13 +203,13 @@ function EditorModal({ onClose }: { onClose: () => void }) {
       </div>
       <div tw='flex gap-3 w-full'>
         <button
-          tw='flex-1 bg-[#272c35] hover:bg-[#323844] text-[#f3f4f6] text-sm py-2 rounded-lg'
+          tw='flex-1 bg-surface-raised hover:bg-edge-strong text-ink text-sm py-2 rounded-lg'
           onClick={add}
         >
           + Add entry
         </button>
         <button
-          tw='flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm py-2 rounded-lg'
+          tw='flex-1 bg-accent hover:bg-accent-hover disabled:opacity-50 text-ink text-sm py-2 rounded-lg'
           disabled={busy}
           onClick={() => save()}
         >
@@ -217,8 +217,8 @@ function EditorModal({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <button
-        tw='w-full bg-[#272c35] hover:bg-red-900 disabled:opacity-50 text-red-400 hover:text-red-200 text-sm py-2 rounded-lg transition-colors'
-        css={confirmingClear && tw`bg-red-600 text-white hover:bg-red-700 hover:text-white`}
+        tw='w-full bg-surface-raised hover:bg-red-900 disabled:opacity-50 text-red-400 hover:text-red-200 text-sm py-2 rounded-lg transition-colors'
+        css={confirmingClear && tw`bg-red-600 text-ink hover:bg-red-700 hover:text-ink`}
         disabled={busy || entries.length === 0}
         onClick={clearAll}
       >
@@ -239,7 +239,7 @@ export function Challenge67LeaderboardEditor() {
   return (
     <>
       <button
-        tw='w-full text-sm py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-left transition-colors'
+        tw='w-full text-sm py-2 px-3 bg-surface-raised hover:bg-surface-raised text-ink rounded-lg text-left transition-colors'
         onClick={() => setOpen(true)}
       >
         Edit Leaderboard…

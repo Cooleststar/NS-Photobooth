@@ -159,9 +159,19 @@ function computeDetectionMode(gifOptions: GifOption[]): 'pose' | 'hands' | 'none
   return needs.has('pose') ? 'pose' : 'hands'
 }
 
-const MARGIN_X = 30 / 1920
-const MARGIN_T = 30 / 1080
-const MARGIN_B = 30 / 1080
+// The feed is drawn edge to edge. These used to inset it by 30px a side,
+// leaving a border around the video - a leftover from the decorative frame
+// that used to be painted there (border_design6.png, since removed), which on
+// its own just read as an unpainted gap around the picture.
+//
+// Kept as constants rather than ripped out: everything that needs to know
+// where the video is derives from them - the animations' clamp bounds, the
+// detection-coordinate remap, and the capture crop's fallback - so putting a
+// value back here restores the inset everywhere at once, with nothing else
+// to change.
+const MARGIN_X = 0
+const MARGIN_T = 0
+const MARGIN_B = 0
 
 // Keep the pose input resolution and aspect ratio identical regardless of
 // which local camera is being used — the backend's tracker is sensitive to
@@ -219,7 +229,19 @@ function createSlotAssigner<T>(slotCount: number) {
   }
 }
 
-function postprocessPicture(pic: HTMLCanvasElement) {
+/** Where the video was last drawn inside the canvas, in canvas pixels.
+ *
+ * Written by createReceivingCtx's draw and read by postprocessPicture, so the
+ * capture crops exactly what was drawn instead of recomputing it from
+ * constants and landing somewhere slightly different. */
+export interface VideoRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function postprocessPicture(pic: HTMLCanvasElement, rect: VideoRect | null) {
   const { width, height } = pic
 
   // The live view intentionally draws a black margin border around the video
@@ -229,11 +251,29 @@ function postprocessPicture(pic: HTMLCanvasElement) {
   // every photo in a strip. Crop them off instead, so the exported photo is
   // pure video with no frame of any colour. The live preview still keeps its
   // black margin: only this captured copy is cropped.
-  const xMargin = Math.round(MARGIN_X * width)
-  const yMarginT = Math.round(MARGIN_T * height)
-  const yMarginB = Math.round(MARGIN_B * height)
-  const cropWidth = width - xMargin * 2
-  const cropHeight = height - yMarginT - yMarginB
+  // Edges rounded independently and the size derived from them, rather than
+  // rounding an offset and a size separately - that way the crop can never
+  // drift a pixel past the right/bottom edge of what was drawn.
+  //
+  // `rect` is what the draw actually used. Falling back to the margin
+  // constants only covers the case where no frame has been drawn yet, which
+  // cannot happen for a real capture.
+  //
+  // The constants USED to be the whole story here, and got the top edge
+  // wrong: the draw derives its top margin from the video's aspect ratio
+  // (height - heightTarget - bottomMargin, which works out at ~3.75px on a
+  // 16:9 feed in a 1920x1080 canvas), while this cropped a flat MARGIN_T of
+  // 30px. Three edges lined up and the top did not, so every saved photo lost
+  // about 26px - 2.5% of the frame, the top of people's heads in a tight
+  // shot - that the guest had just watched on screen.
+  const left = rect ? Math.round(rect.x) : Math.round(MARGIN_X * width)
+  const top = rect ? Math.round(rect.y) : Math.round(MARGIN_T * height)
+  const right = rect ? Math.round(rect.x + rect.width) : width - Math.round(MARGIN_X * width)
+  const bottom = rect ? Math.round(rect.y + rect.height) : height - Math.round(MARGIN_B * height)
+  const xMargin = left
+  const yMarginT = top
+  const cropWidth = right - left
+  const cropHeight = bottom - top
 
   const tmpCanvas = document.createElement('canvas')
   tmpCanvas.width = cropWidth
@@ -290,6 +330,9 @@ function createReceivingCtx(
    * against Date.now() on arrival. Undefined outside RTSP mode, where the
    * generic /pose_out-staleness delay below is used instead. */
   videoDelayMsRef?: { current: number | undefined },
+  /** Filled in with the rect the video is drawn into, for the capture path
+   * to crop against - see postprocessPicture. */
+  videoRectRef?: { current: VideoRect | null },
 ) {
   const { width = 640, height = 480 } = size ?? {}
   const canvas = document.createElement('canvas')
@@ -337,7 +380,12 @@ function createReceivingCtx(
       // always shows a solid black border regardless of renderer settings.
       // postprocessPicture() paints this back to white on the captured copy,
       // so exported/uploaded photos don't carry the border.
-      ctx.fillStyle = '#000000'
+      // surface-base, not pure black - the same backdrop the rest of the
+      // app sits on, so the border round the feed reads as deliberate rather
+      // than as an unpainted gap. Safe to restyle: postprocessPicture CROPS
+      // this margin off the captured photo rather than recolouring it, so
+      // nothing here reaches an exported image.
+      ctx.fillStyle = '#0d1016'
       ctx.fillRect(0, 0, width, height)
       ctx.save()
       ctx.translate(width, 0)
@@ -352,6 +400,17 @@ function createReceivingCtx(
 
       ctx.drawImage(bitmap ?? img, xMargin, yMargin, widthTarget, heightTarget)
       ctx.restore()
+
+      // Recorded AFTER the draw, so what the capture crops is by construction
+      // what was drawn rather than a second guess at it.
+      if (videoRectRef) {
+        videoRectRef.current = {
+          x: xMargin,
+          y: yMargin,
+          width: widthTarget,
+          height: heightTarget,
+        }
+      }
 
       // recalculate pose coordinates
       const { mmpose, mp_pose } = data
@@ -502,6 +561,9 @@ export default function Display({
 
   /** normalized raw data from backend */
   const rawRef = useRef<Analysis>({})
+  /** Where the video sits inside the canvas, kept current by the draw and
+   * read when a photo is captured (see postprocessPicture). */
+  const videoRectRef = useRef<VideoRect | null>(null)
   /** absolute (converted) data */
   const dataRef = useRef<Analysis>({
     mp_pose: {
@@ -891,7 +953,8 @@ export default function Display({
     let [canvas, update] = createReceivingCtx(activeRef, dataRef, {
       width,
       height,
-    }, isRtspMode ? rtspBitmapRef : undefined, isRtspMode ? rtspDelayMsRef : undefined)
+    }, isRtspMode ? rtspBitmapRef : undefined, isRtspMode ? rtspDelayMsRef : undefined,
+      videoRectRef)
 
     attachStream2Pixi(app, canvas)
     // Feed the video into the canvas immediately, independent of animation
@@ -1406,7 +1469,7 @@ export default function Display({
       // photoStrip.ts) — the banner logo is left in deliberately, though: it
       // is what brands each captured photo.
       app.renderer.render(app.stage)
-      const imCanvas = postprocessPicture(app.renderer.view)
+      const imCanvas = postprocessPicture(app.renderer.view, videoRectRef.current)
 
       console.log('Captured photo resolution:', imCanvas.width, 'x', imCanvas.height)
       return imCanvas.toDataURL(

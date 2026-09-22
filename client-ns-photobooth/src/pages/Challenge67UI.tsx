@@ -56,8 +56,8 @@ function LeaderboardList({
   if (entries.length === 0) return null
   const ownKey = ownName?.trim().toLowerCase()
   return (
-    <div tw='text-white text-lg bg-black bg-opacity-50 rounded-xl px-6 py-4 flex flex-col gap-1 min-w-[320px]'>
-      <span tw='text-sm text-gray-400 uppercase tracking-widest mb-1'>
+    <div tw='text-ink text-lg flex flex-col gap-1 min-w-[320px] w-full border-t border-edge pt-4 mt-1'>
+      <span tw='text-xs text-ink-muted uppercase tracking-widest mb-1'>
         Leaderboard
       </span>
       {entries.slice(0, 10).map((entry, i) => {
@@ -66,19 +66,53 @@ function LeaderboardList({
           <div
             key={entry.name}
             tw='flex justify-between items-baseline gap-6 rounded-lg px-2 py-0.5'
-            css={isOwn && tw`bg-blue-500 bg-opacity-30`}
+            css={isOwn && tw`bg-accent bg-opacity-25`}
           >
             <span tw='flex gap-3 truncate'>
-              <span tw='w-6 text-gray-400'>{MEDALS[i] ?? `#${i + 1}`}</span>
+              <span tw='w-6 text-ink-muted'>{MEDALS[i] ?? `#${i + 1}`}</span>
               <span tw='truncate'>{entry.name}</span>
             </span>
             <span tw='flex gap-3 items-baseline flex-shrink-0'>
-              <span tw='text-xs text-gray-400'>{formatWhen(entry.ts)}</span>
+              <span tw='text-xs text-ink-muted'>{formatWhen(entry.ts)}</span>
               <span tw='font-semibold'>{entry.score}</span>
             </span>
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/** One card, centred over the live feed.
+ *
+ * Each screen used to be a STACK of separate black 50%-opacity boxes - a
+ * title box, an instructions box, a score box, a rank box - floating with
+ * gaps between them. That reads as debug overlay rather than product, and it
+ * shared nothing with the palette the rest of the app uses. One panel, on the
+ * shared tokens (tailwind.config.js), with the content spaced inside it.
+ *
+ * Slightly translucent so the person can still see themselves behind it,
+ * which is the point of a photo booth - but far more opaque than the old
+ * boxes, so text stays readable against a moving camera feed. */
+function Panel({ children }: { children: any }) {
+  return (
+    <div tw='bg-surface bg-opacity-95 border border-edge rounded-2xl shadow-2xl px-10 py-8 flex flex-col items-center gap-5 max-w-[90vw]'>
+      {children}
+    </div>
+  )
+}
+
+/** A readout floating over the feed during play - deliberately NOT a panel.
+ * While the round is running the video is the thing to look at, so the timer
+ * and the count stay as two small pills at the edges rather than a card in
+ * the middle of the shot. */
+function Readout({ children, big }: { children: any; big?: boolean }) {
+  return (
+    <div
+      tw='bg-surface bg-opacity-80 border border-edge rounded-2xl text-ink font-bold'
+      css={big ? tw`text-8xl px-14 py-10` : tw`text-2xl px-6 py-3 font-semibold`}
+    >
+      {children}
     </div>
   )
 }
@@ -224,17 +258,21 @@ export default function Challenge67UI() {
   switch (game.phase) {
     case 'waiting':
       return (
-        <div tw='inset-0 fixed flex flex-col items-center justify-center gap-6'>
-          <div tw='text-white text-6xl font-bold bg-black bg-opacity-50 rounded-2xl px-12 py-8'>
-            67 Mode
-          </div>
-          <div tw='text-white text-xl bg-black bg-opacity-50 rounded-xl px-6 py-3'>
-            67 as fast as you can for 20 seconds!
-          </div>
-          <KeybindBtn keyCode='PageUp' onClick={start} tw='text-2xl px-8 py-4'>
-            Start
-          </KeybindBtn>
-          <LeaderboardList entries={liveBoard} />
+        <div tw='inset-0 fixed flex items-center justify-center'>
+          <Panel>
+            <h1 tw='text-ink text-6xl font-bold tracking-tight'>67 Mode</h1>
+            <p tw='text-ink-dim text-xl'>
+              67 as fast as you can for 20 seconds
+            </p>
+            <KeybindBtn
+              keyCode='PageUp'
+              onClick={start}
+              tw='text-2xl px-10 py-4 bg-accent hover:bg-accent-hover rounded-xl'
+            >
+              Start
+            </KeybindBtn>
+            <LeaderboardList entries={liveBoard} />
+          </Panel>
         </div>
       )
     case 'naming': {
@@ -244,29 +282,34 @@ export default function Challenge67UI() {
       const trimmed = nameInput.trim()
       const showTaken = trimmed.length > 0 && nameAvailable === false
       return (
-        <div tw='inset-0 fixed flex flex-col items-center justify-center gap-6'>
-          <div tw='text-white text-4xl font-bold bg-black bg-opacity-50 rounded-2xl px-12 py-8'>
-            Enter your name
-          </div>
-          <div tw='flex flex-col items-center gap-2'>
-            <input
-              autoFocus
-              value={nameInput}
-              onChange={(e) => setNameInput((e.target as HTMLInputElement).value.slice(0, MAX_NAME_LEN))}
-              onKeyDown={(e) => { if (e.key === 'Enter') begin() }}
-              maxLength={MAX_NAME_LEN}
-              tw='text-black text-2xl rounded-xl px-6 py-3 w-96 text-center outline-none border-4 border-transparent'
-              css={showTaken && tw`border-red-500`}
-            />
-            {/* Reserved height (not conditionally rendered) so the Begin
-                button below doesn't jump up and down as this appears. */}
-            <div tw='text-red-400 text-sm h-5'>
-              {showTaken && 'That name is already taken - try another'}
+        <div tw='inset-0 fixed flex items-center justify-center'>
+          <Panel>
+            <h1 tw='text-ink text-4xl font-bold tracking-tight'>Enter your name</h1>
+            <div tw='flex flex-col items-center gap-2'>
+              <input
+                autoFocus
+                value={nameInput}
+                onChange={(e) => setNameInput((e.target as HTMLInputElement).value.slice(0, MAX_NAME_LEN))}
+                onKeyDown={(e) => { if (e.key === 'Enter') begin() }}
+                maxLength={MAX_NAME_LEN}
+                tw='bg-surface-sunken text-ink text-2xl rounded-xl px-6 py-3 w-96 text-center outline-none border-2 border-edge focus:border-accent'
+                css={showTaken && tw`border-red-500 focus:border-red-500`}
+              />
+              {/* Reserved height (not conditionally rendered) so the Begin
+                  button below doesn't jump up and down as this appears. */}
+              <div tw='text-red-400 text-sm h-5'>
+                {showTaken && 'That name is already taken - try another'}
+              </div>
             </div>
-          </div>
-          <KeybindBtn keyCode='PageUp' onClick={begin} tw='text-2xl px-8 py-4' disabled={!canBegin}>
-            Begin
-          </KeybindBtn>
+            <KeybindBtn
+              keyCode='PageUp'
+              onClick={begin}
+              tw='text-2xl px-10 py-4 bg-accent hover:bg-accent-hover rounded-xl'
+              disabled={!canBegin}
+            >
+              Begin
+            </KeybindBtn>
+          </Panel>
         </div>
       )
     }
@@ -284,25 +327,23 @@ export default function Challenge67UI() {
     case 'playing':
       return (
         <div tw='inset-0 fixed flex flex-col items-center justify-between py-12 pointer-events-none'>
-          <div tw='text-white text-2xl font-semibold bg-black bg-opacity-50 rounded-xl px-6 py-3'>
-            {Math.max(0, Math.ceil(game.timeLeft))}s left
-          </div>
-          <div tw='text-white text-8xl font-bold bg-black bg-opacity-50 rounded-2xl px-14 py-10'>
-            {game.reps}
-          </div>
+          <Readout>{Math.max(0, Math.ceil(game.timeLeft))}s left</Readout>
+          <Readout big>{game.reps}</Readout>
         </div>
       )
     case 'finished':
       return (
-        <div tw='inset-0 fixed flex flex-col items-center justify-center gap-4'>
-          <div tw='text-white text-3xl font-semibold bg-black bg-opacity-50 rounded-xl px-8 py-4'>
-            {game.playerName}
-          </div>
-          <div tw='text-white text-5xl font-bold bg-black bg-opacity-50 rounded-2xl px-12 py-8'>
-            Score: {game.lastResult?.score ?? game.reps}
-          </div>
+        <div tw='inset-0 fixed flex items-center justify-center'>
+          <Panel>
+            <span tw='text-ink-dim text-2xl'>{game.playerName}</span>
+            <div tw='flex flex-col items-center'>
+              <span tw='text-ink-muted text-sm uppercase tracking-widest'>Score</span>
+              <span tw='text-ink text-7xl font-bold leading-none'>
+                {game.lastResult?.score ?? game.reps}
+              </span>
+            </div>
           {game.lastResult && (
-            <div tw='text-white text-xl bg-black bg-opacity-50 rounded-xl px-6 py-3 flex flex-col items-center gap-1'>
+            <div tw='text-ink text-xl flex flex-col items-center gap-1'>
               <span>Rank {game.lastResult.rank} / {game.lastResult.total}</span>
               {/* Only one of these shows: a new best replaced what was on the
                   board (nothing more to say), while a round that didn't beat
@@ -312,13 +353,17 @@ export default function Challenge67UI() {
               {game.lastResult.isNewBest ? (
                 <span tw='text-yellow-400 font-semibold'>New personal best!</span>
               ) : (
-                <span tw='text-gray-400'>Your best: {game.lastResult.best}</span>
+                <span tw='text-ink-muted'>Your best: {game.lastResult.best}</span>
               )}
             </div>
           )}
           <LeaderboardList entries={liveBoard} ownName={game.playerName} />
-          <div tw='flex flex-row gap-4'>
-            <KeybindBtn keyCode='PageUp' onClick={start} tw='text-xl px-6 py-3'>
+          <div tw='flex flex-row gap-3 pt-1'>
+            <KeybindBtn
+              keyCode='PageUp'
+              onClick={start}
+              tw='text-xl px-8 py-3 bg-accent hover:bg-accent-hover rounded-xl'
+            >
               Play
             </KeybindBtn>
             {/* Not PageDown: HUD.tsx binds that globally (cycling a debug
@@ -330,11 +375,12 @@ export default function Challenge67UI() {
             <KeybindBtn
               keyCode='KeyR'
               onClick={retry}
-              tw='text-xl px-6 py-3 bg-green-600 hover:bg-green-800'
+              tw='text-xl px-8 py-3 bg-surface-raised hover:bg-edge-strong border border-edge rounded-xl'
             >
               Retry
             </KeybindBtn>
-          </div>
+            </div>
+          </Panel>
         </div>
       )
   }

@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/preact'
 import { useEffect, useState } from 'react'
 import tw from 'twin.macro'
+import armyCrestUrl from '../assets/icons/army_int_logo.png'
 import {
   CameraSource,
   HIKVISION_IPS,
@@ -72,15 +73,29 @@ export default function CameraSelect() {
   }
 
   return (
-    <div tw='fixed inset-0 bg-black flex flex-col items-center justify-center gap-8 text-white'>
-      <h1 tw='text-5xl font-bold tracking-tight'>Photobooth</h1>
-      <p tw='text-gray-400 text-lg'>Select a camera to get started</p>
+    <div tw='fixed inset-0 bg-surface-base flex flex-col items-center justify-center gap-8 text-ink'>
+      {/* The unit crest the app already ships as its favicon. The start
+          screen carried no identity at all before - just a generic word on a
+          dark field - and the badge is the strongest asset here, so it does
+          the branding rather than a restyled wordmark competing with the
+          lettering already inside it. */}
+      <div tw='flex flex-col items-center gap-4'>
+        <img src={armyCrestUrl} alt='' tw='w-28 h-28 object-contain' />
+        <h1 tw='text-5xl font-bold tracking-tight'>Photobooth</h1>
+      </div>
+      <p tw='text-ink-dim text-lg -mt-4'>Select a camera to get started</p>
 
       <div tw='flex flex-col gap-4 w-80'>
         <label tw='flex flex-col gap-1'>
-          <span tw='text-sm text-gray-400'>Camera</span>
+          <span tw='text-sm text-ink-dim'>Camera</span>
+          {/* appearance-none strips the OS dropdown chrome - the stock control
+              renders with the platform's own arrow and focus ring, which sat
+              right above a custom-styled button and gave the screen two
+              visual languages. The chevron below replaces it, and is
+              pointer-events-none so clicking it still opens the menu. */}
+          <div tw='relative'>
           <select
-            tw='bg-gray-800 border border-gray-600 text-white p-3 rounded-lg text-base'
+            tw='appearance-none w-full bg-surface-sunken border border-edge text-ink p-3 pr-10 rounded-lg text-base focus:outline-none focus:border-accent'
             value={camSource}
             onChange={(e) =>
               cameraSource.set((e.target as HTMLSelectElement).value as CameraSource)
@@ -105,13 +120,17 @@ export default function CameraSelect() {
               </optgroup>
             )}
           </select>
+          <span tw='pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted text-xs'>
+            ▼
+          </span>
+          </div>
         </label>
 
         {camSource === 'custom' && (
           <label tw='flex flex-col gap-1'>
-            <span tw='text-sm text-gray-400'>Custom RTSP URL</span>
+            <span tw='text-sm text-ink-dim'>Custom RTSP URL</span>
             <input
-              tw='bg-gray-800 border border-gray-600 text-white p-3 rounded-lg text-base'
+              tw='bg-surface-sunken border border-edge text-ink p-3 rounded-lg text-base'
               type='text'
               value={customUrl}
               placeholder='rtsp://user:pass@192.168.1.x'
@@ -123,13 +142,13 @@ export default function CameraSelect() {
         )}
 
         {camSource === 'webcam' && (
-          <div tw='text-sm text-gray-400 px-1'>
+          <div tw='text-sm text-ink-dim px-1'>
             {detectedCam || 'Detecting camera...'}
           </div>
         )}
 
         <button
-          tw='mt-2 bg-white text-black text-center py-3 rounded-lg text-lg font-semibold hover:bg-gray-200 transition-colors disabled:opacity-50'
+          tw='mt-2 bg-accent hover:bg-accent-hover text-ink text-center py-3 rounded-lg text-lg font-semibold transition-colors disabled:opacity-50'
           disabled={starting}
           onClick={handleStart}
         >
