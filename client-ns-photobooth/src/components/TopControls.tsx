@@ -107,7 +107,10 @@ export function TopControls() {
             // Same reasoning as the select above — don't leave a focused
             // control sitting in the HUD that could intercept the next
             // Space press meant for taking a photo.
-            ;(e.target as HTMLButtonElement).blur()
+            // currentTarget, not target - a tap usually lands on the knob
+            // <span> inside this button, and blurring a span is a no-op,
+            // which left the very focus this line exists to clear.
+            ;(e.currentTarget as HTMLButtonElement).blur()
           }}
         >
           <span

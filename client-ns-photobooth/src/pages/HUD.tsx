@@ -238,7 +238,15 @@ export default function HUD({ photographerRef }: HUDProps) {
     }
   }
 
-  useKeybind('Space', takePicture)
+  // Space is the shutter and nothing else. 67 Mode replaces the whole
+  // capture flow (see the early return below) - but this is a HOOK, so it
+  // runs before that return and kept firing a capture underneath the game:
+  // the countdown and its dimming would start over a round in progress.
+  // The early return only covers what is rendered, never the keybinds.
+  useKeybind('Space', () => {
+    if (challenge67On) return
+    takePicture()
+  })
 
   useKeybind('PageDown', () => {
     if (!['ready', 'timing'].includes(state)) return

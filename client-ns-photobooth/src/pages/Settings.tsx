@@ -87,10 +87,17 @@ function SwitchRow({
         aria-checked={value}
         tw='relative w-10 h-[22px] rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0'
         css={value ? tw`bg-accent` : tw`bg-edge-strong`}
-        onClick={() => {
+        onClick={(e) => {
           const next = !value
           boolVar.set(next)
           onToggle?.(next)
+          // A <button> stays focused after a click, and the browser
+          // activates a focused button on Space - so a switch left focused
+          // swallowed the next Space and re-toggled itself instead of taking
+          // a photo. Clicking "Enable 67 Mode" and then pressing Space was
+          // exactly that. currentTarget, not target: the knob <span> inside
+          // is what a tap usually lands on, and blurring a span does nothing.
+          ;(e.currentTarget as HTMLButtonElement).blur()
         }}
       >
         <span
