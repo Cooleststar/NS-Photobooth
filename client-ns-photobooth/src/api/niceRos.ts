@@ -39,6 +39,10 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
           label_src: 'mp' | 'wilor'; angle_src: 'mp' | 'wilor'
           // Optional: an older backend doesn't send it.
           owner?: number
+          // Optional for the same reason — added for scuba's WiLoR-only
+          // gesture, see HandData.
+          palm_normal?: number[]; finger_axis?: number[]
+          wx?: number; wy?: number
         }[]
         heads?: { x: number; y: number; size: number; conf: number }[]
         mp_pose?: { x: number[]; y: number[]; z: number[]; scores: number[] } | null
@@ -75,6 +79,13 @@ export function useNiceROSAnalysis(dataRef: MutableRefObject<Analysis>) {
         labelSrc: h.label_src,
         owner: h.owner ?? -1,
         angleSrc: h.angle_src,
+        // Left empty against an older backend, which makes the gestures that
+        // need real orientation simply never fire rather than read zeros as
+        // a meaningful direction.
+        palmNormal: h.palm_normal ?? [],
+        fingerAxis: h.finger_axis ?? [],
+        wx: h.wx ?? h.x[0],
+        wy: h.wy ?? h.y[0],
       }))
       dataRef.current.heads = heads ?? []
       dataRef.current.qrCodes = (qr_codes ?? []) as QrCodeDetection[]

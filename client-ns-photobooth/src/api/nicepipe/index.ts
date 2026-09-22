@@ -31,6 +31,21 @@ export type HandData = {
    * landmarks; when 'wilor' it is derived from the wrist rotation matrix. */
   angle: number
   angleSrc: 'mp' | 'wilor'
+  /** Palm normal as a camera-space unit vector, [x, y, z]. Always WiLoR's own
+   * estimate, unlike `angle`. y matches palmSky's convention (negative is
+   * skyward); x is large in magnitude when the palm faces left or right.
+   * Empty from a backend too old to send it. */
+  palmNormal: number[]
+  /** Wrist-to-fingertip direction as a camera-space unit vector, [x, y, z].
+   * Always WiLoR's own. `angle` is this flattened to the screen plane, which
+   * cannot separate a hand pointing up from one pointing at the camera.
+   * Empty from a backend too old to send it. */
+  fingerAxis: number[]
+  /** Detector box centre, normalized. Always WiLoR's, where `x`/`y` switch to
+   * MediaPipe's knuckle average whenever it matched the hand. Remapped for
+   * the video's inset rect alongside x/y (see Display.tsx). */
+  wx: number
+  wy: number
   /** Hand box size as a fraction of the frame, for scaling a worn prop with
    * how close the hand is. */
   w: number

@@ -1,3 +1,4 @@
+import { NormalizedLandmarkList } from '../api/landmarks'
 import { Analysis } from '../api/nicepipe'
 import * as PIXI from '../pixi'
 import { GifOption } from '../store'
@@ -62,7 +63,13 @@ export async function createAnimForGif(
     const wrappedUpdate = (_pose: any) => updateDrone(dataRef.current.hands ?? [])
     return [container, wrappedUpdate] as const
   } else if (option === 'scuba') {
-    return await createScubaAnim(app, marginOpts)
+    const [container, updateScuba] = await createScubaAnim(app, marginOpts)
+    // Needs both its assigned person (pose, to place the cat above their
+    // head) and the hand list (for the palm-orientation gesture) — see
+    // scuba.ts's matchHand, which pairs the two by position.
+    const wrappedUpdate = (pose: NormalizedLandmarkList) =>
+      updateScuba(pose, dataRef.current.hands ?? [])
+    return [container, wrappedUpdate] as const
   } else if (option === 'ocfusion') {
     // No longer hand-tracked (see ocfusion.ts) — reads its assigned person's
     // own face pose directly, same contract as pignose/etc.

@@ -470,6 +470,17 @@ def init() -> bool:
     return True
 
 
+def _palm_normal(R: np.ndarray, is_right: bool) -> np.ndarray:
+    """The palm normal in camera space, as a unit vector.
+
+    See _palm_normal_y for how this axis was chosen. Callers that only need
+    "is the palm skyward" should use that instead; this is for gestures that
+    care which way the palm faces in the horizontal plane too (scuba.ts tests
+    the x component, for a palm facing left or right).
+    """
+    return _oriented(R, (0.0, -1.0, 0.0), is_right)
+
+
 def _palm_normal_y(R: np.ndarray, is_right: bool) -> float:
     """Vertical component of the palm normal: negative is skyward.
 
@@ -484,7 +495,7 @@ def _palm_normal_y(R: np.ndarray, is_right: bool) -> float:
     the left hand is mirrored. Unlike the MediaPipe path, the handedness this
     depends on comes from the detector's own class, not a coin-flip classifier.
     """
-    return float(_oriented(R, (0.0, -1.0, 0.0), is_right)[1])
+    return float(_palm_normal(R, is_right)[1])
 
 
 # Chirality correction for left hands, applied in CAMERA space.
@@ -526,6 +537,36 @@ def _curl_score(hand_pose: np.ndarray) -> float:
     return float(np.mean(angles))
 
 
+# The finger direction as a 3D axis, which is NOT _FINGER_AXIS.
+#
+# _FINGER_AXIS is only ever consumed by _screen_angle, which projects it onto
+# the screen plane and whose callers then add a quarter turn to line prop art
+# up (see its docstring). That pairing is self-consistent for laying a prop
+# along a hand, so it must not be disturbed — boxglove and drone depend on it.
+# Taken as a 3D direction on its own, though, it does not point along the
+# fingers at all.
+#
+# Determined empirically, the same way the palm normal's axis was, rather than
+# assumed: with a right hand held in a deliberate knife-hand (fingers up, palm
+# to the side), local -x read (0.09,-0.39,-0.92) — pointing at the camera, not
+# up — while local -y correctly read (0.99,0.08,0.06), square to the side. The
+# remaining basis vector, their cross product, came to (0.05,-0.92,0.39):
+# dominantly -y, i.e. up, which is where the fingers actually were. Sign does
+# not matter to the only consumer (scuba.ts tests |y|), so the axis is taken
+# positive.
+_FINGER_DIR = (0.0, 0.0, 1.0)
+
+
+def _finger_axis(R: np.ndarray, is_right: bool) -> np.ndarray:
+    """Wrist-to-fingertip direction in camera space, as a unit vector.
+
+    _screen_angle flattens its own axis to a single screen-space angle, which
+    cannot tell a hand pointing up from one pointing at the camera. Gestures
+    that need that distinction (scuba.ts's upright hand) take this instead.
+    """
+    return _oriented(R, _FINGER_DIR, is_right)
+
+
 def _screen_angle(R: np.ndarray, is_right: bool) -> float:
     """Rotation, in radians, to lay a hand-worn prop along the fingers.
 
@@ -533,6 +574,9 @@ def _screen_angle(R: np.ndarray, is_right: bool) -> float:
     axis - the same convention PIXI's sprite.rotation expects. The prop art
     points UP, so the caller adds a quarter turn.
     """
+    # _FINGER_AXIS, not _finger_axis(): the two are different axes on purpose,
+    # and this one is the half of the pair the quarter-turn correction below
+    # is calibrated against. See _FINGER_DIR.
     f = _oriented(R, _FINGER_AXIS, is_right)
     return float(np.arctan2(f[1], f[0]))
 
@@ -596,7 +640,9 @@ def _infer(frame: np.ndarray) -> tuple:
         wilor_right = bool(rights[i] > 0.5)
         match = mp_matches[i] if i < len(mp_matches) else None
         is_right = match['is_right'] if match else wilor_right
-        ny = _palm_normal_y(rots[i], is_right)
+        palm_n = _palm_normal(rots[i], is_right)
+        finger_v = _finger_axis(rots[i], is_right)
+        ny = float(palm_n[1])
 
         # Palm centre from the bounding box, normalised. The frontend averages
         # landmarks 0/5/9/13/17 to get this same point, so every index is
@@ -651,6 +697,18 @@ def _infer(frame: np.ndarray) -> tuple:
             # size, so a prop can scale with how close the hand is.
             'angle': hand_angle,
             'angle_src': angle_src,
+            # Full orientation, always WiLoR's own — unlike `angle`, which
+            # prefers MediaPipe's landmarks whenever it matched this hand.
+            # A gesture that must not silently change meaning depending on
+            # whether MediaPipe happened to see the hand reads these.
+            'palm_normal': [float(v) for v in palm_n],
+            'finger_axis': [float(v) for v in finger_v],
+            # Detector box centre, always WiLoR's, for the same reason. `x`/`y`
+            # above switch to MediaPipe's knuckle average when matched, so a
+            # gesture measuring motion from them samples two different points
+            # depending on the frame.
+            'wx': float((x0 + x1) / 2.0 / w),
+            'wy': float((y0 + y1) / 2.0 / h),
             'w': float((x1 - x0) / w),
             'h': float((y1 - y0) / h),
             # Which person this hand belongs to, this update only; -1 when

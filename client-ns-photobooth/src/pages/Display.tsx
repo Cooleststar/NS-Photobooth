@@ -126,8 +126,10 @@ const CHARACTER_OPTIONS = new Set<GifOption>([
 ])
 
 // Which backend model(s) each character actually needs — owl/bat/globe/
-// pignose/batears/clownwignose/scuba/ocfusion read body pose only, drone and
-// sixseven read hand landmarks only (ignores pose entirely). ocfusion used
+// pignose/batears/clownwignose/ocfusion read body pose only, drone and
+// sixseven read hand landmarks only (ignores pose entirely). scuba needs
+// both: pose to place the cat above its person's head, hands for the
+// palm-orientation gesture that summons it. ocfusion used
 // to be hand-tracked too (same shape as drone) but was changed on request to
 // replace the person's face instead, via the same nose/ear pose landmarks
 // as clownwignose/pignose — so it moved from 'hands' to 'pose' here. Told to
@@ -139,7 +141,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   bat: 'pose',
   globe: 'pose',
   drone: 'hands',
-  scuba: 'pose',
+  scuba: 'both',
   ocfusion: 'pose',
   pignose: 'pose',
   batears: 'pose',
@@ -507,7 +509,16 @@ function createReceivingCtx(
           rx.push(px)
           ry.push(py)
         }
-        return { ...hand, x: rx, y: ry, w: hand.w * spanScale, h: hand.h * sizeScaleY }
+        // wx/wy is a point like x/y and needs the same correction; the
+        // orientation vectors alongside it are directions, not positions,
+        // and pass through untouched.
+        const [wx, wy] = remapPoint(
+          hand.wx,
+          hand.wy,
+          width / height,
+          imgWidth / imgHeight,
+        )
+        return { ...hand, x: rx, y: ry, wx, wy, w: hand.w * spanScale, h: hand.h * sizeScaleY }
       })
       dataRef.current.heads = (data.heads ?? []).map((head) => {
         const [hx, hy] = remapPoint(
