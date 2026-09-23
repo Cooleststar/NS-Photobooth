@@ -2,7 +2,18 @@
   "compilerOptions": {
     "composite": true,
     "module": "esnext",
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    /* Matches the app config next door. Without it this project type-checks
+       the .d.ts files inside node_modules, and fails on a type another
+       package depends on but nothing here installs:
+
+         @rollup/pluginutils/types/index.d.ts: Cannot find module 'estree'
+
+       That error only ever showed up in an editor, never in a build - `tsc
+       --noEmit` picks up tsconfig.json, which covers src and already skips
+       lib checks, so vite.config.ts's project was never being checked on the
+       command line at all. */
+    "skipLibCheck": true
   },
   "include": ["vite.config.ts"]
 }
