@@ -1,0 +1,22 @@
+# Everything here is sent to the Docker daemon on every build, so this file
+# is the difference between a 2.6 GB context and a few megabytes.
+
+# The WiLoR weights - 2.5 GB, and deliberately NOT baked into the image (see
+# the Dockerfile). They live in the wilor_models volume, fetched once with
+#   docker compose run --rm backend python fetch_wilor.py
+wilor_models/
+
+# Test footage. Real people's faces, shared by hand rather than through the
+# repo (see replay_videos/README.md) - it has no business in an image either.
+replay_videos/
+
+# Captured photos, mounted in from the host at runtime.
+photos/
+
+__pycache__/
+*.pyc
+challenge67_leaderboard.json
+
+# Host-only helper: picks a CUDA wheel from the local driver. The image pins
+# its own wheel in the Dockerfile.
+install_torch.py

@@ -41,6 +41,22 @@ COPY wilor_hands.py .
 COPY fetch_wilor.py .
 COPY wilor_src ./wilor_src
 
+# main.py imports mediapipe_pose at module level, so leaving it out does not
+# degrade anything - the container exits immediately with ModuleNotFoundError.
+# mediapipe_handedness is imported lazily inside a try/except, so its absence
+# is silent: hands fall back to WiLoR's own unreliable left/right label and
+# gloves start mirroring onto the wrong hand.
+COPY mediapipe_pose.py .
+COPY mediapipe_handedness.py .
+
+# Pre-fetched rather than downloaded on first use. ultralytics will pull
+# yolo26n-pose.pt itself and mediapipe_handedness will fetch
+# hand_landmarker.task (~7 MB), but both need internet at RUNTIME - and this
+# booth runs offline at events, where those downloads simply fail and take
+# pose tracking and handedness with them.
+COPY yolo26n-pose.pt .
+COPY mediapipe_models ./mediapipe_models
+
 # The ~2.5 GB of weights are NOT baked into the image - that would make every
 # layer push and pull enormous. Fetch them once into a volume mounted at
 # /app/wilor_models:
