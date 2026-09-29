@@ -31,6 +31,28 @@ RUN pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0 \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# MediaPipe's system dependencies. Deliberately a separate layer AFTER the
+# pip installs rather than grouped with the apt-get at the top: that layer
+# sits above the ~2.5 GB of CUDA wheels, so touching it invalidates them and
+# forces a full re-download of torch on every system-dep change. Ordering by
+# how often a thing changes is the whole point of layer caching.
+#
+# The Tasks API dynamically loads GLES/EGL when it builds a graph - even for
+# a CPU-delegate task, which is what both mediapipe_pose.py (67 Mode) and
+# mediapipe_handedness.py ask for. Without these, create_from_options()
+# raises
+#     OSError: libGLESv2.so.2: cannot open shared object file
+# and because both modules load in a BACKGROUND thread and only record the
+# failure (see ensure_loading / _load_error in mediapipe_pose.py), the
+# container still starts clean and the breakage is entirely silent: 67 Mode
+# produces no skeleton at all, and handedness quietly falls back to WiLoR's
+# unreliable left/right label. libgl1 above is for OpenCV and does NOT
+# provide these.
+RUN apt-get update && apt-get install -y \
+    libgles2 \
+    libegl1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY main.py .
 COPY gallery.html .
 COPY botsort_photobooth.yaml .

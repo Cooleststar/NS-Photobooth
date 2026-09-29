@@ -27,6 +27,8 @@ import {
   BANNER_LOGO_ORDER,
   selectedBannerLogo,
   offlineOnly,
+  cameraFlipH,
+  cameraFlipV,
   cameraInitialized,
   cameraSource,
   getBackendHttpUrl,
@@ -740,6 +742,9 @@ export default function Settings() {
   const countdownSec = useStore(photoCountdownSec)
   const qrMode = useStore(qrModeEnabled)
   const challenge67 = useStore(challenge67Enabled)
+  // Both sources support the orientation switches, but only the RTSP one has
+  // to relaunch FFmpeg for it - so only that one warns about the blip.
+  const isWebcam = useStore(cameraSource) === 'webcam'
 
   useKeybind('KeyD', () => debugEnabled.set(!debugEnabled.get()))
   useKeybind('KeyS', () => setShown((s) => !s))
@@ -782,6 +787,16 @@ export default function Settings() {
           <Section title='Display'>
             <ResRow label='Canvas Size' value={canvasRes} setter={canvasSize.set} />
             <ResRow label='Camera Size' value={camRes} setter={camSize.set} />
+          </Section>
+
+          <Section title='Camera'>
+            <SwitchRow label='Mirror Horizontally' boolVar={cameraFlipH} />
+            <SwitchRow label='Flip Upside Down' boolVar={cameraFlipV} />
+            <p tw='text-xs text-ink-muted leading-snug'>
+              For a camera mounted mirrored or inverted. Turn both on to rotate
+              the view 180°.
+              {isWebcam ? '' : ' The feed reconnects for a moment when changed.'}
+            </p>
           </Section>
 
           <Section title='Capture'>

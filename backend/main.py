@@ -9,6 +9,7 @@ Photobooth pose detection backend.
 import asyncio
 import base64
 import hmac
+import importlib.util
 import json
 import logging
 import os
@@ -33,11 +34,14 @@ from aiohttp import web
 from ultralytics import YOLO
 from PIL import Image as PILImage
 
-try:
-    from transformers import AutoProcessor, VitPoseForPoseEstimation
-    _transformers_available = True
-except ImportError:
-    _transformers_available = False
+# Deliberately NOT imported here. `from transformers import ...` costs ~1.4s
+# on this machine - it pulls in torchvision.models and torch._dynamo - and the
+# only thing that needs it is _load_vitpose, which now runs on a background
+# thread. Importing it at module level put that 1.4s back on the startup path
+# the ViTPose load was just moved off. find_spec checks availability without
+# executing the package, so the "transformers not installed" message below is
+# unchanged.
+_transformers_available = importlib.util.find_spec('transformers') is not None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -406,9 +410,28 @@ def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
     return [i for i in order if i not in dropped]
 
 
-if not _ENABLE_VITPOSE:
-    log.info("ViTPose++ disabled — set ENABLE_VITPOSE=1 to re-enable (GPU recommended)")
-elif _transformers_available:
+def _load_vitpose():
+    """Load ViTPose++-Huge, then start its worker. Runs on a background thread.
+
+    This used to run inline at import, which meant nothing - not the
+    WebSocket server, not the HTTP server, not the RTSP reader they start -
+    existed until ~2.5 GB of fp32 weights had been read off disk and pushed to
+    the GPU. Measured at 4s of a 5.5s startup with the file cache warm, and
+    far worse on the first boot after the machine starts, when the weights
+    come off the actual disk. The whole of that was dead time where the
+    browser could not even open a socket, so the booth showed a black feed and
+    Display.tsx's reconnect timer just retried every 2 seconds.
+
+    Loading it here instead lets the feed come up immediately. Both readers of
+    _vitpose_model already guard on it being None - the submit in
+    run_pose_detection and the worker start below - and a frame with no fresh
+    ViTPose result falls back to YOLO's own keypoints, which is the same
+    degradation path the "ViTPose++ unavailable" branch has always relied on.
+    So the first second or two of tracking is plain YOLO, then it sharpens.
+    """
+    global _vitpose_model, _vitpose_processor
+    from transformers import AutoProcessor, VitPoseForPoseEstimation
+
     # NOTE: must stay float32 even on CUDA — transformers' own
     # post_process_pose_estimation() runs scipy.ndimage.gaussian_filter
     # on the raw heatmaps, which doesn't support float16 at all and
@@ -444,8 +467,10 @@ elif _transformers_available:
             log.info("ViTPose++-Huge loaded on %s", _vitpose_device)
         except Exception as _e:
             log.warning("ViTPose++ unavailable — falling back to YOLO keypoints: %s", _e)
-else:
-    log.warning("transformers not installed — pip install transformers to enable ViTPose++")
+            return
+
+    threading.Thread(target=_vitpose_worker, daemon=True).start()
+    log.info("ViTPose++ background worker started")
 
 
 def _vitpose_worker():
@@ -535,9 +560,14 @@ def _vitpose_worker():
             log.warning("ViTPose++ worker error: %s", _e)
 
 
-if _vitpose_model is not None:
-    threading.Thread(target=_vitpose_worker, daemon=True).start()
-    log.info("ViTPose++ background worker started")
+
+if not _ENABLE_VITPOSE:
+    log.info("ViTPose++ disabled — set ENABLE_VITPOSE=1 to re-enable (GPU recommended)")
+elif not _transformers_available:
+    log.warning("transformers not installed — pip install transformers to enable ViTPose++")
+else:
+    threading.Thread(target=_load_vitpose, daemon=True).start()
+
 
 # Maps COCO-17 keypoint index → MediaPipe-33 landmark index.
 # Landmarks that have no COCO equivalent are left at x=y=0, score=0 (not visible).
@@ -1514,6 +1544,26 @@ _rtsp_thread: threading.Thread | None = None
 _current_rtsp_url: str = ""
 _current_stream_size: tuple[int, int] = (0, 0)
 _stream_size: tuple[int, int] = (1920, 1080)   # (width, height) for JPEG encode
+
+# How the camera is mounted: '' upright, 'h' mirrored, 'v' upside down, 'hv'
+# rotated 180 degrees. Applied by FFmpeg, on the way in - see the -vf chain in
+# _ffmpeg_read_loop for why it belongs there and not in the browser.
+_current_stream_flip: str = ''
+_stream_flip: str = ''
+_VALID_FLIPS = ('', 'h', 'v', 'hv')
+
+
+def _parse_flip(raw: str) -> str:
+    """Normalize a ?flip= value to one of _VALID_FLIPS.
+
+    Order-insensitive, so 'vh' and 'hv' both mean rotated 180 degrees, and
+    anything unrecognized falls back to upright rather than 400-ing: an
+    orientation is cosmetic, and refusing the stream over it would cost the
+    booth its whole video feed.
+    """
+    raw = (raw or '').strip().lower()
+    flip = ('h' if 'h' in raw else '') + ('v' if 'v' in raw else '')
+    return flip if flip in _VALID_FLIPS else ''
 _rtsp_pose_busy: bool = False  # drop RTSP pose frames while inference is running
 
 
@@ -1742,6 +1792,7 @@ def _ffmpeg_read_loop(
     stop_event: threading.Event,
     width: int,
     height: int,
+    flip: str = '',
 ):
     """Read MJPEG frames from an FFmpeg subprocess and store the latest one.
 
@@ -1783,7 +1834,20 @@ def _ffmpeg_read_loop(
         'ffmpeg',
         '-hide_banner', '-loglevel', 'error',
         *input_args,
-        '-vf', f'scale={width}:{height}',
+        # Orientation is corrected HERE, before anything else sees the frame,
+        # rather than in the browser's canvas transform. The frontend already
+        # mirrors the feed for display and every animation compensates for
+        # that with (1 - x) * width; inference also runs on this same frame,
+        # so flipping it at the source keeps the pixels and the landmarks in
+        # one coordinate space and leaves all of that untouched. Flipping in
+        # the canvas instead would mean re-deriving the mirror compensation in
+        # six call sites plus the angle maths that reads raw landmarks.
+        # hflip/vflip are near-free next to the scale already in this chain.
+        '-vf', ','.join(
+            (['hflip'] if 'h' in flip else [])
+            + (['vflip'] if 'v' in flip else [])
+            + [f'scale={width}:{height}']
+        ),
         # Without an explicit output rate, skipping proper stream analysis
         # (-analyzeduration 0 -probesize 32, needed for low latency) makes
         # ffmpeg misjudge source frame timing and emit frames at ~2x the
@@ -1878,14 +1942,18 @@ def _rtsp_reader(rtsp_url: str, stop_event: threading.Event):
     """
     rtsp_url = unquote(rtsp_url)
     sw, sh = _stream_size
-    log.info(f"RTSP reader starting: {rtsp_url} (stream {sw}×{sh})")
+    flip = _stream_flip
+    log.info(
+        "RTSP reader starting: %s (stream %d×%d, flip=%s)",
+        rtsp_url, sw, sh, flip or 'none',
+    )
 
     if stop_event.is_set():
         return
 
     ffmpeg_thread = threading.Thread(
         target=_ffmpeg_read_loop,
-        args=(rtsp_url, stop_event, sw, sh),
+        args=(rtsp_url, stop_event, sw, sh, flip),
         daemon=True,
     )
     ffmpeg_thread.start()
@@ -2004,10 +2072,16 @@ async def switch_rtsp_reader(rtsp_url: str, force: bool = False):
     (used by the keepfresh watchdog to flush camera-side encode buffers).
     """
     global _rtsp_stop_event, _rtsp_thread, _current_rtsp_url, _current_stream_size
+    global _current_stream_flip
     async with _rtsp_lock:
         same_url = rtsp_url == _current_rtsp_url
         same_size = _stream_size == _current_stream_size
-        if not force and same_url and same_size and _rtsp_thread and _rtsp_thread.is_alive():
+        # The orientation is baked into FFmpeg's filter chain, so changing it
+        # has to relaunch the process - without this it would be silently
+        # ignored until something else happened to restart the reader.
+        same_flip = _stream_flip == _current_stream_flip
+        if (not force and same_url and same_size and same_flip
+                and _rtsp_thread and _rtsp_thread.is_alive()):
             return
         old_thread = _rtsp_thread
         stop_rtsp_reader()
@@ -2016,6 +2090,7 @@ async def switch_rtsp_reader(rtsp_url: str, force: bool = False):
             await asyncio.to_thread(old_thread.join, 12)
         _current_rtsp_url = rtsp_url
         _current_stream_size = _stream_size
+        _current_stream_flip = _stream_flip
         _rtsp_stop_event = threading.Event()
         _rtsp_thread = threading.Thread(
             target=_rtsp_reader,
@@ -2023,7 +2098,10 @@ async def switch_rtsp_reader(rtsp_url: str, force: bool = False):
             daemon=True,
         )
         _rtsp_thread.start()
-        log.info(f"RTSP reader thread started for {rtsp_url} at {_stream_size[0]}×{_stream_size[1]}")
+        log.info(
+            "RTSP reader thread started for %s at %d×%d (flip=%s)",
+            rtsp_url, _stream_size[0], _stream_size[1], _stream_flip or 'none',
+        )
 
 
 def stop_rtsp_reader():
@@ -2097,7 +2175,7 @@ async def cors_middleware(request: web.Request, handler):
 
 async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
     """Low-latency WebSocket endpoint: sends raw JPEG blobs to the browser."""
-    global _stream_size, _multi_target
+    global _stream_size, _multi_target, _stream_flip
     rtsp_url = request.rel_url.query.get('url', '').strip()
     if not rtsp_url:
         return web.Response(status=400, text='Missing ?url= parameter')
@@ -2107,6 +2185,9 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
     if w > 0 and h > 0:
         _stream_size = (w, h)
         log.info(f"Stream resolution set to {w}×{h}")
+
+    _stream_flip = _parse_flip(request.rel_url.query.get('flip', ''))
+    log.info("Camera orientation: flip=%s", _stream_flip or 'none')
 
     _multi_target = request.rel_url.query.get('multi', '0') == '1'
     log.info(f"Multi-target: {_multi_target}")
@@ -2146,10 +2227,12 @@ async def ws_stream_handler(request: web.Request) -> web.WebSocketResponse:
 
 async def stream_handler(request: web.Request) -> web.StreamResponse:
     """MJPEG fallback endpoint for clients that don't support WebSocket."""
+    global _stream_flip
     rtsp_url = request.rel_url.query.get('url', '').strip()
     if not rtsp_url:
         return web.Response(status=400, text='Missing ?url= parameter')
 
+    _stream_flip = _parse_flip(request.rel_url.query.get('flip', ''))
     await switch_rtsp_reader(rtsp_url)
 
     response = web.StreamResponse(headers={

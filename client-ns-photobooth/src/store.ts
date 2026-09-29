@@ -399,6 +399,33 @@ export type CameraSource = HikvisionIP | 'custom' | 'webcam' | 'replay'
 export const cameraSource = persistentAtom<CameraSource>('cameraSource', '65', opts)
 export const customRtspURL = persistentAtom<string>('customRtspURL', '')
 
+/** Camera orientation, for a unit mounted mirrored or upside down.
+ *
+ * Together these cover all four mountings - upright, mirrored, upside down,
+ * and rotated 180 degrees (both on).
+ *
+ * The rule both sources follow is the same: flip the frame AT THE SOURCE, so
+ * the pixels and the landmarks derived from them stay in one coordinate
+ * space. The feed is already mirrored for display and every animation
+ * converts landmarks with (1 - x) * width to match, so flipping only what is
+ * drawn would leave every character on the wrong side of the person.
+ *
+ * Where that happens differs by source:
+ *   RTSP   - FFmpeg's -vf chain on the backend (_ffmpeg_read_loop), before
+ *            the frame is encoded for the browser and before inference.
+ *   Webcam - never reaches FFmpeg, so the browser does it at ITS two source
+ *            points: the pose-frame upload and the preview draw, both in
+ *            Display.tsx. sourceFlipRef there is zeroed in RTSP mode so the
+ *            two mechanisms can never both apply.
+ */
+export const cameraFlipH = persistentAtom('cameraFlipH', false, opts)
+export const cameraFlipV = persistentAtom('cameraFlipV', false, opts)
+
+/** The ?flip= value the stream URL carries, as _parse_flip expects it. */
+export function cameraFlipParam(h: boolean, v: boolean): string {
+  return `${h ? 'h' : ''}${v ? 'v' : ''}`
+}
+
 // Test-video replay (Settings > Testing). The backend stores the uploaded
 // video and plays it through the same reader a live camera uses; replayVideo
 // is its stored name there, replayVideoLabel the original filename for

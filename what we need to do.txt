@@ -45,3 +45,4 @@ top right drop down box is to select company logos
 fix gloves if still got problems, then create 2 sizing options for distances of people for 2m and 5m (close testing vs onsite testing at white zone.)
 jenas pc has the videos.
 a slider to modify the size
+

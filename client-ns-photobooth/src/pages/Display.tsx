@@ -56,6 +56,9 @@ import {
   cameraSource,
   customRtspURL,
   replayVideo,
+  cameraFlipH,
+  cameraFlipV,
+  cameraFlipParam,
   poseInd,
   selectedDevice,
   selectedGifs,
@@ -333,6 +336,10 @@ function createReceivingCtx(
   /** Filled in with the rect the video is drawn into, for the capture path
    * to crop against - see postprocessPicture. */
   videoRectRef?: { current: VideoRect | null },
+  /** Camera orientation for the LOCAL webcam, which never reaches FFmpeg.
+   * The RTSP path leaves this zeroed - the backend's -vf chain has already
+   * flipped those frames, and doing it again here would undo it. */
+  sourceFlipRef?: { current: { h: boolean; v: boolean } },
 ) {
   const { width = 640, height = 480 } = size ?? {}
   const canvas = document.createElement('canvas')
@@ -387,16 +394,36 @@ function createReceivingCtx(
       // nothing here reaches an exported image.
       ctx.fillStyle = '#0d1016'
       ctx.fillRect(0, 0, width, height)
-      ctx.save()
-      ctx.translate(width, 0)
-      ctx.scale(-1, 1)
-
-      // calculate positionings and stuff
+      // calculate positionings and stuff. Hoisted above the transform so
+      // the orientation flip below can be taken about the drawn rect.
       const xMargin = MARGIN_X * width
       const btmMargin = MARGIN_B * height
       const widthTarget = width - 2 * xMargin
       const heightTarget = (widthTarget / imgWidth) * imgHeight
       const yMargin = height - heightTarget - btmMargin
+
+      ctx.save()
+      ctx.translate(width, 0)
+      ctx.scale(-1, 1)
+
+      // Webcam orientation. Taken about the CENTRE OF THE RECT rather than
+      // the canvas: a canvas-wide vertical flip would also move the image
+      // to the opposite margin, which would both shift the picture and
+      // invalidate videoRectRef below - the rect postprocessPicture crops
+      // the captured photo against. Flipping in place leaves the rect
+      // exactly where it was, so the capture path needs no changes.
+      //
+      // The matching flip is applied to the frames sent for inference (see
+      // the /video upload below), so pixels and landmarks stay in one
+      // coordinate space and every animation's (1 - x) * width still holds.
+      const flip = sourceFlipRef?.current
+      if (flip && (flip.h || flip.v)) {
+        const cx = xMargin + widthTarget / 2
+        const cy = yMargin + heightTarget / 2
+        ctx.translate(cx, cy)
+        ctx.scale(flip.h ? -1 : 1, flip.v ? -1 : 1)
+        ctx.translate(-cx, -cy)
+      }
 
       ctx.drawImage(bitmap ?? img, xMargin, yMargin, widthTarget, heightTarget)
       ctx.restore()
@@ -592,6 +619,11 @@ export default function Display({
   const customUrl = useStore(customRtspURL)
   const isMulti = useStore(multiTarget)
   const replayName = useStore(replayVideo)
+  const flipH = useStore(cameraFlipH)
+  const flipV = useStore(cameraFlipV)
+  // Read every frame by the draw and the pose-frame upload, so toggling an
+  // orientation takes effect immediately without tearing down either.
+  const sourceFlipRef = useRef({ h: false, v: false })
   // A replayed test video goes through the backend's RTSP reader, so from
   // here on it is treated exactly like an RTSP camera.
   const rtspUrlValue = (HIKVISION_IPS as readonly string[]).includes(camSource)
@@ -600,8 +632,19 @@ export default function Display({
     : camSource === 'replay' && replayName ? `replay:${replayName}`
     : ''
   const isRtspMode = !!rtspUrlValue
+  // Part of the URL rather than a separate request, so toggling it in Settings
+  // reconnects this socket through the effect's dep array below - and the
+  // backend restarts FFmpeg with the new filter chain, which is the only way
+  // an orientation change can take effect.
+  const flipParam = cameraFlipParam(flipH, flipV)
+  // RTSP is flipped by FFmpeg on the way in, so the browser must leave those
+  // frames alone; the webcam has no such stage and is flipped here instead.
+  sourceFlipRef.current = isRtspMode
+    ? { h: false, v: false }
+    : { h: flipH, v: flipV }
+
   const wsStreamUrl = isRtspMode
-    ? `ws://${window.location.hostname}:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}&multi=${isMulti ? '1' : '0'}`
+    ? `ws://${window.location.hostname}:8081/ws_stream?url=${encodeURIComponent(rtspUrlValue)}&w=${camRes.width}&h=${camRes.height}&multi=${isMulti ? '1' : '0'}&flip=${flipParam}`
     : ''
 
   // Auto-select the first available webcam if in webcam mode and none is selected
@@ -822,8 +865,25 @@ export default function Display({
             if (!frameCtx) return
             sending = true
 
-            // Draw the camera frame into the fixed 16:9 pose input.
+            // Draw the camera frame into the fixed 16:9 pose input, under
+            // the same orientation the preview is drawn with. This is the
+            // half that makes the flip safe: the landmarks the backend
+            // returns are in THIS frame's coordinates, so flipping here
+            // keeps them in step with the pixels on screen. Flipping only
+            // the preview would leave every character on the wrong side of
+            // the person.
+            const flip = sourceFlipRef.current
+            frameCtx.save()
+            if (flip.h) {
+              frameCtx.translate(POSE_WIDTH, 0)
+              frameCtx.scale(-1, 1)
+            }
+            if (flip.v) {
+              frameCtx.translate(0, POSE_HEIGHT)
+              frameCtx.scale(1, -1)
+            }
             frameCtx.drawImage(video, 0, 0, POSE_WIDTH, POSE_HEIGHT)
+            frameCtx.restore()
 
             frameCanvas.toBlob(blob => {
               sending = false
@@ -954,7 +1014,7 @@ export default function Display({
       width,
       height,
     }, isRtspMode ? rtspBitmapRef : undefined, isRtspMode ? rtspDelayMsRef : undefined,
-      videoRectRef)
+      videoRectRef, sourceFlipRef)
 
     attachStream2Pixi(app, canvas)
     // Feed the video into the canvas immediately, independent of animation
