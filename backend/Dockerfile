@@ -72,12 +72,31 @@ COPY mediapipe_pose.py .
 COPY mediapipe_handedness.py .
 
 # Pre-fetched rather than downloaded on first use. ultralytics will pull
-# yolo26n-pose.pt itself and mediapipe_handedness will fetch
-# hand_landmarker.task (~7 MB), but both need internet at RUNTIME - and this
-# booth runs offline at events, where those downloads simply fail and take
+# yolo26n-pose.pt itself, and the two mediapipe modules will fetch their own
+# .task files, but all of it needs internet at RUNTIME - and this booth runs
+# offline at events, where those downloads simply fail and take 67 Mode,
 # pose tracking and handedness with them.
 COPY yolo26n-pose.pt .
-COPY mediapipe_models ./mediapipe_models
+
+# The mediapipe models are fetched HERE at build time rather than copied in.
+# This line used to be `COPY mediapipe_models ./mediapipe_models`, which could
+# not work from a clean checkout: .gitignore deliberately excludes that
+# directory (same treatment as wilor_models/), so it exists only on a machine
+# that already happened to run the lazy runtime download. The build therefore
+# succeeded on the author's machine and failed for everyone else.
+#
+# Fetching instead of copying keeps .gitignore's decision intact, needs
+# internet only at BUILD time - which is always a connected machine, unlike
+# the event itself - and costs ~13 MB in the image. Deliberately NOT a
+# mounted volume like wilor_models: that exists to avoid re-downloading
+# 2.5 GB, which is not a concern at this size, and it would add a
+# pre-flight command that can be forgotten.
+#
+# Placed after the pip installs for the same layer-caching reason as the apt
+# layer above: it changes far more rarely than main.py but sits well above
+# the CUDA wheels.
+COPY fetch_mediapipe.py .
+RUN python fetch_mediapipe.py
 
 # The ~2.5 GB of weights are NOT baked into the image - that would make every
 # layer push and pull enormous. Fetch them once into a volume mounted at

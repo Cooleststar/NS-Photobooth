@@ -20,3 +20,8 @@ challenge67_leaderboard.json
 # Host-only helper: picks a CUDA wheel from the local driver. The image pins
 # its own wheel in the Dockerfile.
 install_torch.py
+
+# The mediapipe .task files (~13 MB). The image runs fetch_mediapipe.py at
+# build time instead of copying these, so sending them would only bloat the
+# context. fetch_mediapipe.py itself is NOT excluded - the Dockerfile COPYs it.
+mediapipe_models/

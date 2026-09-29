@@ -6,6 +6,7 @@
 #     python backend/install_torch.py        <- FIRST. GPU build of torch.
 #     pip install -r backend/requirements.txt
 #     python backend/fetch_wilor.py          <- hand model, ~2.5 GB, once
+#     python backend/fetch_mediapipe.py      <- 67 Mode + handedness, ~13 MB
 #
 # Running pip before install_torch.py gets you a CPU-only torch, which is
 # 20-50x slower. The backend refuses to start in that state and tells you to
@@ -101,10 +102,21 @@ dill==0.4.1
 # Used only for 67 Mode's single-player Pose Landmarker, kept deliberately
 # separate from the YOLO/ViTPose/WiLoR pipeline above (see that file's
 # module docstring for why). Pinned to the version this was verified
-# against; despite listing opencv-contrib-python as its own dependency, it
-# installs cleanly alongside opencv-python (already required by ultralytics
-# above) without conflict - both just provide the same `cv2` import name.
+# against.
+#
+# opencv-contrib-python is pinned alongside it because mediapipe requires it
+# unpinned, and it is NOT harmless to leave that to the resolver. Both it and
+# opencv-python (already required by ultralytics above) install into the same
+# `cv2` package directory, so whichever pip writes last wins - the dist-info
+# of the other stays behind and lies about what `import cv2` will give you.
+# That was invisible while the resolver still picked a 4.11.x contrib build;
+# it stopped being invisible once opencv-contrib-python 5.0.0.93 shipped, and
+# a plain `pip install -r requirements.txt` started silently replacing the
+# pinned OpenCV 4.11 that main.py and ultralytics are tested against with a
+# major version they are not. Pinning it to the same upstream version as
+# opencv-python makes the overwrite a no-op instead of an upgrade.
 mediapipe==0.10.35
+opencv-contrib-python==4.11.0.86
 
 # ---------------------------------------------------------------------------
 # Web / IO

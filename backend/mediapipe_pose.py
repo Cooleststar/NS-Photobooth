@@ -12,6 +12,12 @@ pays for it unless 67 Mode is actually turned on. The .task model file
 (a few MB) is fetched once into mediapipe_models/ and reused after that,
 mirroring wilor_models/'s treatment of the (much larger) WiLoR weights.
 
+_download_model below is the lazy fallback, not the intended path: it needs
+internet at the moment 67 Mode is first selected, and this load runs on a
+background thread that only records failure, so offline that means no
+skeleton and no visible error. Pre-fetch with `python backend/fetch_mediapipe.py`
+(the Docker image runs it at build time).
+
 CPU delegate, not GPU: the Tasks API's Python GPU delegate is far less
 mature than its browser/WebGL counterpart (patchy on Windows in
 particular), and pose_landmarker_lite was specifically chosen — same as

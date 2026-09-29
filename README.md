@@ -220,12 +220,15 @@ venv\Scripts\Activate.ps1
 python backend/install_torch.py          # CUDA torch — do this FIRST
 pip install -r backend/requirements.txt
 python backend/fetch_wilor.py
+python backend/fetch_mediapipe.py
 python app.py
 ```
 
 > **`install_torch.py` must run before `pip install -r`.** It reads your driver's maximum CUDA version from `nvidia-smi`, picks the matching wheel (cu124 or cu118) and installs it from the PyTorch index. Run the other order and pip pulls torch in transitively — via ultralytics, pytorch-lightning and mediapipe — and PyPI's default wheel is **CPU-only**, which is 20–50× slower with no error to indicate it. `main.py` refuses to start on a CPU build rather than let that pass unnoticed; set `REQUIRE_CUDA=0` only if you genuinely have no NVIDIA GPU.
 
 > `fetch_wilor.py` downloads the WiLoR model weights (~2.5 GB) into `backend/wilor_models/` — only needed once per machine; it skips files that are already present, so it's safe to re-run.
+
+> `fetch_mediapipe.py` does the same for the two MediaPipe Tasks models (~13 MB total) in `backend/mediapipe_models/` — `pose_landmarker_lite.task` for **67 Mode** and `hand_landmarker.task` for handedness. Both modules would otherwise download their own file lazily, the first time the feature is switched on, **which needs internet at that moment**. Skip this step and the booth still starts fine on a connected machine — then fails at an offline event, silently: the load happens on a background thread that only records the error, so 67 Mode shows no skeleton at all and handedness quietly falls back to WiLoR's unreliable left/right label (gloves mirror onto the wrong hand). Run it once, with internet, before taking the booth out.
 
 `app.py` starts all three services (backend, frontend, gallery) together. Open [http://localhost:3000](http://localhost:3000) for the booth itself, or [http://localhost:5173](http://localhost:5173) for the photo gallery.
 
