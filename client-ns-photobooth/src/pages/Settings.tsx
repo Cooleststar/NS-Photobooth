@@ -18,6 +18,7 @@ import {
   burstModeEnabled,
   camSize,
   canvasSize,
+  detectionCamSize,
   challenge67Enabled,
   debugEnabled,
   multiTarget,
@@ -736,6 +737,7 @@ export default function Settings() {
   const [shown, setShown] = useState(false)
   const canvasRes = useStore(canvasSize)
   const camRes = useStore(camSize)
+  const detectionRes = useStore(detectionCamSize)
   const burstOn = useStore(burstModeEnabled)
   const burstN = useStore(burstCount)
   const burstSec = useStore(burstIntervalSec)
@@ -787,6 +789,20 @@ export default function Settings() {
           <Section title='Display'>
             <ResRow label='Canvas Size' value={canvasRes} setter={canvasSize.set} />
             <ResRow label='Camera Size' value={camRes} setter={camSize.set} />
+            {/* Local/USB camera only — RTSP reads the stream directly, no
+                separate detection frame to size. Lower this if a USB camera
+                (capture-card-fed DSLRs like an A7 III included) struggles at
+                the default, or raise it for better pose/hand accuracy if the
+                camera and connection can keep up — see the comment above the
+                /video capture loop in Display.tsx for why this is safe to
+                change mid-session. */}
+            {isWebcam && (
+              <ResRow
+                label='Detection Resolution'
+                value={detectionRes}
+                setter={detectionCamSize.set}
+              />
+            )}
           </Section>
 
           <Section title='Camera'>

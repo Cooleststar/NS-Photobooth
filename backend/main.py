@@ -911,6 +911,13 @@ _pose_drop_last_log: float = 0.0
 # Last time each source actually delivered a frame to inference.
 _pose_source_last_seen: dict = {}
 
+# Last (height, width) YOLO's frame arrived at, per source - see the reset
+# below. Keyed by source (not global) because switching sources already goes
+# through the source-change reset path above; this only needs to catch a
+# resolution change WITHIN one source, e.g. the frontend's Detection
+# Resolution setting changing while local camera stays local camera.
+_pose_source_last_shape: dict = {}
+
 # How long the declared source may go silent before another source is let
 # through anyway.
 #
@@ -1060,6 +1067,20 @@ def run_pose_detection(
         else:
             log.info("Pose source changed: %s -> %s", previous_source, source)
             reset_pose_tracker()
+
+    # Same source, but a different frame size than last time - e.g. the
+    # frontend's Detection Resolution setting was changed mid-session while
+    # staying on local camera. YOLO/BoT-SORT is just as unhappy about a size
+    # change here as about a source change (see run_pose_detection's own
+    # docstring on frame size consistency), so this gets the same reset.
+    shape = frame.shape[:2]
+    if _pose_source_last_shape.get(source) not in (None, shape):
+        log.info(
+            "Pose source '%s' changed frame size %s -> %s - resetting tracker",
+            source, _pose_source_last_shape[source], shape,
+        )
+        reset_pose_tracker()
+    _pose_source_last_shape[source] = shape
 
     mode = _detection_mode
     poses: list = []

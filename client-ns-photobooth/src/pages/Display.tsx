@@ -178,13 +178,19 @@ const MARGIN_X = 0
 const MARGIN_T = 0
 const MARGIN_B = 0
 
-// Keep the pose input resolution and aspect ratio identical regardless of
-// which local camera is being used — the backend's tracker is sensitive to
-// its input changing size mid-session (see the frame-size normalisation in
-// main.py's run_pose_detection), so the webcam path must hand it one fixed
-// shape no matter what the device's native resolution is.
-const POSE_WIDTH = 640
-const POSE_HEIGHT = 360
+// The pose/hand input resolution used to be a hardcoded 640x360 here,
+// silently identical for every local camera regardless of what it could
+// actually deliver — cameras that only look good at a different native
+// resolution/aspect ratio (e.g. an A7 III fed in over a capture device) had
+// no way to get a better frame to the detector. It's now Settings' own
+// "Detection Resolution" control (see detectionCamSize in store.ts),
+// resolved live below via useStore rather than a constant.
+//
+// Changing it mid-session is safe: the effect below reconnects on a
+// detectionRes change, and the backend resets its BoT-SORT tracker whenever
+// a source's frame size changes (see the frame-shape check in
+// run_pose_detection) — the same reset it already does on a source switch,
+// since a mid-stream size change is just as disruptive to that tracker.
 
 /** Stable person -> slot assignment for multi-target animations.
  *
@@ -826,15 +832,17 @@ export default function Display({
 
   useNiceROS(url, { enabled: true })
 
-  // Separate, lower-resolution camera stream just for the backend detector
-  // (see detectionCamSize) — deliberately NOT wired to setVideo. It used to
-  // share setVideo with useCam above, which meant this stream's own
-  // getUserMedia call (opened independently, same physical camera) would
-  // clobber the local preview/capture video with whichever stream's
-  // callback fired last. Two full-resolution opens of the same camera is
-  // also what was causing the live feed to buffer once camSize was raised
-  // past 1080p — this keeps the detection stream light regardless of
-  // camSize.
+  // NOTE: despite the name/intent, this does NOT feed the backend detector —
+  // main.py implements no WebRTC signalling/track consumption at all (no
+  // aiortc, no /rtc handler), so niceROS's 'rtc_state_changed' never reaches
+  // 'connecting' and this negotiation silently goes nowhere. The comment
+  // here used to describe this as the low-res stream "for the backend
+  // detector"; that's what it was clearly meant to become, but the real,
+  // working detection frame source for local camera is the plain WebSocket
+  // JPEG loop below (POST to /video), which is what detectionCamSize
+  // actually drives now. Left in place rather than removed since niceROS is
+  // shared context state and this hasn't been confirmed side-effect-free to
+  // rip out — but treat it as dead code, not the detection pipeline.
   useNiceRTC(deviceId, {
     enabled: !!deviceId,
     mode: 'send',
@@ -859,10 +867,14 @@ export default function Display({
     // One scratch canvas for the whole connection rather than a fresh one
     // every tick: this runs 10x a second for as long as the webcam is the
     // active source, and each createElement left a canvas (plus its backing
-    // buffer) for the GC to collect.
+    // buffer) for the GC to collect. Sized from detectionRes (a dependency
+    // of this effect below), so a Settings change tears this down and
+    // reconnects with a freshly-sized canvas rather than the old one lingering.
+    const frameWidth = detectionRes.width
+    const frameHeight = detectionRes.height
     const frameCanvas = document.createElement('canvas')
-    frameCanvas.width = POSE_WIDTH
-    frameCanvas.height = POSE_HEIGHT
+    frameCanvas.width = frameWidth
+    frameCanvas.height = frameHeight
     const frameCtx = frameCanvas.getContext('2d')
 
     function connect() {
@@ -886,14 +898,14 @@ export default function Display({
             const flip = sourceFlipRef.current
             frameCtx.save()
             if (flip.h) {
-              frameCtx.translate(POSE_WIDTH, 0)
+              frameCtx.translate(frameWidth, 0)
               frameCtx.scale(-1, 1)
             }
             if (flip.v) {
-              frameCtx.translate(0, POSE_HEIGHT)
+              frameCtx.translate(0, frameHeight)
               frameCtx.scale(1, -1)
             }
-            frameCtx.drawImage(video, 0, 0, POSE_WIDTH, POSE_HEIGHT)
+            frameCtx.drawImage(video, 0, 0, frameWidth, frameHeight)
             frameCtx.restore()
 
             frameCanvas.toBlob(blob => {
@@ -922,7 +934,11 @@ export default function Display({
       clearInterval(intervalId)
       ws?.close()
     }
-  }, [deviceId, isRtspMode, url])
+    // detectionRes.width/height, not the object itself: detectionRes is a
+    // fresh object from the store on every render, so depending on it
+    // directly would tear down and reconnect this on every render rather
+    // than only when the actual resolution changes.
+  }, [deviceId, isRtspMode, url, detectionRes.width, detectionRes.height])
 
   useEffect(() => {
     if (!videoRef.current) return
