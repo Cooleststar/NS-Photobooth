@@ -824,7 +824,31 @@ export default function Display({
     // visible instead of just looking like "changing the setting did
     // nothing".
     const settings = stream.getVideoTracks()[0]?.getSettings()
-    console.log('Camera stream actual resolution:', settings?.width, 'x', settings?.height)
+    // Frame rate too: capture cards (e.g. one feeding an A7 III) can quietly
+    // fall back to an uncompressed mode at ~5fps for 1080p, which starves
+    // every gesture that has to see motion.
+    console.log(
+      'Camera stream actual resolution:', settings?.width, 'x', settings?.height,
+      '@', settings?.frameRate, 'fps',
+    )
+    // The pose-frame upload below draws the camera into Detection
+    // Resolution's rect with no letterboxing, so a camera whose aspect ratio
+    // differs reaches the detectors stretched - which skews the hand
+    // orientation scuba gates on. Warned rather than corrected: letterboxing
+    // there would move landmarks out of the coordinate space remapPoint
+    // assumes.
+    if (settings?.width && settings?.height) {
+      const det = detectionCamSize.get()
+      const camAspect = settings.width / settings.height
+      const detAspect = det.width / det.height
+      if (Math.abs(camAspect - detAspect) / detAspect > 0.02) {
+        console.warn(
+          `Camera aspect ${settings.width}x${settings.height} does not match ` +
+          `Detection Resolution ${det.width}x${det.height} - detection frames ` +
+          `are being stretched. Set Detection Resolution to the camera's aspect ratio.`,
+        )
+      }
+    }
   }, [])
 
   useCam({ deviceId: isRtspMode ? undefined : deviceId, videoConstraints: camRes, videoCallback: setVideo })

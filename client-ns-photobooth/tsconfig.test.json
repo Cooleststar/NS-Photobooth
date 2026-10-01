@@ -1,0 +1,16 @@
+// Compiles the *.test.ts files (and only what they import) to CommonJS for
+// Node's built-in test runner - see the "test" script in package.json.
+// Tests must stick to modules with no Vite-only features (import.meta.env,
+// asset imports, PIXI): AnimState.ts, batArm.ts and mpPose.ts qualify.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "noEmit": false,
+    "outDir": ".test-out",
+    "isolatedModules": false,
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*.test.ts", "src/declarations/node-test.d.ts"],
+  "references": []
+}

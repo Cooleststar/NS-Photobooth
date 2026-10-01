@@ -1084,6 +1084,15 @@ def run_pose_detection(
 
     mode = _detection_mode
     poses: list = []
+    # The frame as it arrived, before the YOLO branch below shrinks `frame`
+    # to _POSE_SIZE. Hands and QR fall back to this when their caller passed
+    # no dedicated frame - which is the webcam path (handle_video) on every
+    # call. Falling back to `frame` instead handed WiLoR the 640x360 YOLO
+    # input there, while the RTSP path got 960-wide: the same low-resolution
+    # input that _HANDS_WIDTH's measurements show wrecking palm orientation,
+    # and so the scuba gesture, which is built on nothing else. It also made
+    # the frontend's Detection Resolution setting a no-op for hands and QR.
+    original_frame = frame
     # QR mode also needs pose (specifically the nose keypoint) for the
     # sticky drone lock-on — once a guest shows the QR code, the drone
     # locks onto their face/head and keeps following it, so pose detection
@@ -1260,7 +1269,10 @@ def run_pose_detection(
     hands: list = []
     heads: list = []
     if mode in ('hands', 'both'):
-        hands = run_hand_detection(hands_frame if hands_frame is not None else frame)
+        hands = run_hand_detection(
+            hands_frame if hands_frame is not None
+            else (_frame_for_hands(original_frame) if _HANDS_WIDTH else frame)
+        )
         # Found by the same pose pass that tags hand owners, on the same frame
         # as those hands - empty unless that pass is switched on. Lets a
         # hands-only character know where people's heads are (boxglove.ts's
@@ -1274,7 +1286,7 @@ def run_pose_detection(
     # global to retry against.
     qr_codes = (
         _decode_qr_codes(qr_frame, allow_live_retry=True) if qr_frame is not None
-        else _decode_qr_codes(frame)
+        else _decode_qr_codes(original_frame)
     ) if mode == 'qr' else []
 
     return {"poses": poses, "hands": hands, "heads": heads, "qr_codes": qr_codes}

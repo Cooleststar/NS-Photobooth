@@ -5,6 +5,7 @@ import KalmanFilter from 'kalmanjs'
 import { lerpLinear, lerpEO } from './utils'
 import { ArmSide, calculateArmFromPose } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
+import { createArmDebugLogger, f2 } from './armDebug'
 
 import owlIdleGif from '../assets/owl_anim/owl_idle_new.gif'
 import owlFlyGif from '../assets/owl_anim/owl_flying_new.gif'
@@ -158,10 +159,17 @@ export async function createOwlAnim(app: PIXI.Application) {
     lockedArm = undefined
     armLostFor = 0
   }
-  const animManager = new AnimStateManager()
+  // resumeFromExit: an arm that requalifies while the owl is fading out gets
+  // the owl back on its perch, rather than the fade finishing and a brand
+  // new owl flying in from the corner. 'entered' and 'entering' below both
+  // restore the container alpha the fade lowered, which is all 'exiting'
+  // touches.
+  const animManager = new AnimStateManager({ resumeFromExit: true })
+  const debugLog = createArmDebugLogger('owl')
   const update = (pose: NormalizedLandmarkList) => {
     // Determining size and location
-    let [arm, coords] = calculateArmFromPose(pose, height, width, lockedArm)
+    const diag: Partial<Record<ArmSide, string>> = {}
+    let [arm, coords] = calculateArmFromPose(pose, height, width, lockedArm, diag)
     if (coords) {
       coords = {
         x: kf.x.filter(coords.x),
@@ -219,6 +227,14 @@ export async function createOwlAnim(app: PIXI.Application) {
     // the owl immediately, without waiting out the arm grace as well.
     animManager.tracking = pose.length > 0 && landingCoords !== undefined
     const { time, state } = animManager
+
+    debugLog({
+      state,
+      locked: lockedArm,
+      left: diag.left,
+      right: diag.right,
+      timers: `armLostFor=${f2(armLostFor)}/${ARM_GRACE_SEC} t=${f2(time)}`,
+    })
 
     // Actual animation logic
     switch (state) {

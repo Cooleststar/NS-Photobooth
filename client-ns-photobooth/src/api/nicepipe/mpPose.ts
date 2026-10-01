@@ -20,25 +20,51 @@ export function convertPoint(
 export type ArmSide = 'left' | 'right'
 export type ArmPose = { x: number; y: number; angle: number; length: number }
 
-/** Whether one named arm is in the pose the owl lands on, and where.
+/** Gate thresholds for the owl's arm. Two sets, for hysteresis.
+ *
+ * ACQUIRE is what a fresh arm must meet, and is unchanged from the original
+ * single set - so summoning the owl is no easier than it was. KEEP is what
+ * the arm the owl is already perched on must keep meeting, and is looser.
+ *
+ * With one set, an arm held still sat right on the boundary: ordinary
+ * frame-to-frame noise in keypoint confidence (and the backend switching
+ * between ViTPose and YOLO keypoints, which are calibrated differently)
+ * pushed it back and forth across 0.5, and every run of misses longer than
+ * ARM_GRACE_SEC in owl.ts sent the owl away and back in again from the
+ * corner. */
+export const OWL_ARM_GATES = {
+  ACQUIRE: { minVis: 0.5, maxAngleDeg: 30 },
+  KEEP: { minVis: 0.3, maxAngleDeg: 45 },
+} as const
+
+export type ArmCheck =
+  | { ok: true; arm: ArmPose & { vis: number } }
+  | { ok: false; reason: string }
+
+/** Whether one named arm is in the pose the owl lands on, and where - or
+ * which gate it failed, for armDebug.
  *
  * `vis` is the weaker of the elbow and wrist confidences - used to pick
- * between arms when both qualify.
+ * between arms when both qualify. `pose` is in pixels (see convertPoint).
  */
-function evaluateArm(
+export function checkOwlArm(
   pose: NormalizedLandmarkList,
   side: ArmSide,
-): (ArmPose & { vis: number }) | undefined {
+  keep = false,
+): ArmCheck {
+  const gate = keep ? OWL_ARM_GATES.KEEP : OWL_ARM_GATES.ACQUIRE
   const elbow = side === 'left' ? pose[13] : pose[14]
   const wrist = side === 'left' ? pose[15] : pose[16]
-  if (!elbow || !wrist) return undefined
+  if (!elbow || !wrist) return { ok: false, reason: 'missing' }
   const vis = Math.min(elbow.visibility ?? 1, wrist.visibility ?? 1)
-  if (vis <= 0.5) return undefined
-  if (!(elbow.y > 0)) return undefined
+  if (vis <= gate.minVis) return { ok: false, reason: `vis=${vis.toFixed(2)}` }
+  if (!(elbow.y > 0)) return { ok: false, reason: 'elbowAboveFrame' }
   const angle = Math.atan((wrist.y - elbow.y) / (wrist.x - elbow.x))
-  if (!(Math.abs(angle) < 30 * (Math.PI / 180))) return undefined
+  if (!(Math.abs(angle) < gate.maxAngleDeg * (Math.PI / 180))) {
+    return { ok: false, reason: `angle=${((angle * 180) / Math.PI).toFixed(0)}` }
+  }
   const length = ((wrist.y - elbow.y) ** 2 + (wrist.x - elbow.x) ** 2) ** 0.5
-  return { x: elbow.x, y: elbow.y, angle, length, vis }
+  return { ok: true, arm: { x: elbow.x, y: elbow.y, angle, length, vis } }
 }
 
 // TODO: should this function be even more pure?
@@ -59,31 +85,44 @@ function evaluateArm(
  * while (see getForearmTarget) - this is that pattern, applied to the owl.
  *
  * Only falls back to picking between arms once the locked side genuinely
- * stops qualifying: arm lowered, bent, or turned away.
+ * stops qualifying: arm lowered, bent, or turned away. The locked side is
+ * judged against OWL_ARM_GATES.KEEP, everything else against ACQUIRE.
+ *
+ * `diag`, if given, is filled with each side's gate outcome for armDebug.
  */
 export function calculateArmFromPose(
   pose: NormalizedLandmarkList,
   height: number,
   width: number,
   lockedSide?: ArmSide,
+  diag?: Partial<Record<ArmSide, string>>,
 ): [ArmSide | undefined, ArmPose | undefined] {
   // mediapipe will predict even pose outside of frame, so its either 0 or all the points
-  if (pose.length == 0) return [undefined, undefined]
+  if (pose.length == 0) {
+    if (diag) diag.left = diag.right = 'noPose'
+    return [undefined, undefined]
+  }
   const px = pose.map((point) => convertPoint(point, height, width))
 
   const strip = (a: ArmPose & { vis: number }): ArmPose => ({
     x: a.x, y: a.y, angle: a.angle, length: a.length,
   })
-
-  if (lockedSide) {
-    const locked = evaluateArm(px, lockedSide)
-    if (locked && locked.y < height) return [lockedSide, strip(locked)]
+  const evaluate = (side: ArmSide, keep: boolean) => {
+    const r = checkOwlArm(px, side, keep)
+    const arm = r.ok && r.arm.y < height ? r.arm : undefined
+    if (diag) diag[side] = arm ? 'ok' : r.ok ? 'belowFrame' : r.reason
+    return arm
   }
 
-  const left = evaluateArm(px, 'left')
-  const right = evaluateArm(px, 'right')
-  const leftOk = left && left.y < height ? left : undefined
-  const rightOk = right && right.y < height ? right : undefined
+  if (lockedSide) {
+    const locked = evaluate(lockedSide, true)
+    if (locked) return [lockedSide, strip(locked)]
+  }
+
+  // A locked side that just failed KEEP cannot pass the stricter ACQUIRE, so
+  // it is not re-checked - which also keeps its KEEP failure in `diag`.
+  const leftOk = lockedSide === 'left' ? undefined : evaluate('left', false)
+  const rightOk = lockedSide === 'right' ? undefined : evaluate('right', false)
   if (!leftOk && !rightOk) return [undefined, undefined]
   if (!leftOk) return ['right', strip(rightOk!)]
   if (!rightOk) return ['left', strip(leftOk)]

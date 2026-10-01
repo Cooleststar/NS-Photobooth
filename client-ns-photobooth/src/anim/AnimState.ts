@@ -1,5 +1,17 @@
 export type AnimState = 'exited' | 'entering' | 'entered' | 'lost' | 'exiting'
 
+export interface AnimStateOptions {
+  /** If tracking returns while 'exiting', resume where the animation was
+   * before it got lost (the same thing 'lost' already does) instead of
+   * finishing the exit and starting a fresh 'entering'.
+   *
+   * Off by default so every existing animation keeps its behaviour; an
+   * animation that turns it on must make its 'entering'/'entered' branches
+   * restore whatever its 'exiting' branch hid or started playing, since
+   * those branches can now run straight after it. */
+  resumeFromExit?: boolean
+}
+
 export class AnimStateManager {
   /** time elapsed */
   private elapsed = 0.0
@@ -9,6 +21,11 @@ export class AnimStateManager {
   private whenLost = 0.0
   /** animState before getting lost */
   private lostState: AnimState = 'exited'
+  private readonly resumeFromExit: boolean
+
+  constructor(options: AnimStateOptions = {}) {
+    this.resumeFromExit = options.resumeFromExit ?? false
+  }
 
   /** update tracker with elapsed delta in seconds */
   update(delta: number) {
@@ -34,6 +51,10 @@ export class AnimStateManager {
   set tracking(isTracking: boolean) {
     if (isTracking) {
       switch (this.animState) {
+        case 'exiting':
+          if (!this.resumeFromExit) break
+        // falls through - lostState/whenLost still describe where the
+        // animation was before the loss that led into this exit
         case 'lost':
           this.animState = this.lostState
           this.elapsed = this.whenLost

@@ -243,6 +243,36 @@ python app.py
 5. Confirmed photos are saved/uploaded automatically, and a **QR code** appears so you can scan and download it.
 6. Press **S** to open **Settings** — change the animation character, camera/canvas resolution, save folder, and more.
 
+### Using a capture-card camera (e.g. Sony A7 III)
+
+A camera on HDMI capture or USB is a **local webcam** to the booth, not RTSP. It goes through a different backend path from the Hikvision cameras, so check these before an event:
+
+- **HDMI Info Display: Off** on the camera, so focus boxes and settings text do not end up in the feed.
+- **Shutter speed 1/250 or faster** (S or M mode; raise ISO to compensate). Slower shutters blur moving hands and arms. Scuba is a swinging gesture and suffers most.
+- **Frame the guest down to the hips.** The Bat needs a tracked hip to appear.
+- **Capture card at MJPEG 1080p30.** Open the browser console and look for `Camera stream actual resolution: … @ … fps`. Some cards fall back to ~5 fps at 1080p.
+- Set **Detection Resolution** (Settings) to the camera's aspect ratio, usually 16:9. The console warns if they differ.
+
+**Diagnosing the Owl, Bat and Scuba on site** (browser console, no restart needed):
+
+| Command | What it does |
+|---|---|
+| `window.ARM_DEBUG = true` | Prints the Owl/Bat arm checks live: state, locked arm, and which gate failed per side (e.g. `vis=0.42`, `angle=38`, `hipVis=0.10`, `away=135`) |
+| `copy(armDump())` | Copies the recorded Owl/Bat history (kept even with `ARM_DEBUG` off) |
+| `window.SCUBA_DEBUG = true` / `copy(scubaDump())` | The same for the Scuba gesture |
+| `window.SCUBA_FORCE = true` | Shows the cat without the gesture, which proves it can render |
+
+To rehearse without the event camera, feed a recorded clip through **OBS Virtual Camera** and pick it as the local webcam. This exercises the same path as a capture card. A `replay:` video goes through the RTSP path instead.
+
+### Tests
+
+```
+cd client-ns-photobooth
+yarn test
+```
+
+Runs the animation state-machine and arm-gate unit tests with Node's built-in test runner. No extra packages are needed.
+
 ---
 
 ## Full Documentation

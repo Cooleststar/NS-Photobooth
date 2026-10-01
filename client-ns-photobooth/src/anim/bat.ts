@@ -6,6 +6,8 @@ import KalmanFilter from 'kalmanjs'
 import { lerpLinear, lerpEO } from './utils'
 import { convertPoint } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
+import { BatArmSide as ArmSide, getForearmTarget } from './batArm'
+import { createArmDebugLogger, f2 } from './armDebug'
 
 import batFlyGif from '../assets/Bat_anim/Bat.gif'
 import batSwoopGif from '../assets/Bat_anim/bat_swoop.gif'
@@ -28,32 +30,9 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 const BAT_MARGIN_B = 0.12
 // Resting pose rendered a bit smaller than the shared batSize, on request.
 const REST_SIZE_FACTOR = 0.75
-// Where along the forearm (elbow->wrist) the bat lands, as a fraction of
-// that segment — 0 would be the elbow, 1 the wrist itself. Kept short of 1 so
-// the bat perches on the forearm rather than on the hand.
-const FOREARM_LAND_RATIO = 0.75
-// Max allowed angle (degrees) between the upper arm (shoulder->elbow) and
-// forearm (elbow->wrist) before the arm no longer counts as "straight" —
-// the bat only lands/stays on a fully extended arm; bending the elbow past
-// this makes getPalmTarget return undefined, which reads as tracking lost
-// and sends the bat flying off (see the 'lost'/'exiting' states below).
-// Widened 25 -> 40 on request, to make the bat easier to summon — a
-// slightly bent elbow now still counts as "straight enough."
-const ARM_STRAIGHT_MAX_DEVIATION_DEG = 40
+// Which arms qualify, and where on them the bat lands, live in batArm.ts.
 
-// Allowed range (degrees) for the angle between the upper arm (shoulder->elbow)
-// and the torso (shoulder->hip, same side) — this is "how far the arm is held
-// away from the body," not the elbow bend above. 90 degrees is a horizontal,
-// T-pose-style arm; the arm must land in [MIN, MAX] around that, so a straight
-// arm hanging down at the side (~0 degrees) or raised straight overhead
-// (~180 degrees) no longer qualifies, only one held out roughly level.
-// Widened 80-100 -> 60-120, then narrowed to 70-110 on request, alongside
-// the straightness tolerance above, so the arm doesn't need to be held at
-// as precise an angle.
-const ARM_AWAY_FROM_BODY_MIN_DEG = 70
-const ARM_AWAY_FROM_BODY_MAX_DEG = 120
-
-// Debounce for the raw per-frame arm qualification above, same pattern as
+// Debounce for the raw per-frame arm qualification, same pattern as
 // drone.ts's PALM_HOLD_TIME/PALM_CONFIRM_TIME. Without this, a bat that's
 // already 'entered' dropped straight to 'lost' (then 'exiting'/'entering'
 // again on requalifying) the instant any single frame's pose estimate
@@ -65,109 +44,6 @@ const ARM_AWAY_FROM_BODY_MAX_DEG = 120
 // condition that all has to hold on the very same frame.
 const ARM_HOLD_TIME = 0.4
 const ARM_CONFIRM_TIME = 0.15
-
-type ArmSide = 'left' | 'right'
-
-/** Evaluates ONE specific arm (not "whichever is more confident") against
- * every qualification check — visibility, elbow straightness, and away-from-
- * body angle. Split out from getForearmTarget so a caller can pin down which
- * side to check, rather than always re-picking by confidence every frame. */
-function evaluateArm(
-  pose: NormalizedLandmarkList,
-  height: number,
-  width: number,
-  side: ArmSide,
-) {
-  const useLeft = side === 'left'
-  const s = pose[useLeft ? 11 : 12]
-  const e = pose[useLeft ? 13 : 14]
-  const w = pose[useLeft ? 15 : 16]
-  const h = pose[useLeft ? 23 : 24]
-  // 0.5 -> 0.35 on request, alongside the angle tolerances below, so a
-  // slightly-occluded or edge-of-frame arm still qualifies.
-  const vis = Math.min(s?.visibility ?? 0, e?.visibility ?? 0, w?.visibility ?? 0, h?.visibility ?? 0)
-  if (vis < 0.35) return undefined
-
-  const shoulder = convertPoint(s, height, width)
-  const elbow = convertPoint(e, height, width)
-  const wrist = convertPoint(w, height, width)
-  const hip = convertPoint(h, height, width)
-
-  const upperArm = { x: elbow.x - shoulder.x, y: elbow.y - shoulder.y }
-  const forearm = { x: wrist.x - elbow.x, y: wrist.y - elbow.y }
-  const upperArmLen = Math.hypot(upperArm.x, upperArm.y)
-  const forearmLen = Math.hypot(forearm.x, forearm.y)
-  if (upperArmLen < 1 || forearmLen < 1) return undefined
-
-  const cosDeviation =
-    (upperArm.x * forearm.x + upperArm.y * forearm.y) / (upperArmLen * forearmLen)
-  const maxCos = Math.cos((ARM_STRAIGHT_MAX_DEVIATION_DEG * Math.PI) / 180)
-  if (cosDeviation < maxCos) return undefined
-
-  // "Away from the body" — angle between the upper arm and the torso
-  // (shoulder->hip, same side), not the elbow-straightness check above.
-  const torso = { x: hip.x - shoulder.x, y: hip.y - shoulder.y }
-  const torsoLen = Math.hypot(torso.x, torso.y)
-  if (torsoLen < 1) return undefined
-  const cosArmTorso =
-    (upperArm.x * torso.x + upperArm.y * torso.y) / (upperArmLen * torsoLen)
-  const armTorsoDeg = (Math.acos(Math.min(1, Math.max(-1, cosArmTorso))) * 180) / Math.PI
-  if (armTorsoDeg < ARM_AWAY_FROM_BODY_MIN_DEG || armTorsoDeg > ARM_AWAY_FROM_BODY_MAX_DEG) {
-    return undefined
-  }
-
-  return {
-    x: elbow.x + (wrist.x - elbow.x) * FOREARM_LAND_RATIO,
-    y: elbow.y + (wrist.y - elbow.y) * FOREARM_LAND_RATIO,
-    side,
-    vis,
-  }
-}
-
-/** target coords for the bat to land on, assuming a bottom-middle anchor —
- * a point along the forearm (elbow->wrist, MP-33 indices 13/14 and 15/16),
- * short of the wrist so the bat perches on the forearm rather than the hand
- * (see FOREARM_LAND_RATIO), on whichever arm is straight (see
- * ARM_STRAIGHT_MAX_DEVIATION_DEG) and held away from the body at roughly a
- * right angle (see ARM_AWAY_FROM_BODY_MIN_DEG/MAX_DEG) — an arm hanging at
- * the side or raised straight up no longer qualifies. Deliberately not using
- * calculateArmFromPose's elbow+angle+length reconstruction: that angle is
- * computed with Math.atan (not atan2), which can't recover which side of the
- * elbow the wrist is actually on, so it only ever looked right for the owl's
- * halfway-point perch — reaching further toward the wrist regularly landed on
- * the wrong side entirely. This uses plain vector subtraction instead, which
- * has no such sign ambiguity.
- *
- * `lockedSide`, if given, is tried FIRST and used as long as it still
- * qualifies — even if the other arm is now more confidently tracked. Without
- * this, raising both arms (both qualifying) left the choice up to whichever
- * side edged out the other on leftVis/rightVis that particular frame, which
- * flips back and forth from ordinary tracking noise — the bat visibly
- * hopping between arms rather than settling on the one it first landed on.
- * Only falls back to confidence-based picking once the locked side actually
- * stops qualifying (arm lowered, bent, turned away, etc). */
-function getForearmTarget(
-  pose: NormalizedLandmarkList,
-  height: number,
-  width: number,
-  lockedSide?: ArmSide,
-) {
-  if (pose.length === 0) return undefined
-
-  if (lockedSide) {
-    const locked = evaluateArm(pose, height, width, lockedSide)
-    if (locked) return locked
-  }
-
-  // No locked side, or it stopped qualifying — fall back to picking by
-  // confidence between whichever arm(s) currently qualify.
-  const left = evaluateArm(pose, height, width, 'left')
-  const right = evaluateArm(pose, height, width, 'right')
-  if (!left && !right) return undefined
-  if (!left) return right
-  if (!right) return left
-  return left.vis >= right.vis ? left : right
-}
 
 function calculateBatSize(
   pose: NormalizedLandmarkList,
@@ -245,7 +121,12 @@ export async function createBatAnim(app: PIXI.Application) {
   // -> vanish, instead of cutting straight from the resting pose to vanish.
   const liftOffDuration = landSprite.duration / 1000
   let batSize = 150
-  const animManager = new AnimStateManager()
+  // resumeFromExit: an arm that requalifies during the (long) lift-off and
+  // vanish sequence brings the bat back to its perch, instead of the vanish
+  // finishing and a new bat flying in from the corner. 'entering' and
+  // 'entered' below restore every sprite 'exiting' hides or starts.
+  const animManager = new AnimStateManager({ resumeFromExit: true })
+  const debugLog = createArmDebugLogger('bat')
 
   // Persisted across calls (like drone.ts's wristX/wristY), NOT reset to 0
   // every frame — so a gap covered by the hold timer below leaves the bat
@@ -261,7 +142,8 @@ export async function createBatAnim(app: PIXI.Application) {
   let lockedSide: ArmSide | undefined
 
   const update = (pose: NormalizedLandmarkList) => {
-    const target = getForearmTarget(pose, height, width, lockedSide)
+    const diag: Partial<Record<ArmSide, string>> = {}
+    const target = getForearmTarget(pose, height, width, lockedSide, diag)
 
     if (target) {
       lockedSide = target.side
@@ -303,6 +185,14 @@ export async function createBatAnim(app: PIXI.Application) {
     animManager.tracking = hasArm
     const { time, state } = animManager
 
+    debugLog({
+      state,
+      locked: lockedSide,
+      left: diag.left,
+      right: diag.right,
+      timers: `hold=${f2(holdTimer)} confirm=${f2(confirmTimer)} t=${f2(time)}`,
+    })
+
     switch (state) {
       case 'exited':
         initialState()
@@ -310,6 +200,8 @@ export async function createBatAnim(app: PIXI.Application) {
         break
       case 'entering':
         batContainer.alpha = 1
+        // Only non-zero if this is a resume out of 'exiting'.
+        vanishSprite.alpha = 0
         batContainer.position.set(
           lerpEO(time, 0, toLandTime) * x,
           lerpEO(time, 0, toLandTime) * y,
@@ -325,6 +217,12 @@ export async function createBatAnim(app: PIXI.Application) {
             landSprite.alpha = 1
             break
           case time < toIdleTime:
+            // Mid-flight. Normally a no-op (the fade above already left the
+            // fly sprite showing), but a resume out of 'exiting' arrives here
+            // with it hidden and the swoop showing instead.
+            if (!flySprite.playing) flySprite.play()
+            flySprite.alpha = 1
+            landSprite.alpha = 0
             break
           default:
             animManager.transition()
@@ -335,6 +233,13 @@ export async function createBatAnim(app: PIXI.Application) {
         if (!restSprite.playing) restSprite.play()
         restSprite.alpha = 1
         landSprite.alpha = flySprite.alpha = 0
+        // Undo a lift-off/vanish that a resume out of 'exiting' interrupted.
+        if (landSprite.playing) landSprite.stop()
+        if (vanishSprite.playing || vanishSprite.alpha !== 0) {
+          vanishSprite.stop()
+          vanishSprite.currentFrame = 0
+          vanishSprite.alpha = 0
+        }
         batContainer.position.set(x, y)
         break
       case 'lost':
