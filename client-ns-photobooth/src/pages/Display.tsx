@@ -19,6 +19,7 @@ import { createConfettiBurst } from '../anim/confetti'
 import { createAnimForGif as createAnimForGifShared } from '../anim/createAnimForGif'
 import { createOrdloAnim } from '../anim/ordlo'
 import { createSimpleFadePropAnim } from '../anim/simpleFadeProp'
+import { createSlotAssigner } from '../anim/slotAssigner'
 import { attachStream2Pixi, drawDebug } from '../anim/stream'
 import { createChallenge67Loop } from '../anim/challenge67/gameLoop'
 import { drawChallenge67ArmLines } from '../anim/challenge67/drawArmLines'
@@ -192,53 +193,12 @@ const MARGIN_B = 0
 // run_pose_detection) — the same reset it already does on a source switch,
 // since a mid-stream size change is just as disruptive to that tracker.
 
-/** Stable person -> slot assignment for multi-target animations.
- *
- * Poses arrive keyed by tracker id, and Object.keys() returns those keys in
- * ascending numeric order — so driving slot i from ids[i] re-shuffles every
- * slot the moment anyone enters or leaves, and a newcomer whose id sorts
- * below an existing one shifts all the slots after it. Each slot owns its
- * own Kalman filters and AnimState, so a reshuffle makes a mask slide off
- * its person and across to another, briefly stacking two masks on one face.
- *
- * Keying by tracker id instead means a person holds the same slot for as
- * long as they are tracked, whoever else comes and goes. */
-function createSlotAssigner<T>(slotCount: number) {
-  const slotOf = new Map<number, number>()
-  const freedAt = new Array<number>(slotCount).fill(-1)
-  let tick = 0
-
-  return (allPoses: { [id: number]: T }): (T | undefined)[] => {
-    tick++
-    const ids = Object.keys(allPoses).map(Number)
-    const present = new Set(ids)
-
-    for (const [id, slot] of [...slotOf]) {
-      if (!present.has(id)) {
-        slotOf.delete(id)
-        freedAt[slot] = tick
-      }
-    }
-
-    const taken = new Set(slotOf.values())
-    const free: number[] = []
-    for (let i = 0; i < slotCount; i++) if (!taken.has(i)) free.push(i)
-    // Longest-free first, so a slot isn't handed straight to a new person
-    // while its filters are still settled on the previous one.
-    free.sort((a, b) => freedAt[a] - freedAt[b])
-
-    let next = 0
-    for (const id of ids) {
-      if (slotOf.has(id)) continue
-      if (next >= free.length) break // more people than slots — extras go unrendered
-      slotOf.set(id, free[next++])
-    }
-
-    const bySlot = new Array<T | undefined>(slotCount)
-    for (const [id, slot] of slotOf) bySlot[slot] = allPoses[id]
-    return bySlot
-  }
-}
+// How long a person who drops out of detection keeps their animation slot -
+// see createSlotAssigner. Tied to VITE_ANIM_RETRACK, the time an animation
+// waits in 'lost' before leaving, so a slot is held exactly as long as its
+// animation is still there to resume. Falls back to 1s if the variable is
+// missing: a NaN hold would never expire, and every slot would stay reserved.
+const SLOT_HOLD_MS = (parseFloat(import.meta.env.VITE_ANIM_RETRACK) || 1) * 1000
 
 /** Where the video was last drawn inside the canvas, in canvas pixels.
  *
@@ -716,7 +676,10 @@ export default function Display({
       fetch(`${getBackendHttpUrl()}/pose_source`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: isRtspMode ? 'rtsp' : 'local' }),
+        // multi: the webcam path's only way of telling the backend that
+        // Multi-Person Tracking is on (RTSP also sends it as ws_stream's
+        // ?multi=). Without it the backend kept one person on the webcam.
+        body: JSON.stringify({ source: isRtspMode ? 'rtsp' : 'local', multi: isMulti }),
       })
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -732,7 +695,7 @@ export default function Display({
       active = false
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [rosState, isRtspMode])
+  }, [rosState, isRtspMode, isMulti])
 
   useEffect(() => {
     if (rosState !== 'connected') return
@@ -1294,7 +1257,7 @@ export default function Display({
                 instances.push({ container, update })
               }
             }
-            animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length) })
+            animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length, SLOT_HOLD_MS) })
           } else {
             const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>]
             // A stale option can still be sitting in the persisted
@@ -1542,7 +1505,7 @@ export default function Display({
         }
       })
 
-      const assignArrowSlots = createSlotAssigner<NormalizedLandmarkList>(arrows.length)
+      const assignArrowSlots = createSlotAssigner<NormalizedLandmarkList>(arrows.length, SLOT_HOLD_MS)
 
       app.ticker.add(() => {
         const visible = pointerEnabled.get()

@@ -285,6 +285,27 @@ def _box_overlap_ratio(a, b) -> float:
 # shoulder still each keep most of their own box to themselves.
 _DUPLICATE_OVERLAP_THRESH = 0.75
 
+# Box overlap alone cannot tell a duplicate from a neighbour once someone holds
+# an arm out. YOLO-pose's box covers the outstretched arm, so the bat's T-pose
+# arm, the owl's forearm or a raised hand stretches the gesturing person's box
+# sideways over whoever stands next to them - past _DUPLICATE_OVERLAP_THRESH -
+# and the neighbour was discarded as a "duplicate", losing their animation.
+#
+# A real duplicate is one skeleton seen twice, so its head and torso coincide;
+# two people overlapping by an arm have clearly separate ones. So an
+# overlapping pair is only dropped when these body-core keypoints (COCO nose,
+# shoulders, hips - arms deliberately left out, being what a gesture moves)
+# also agree, see _same_skeleton.
+_DEDUPE_CORE_KPS = (0, 5, 6, 11, 12)
+# Keypoint confidence both detections need for a point to be compared.
+_DEDUPE_KP_MIN_CONF = 0.5
+# Mean core-keypoint distance, as a fraction of the smaller box's HEIGHT,
+# below which two boxes are the same skeleton. Height, not width or diagonal:
+# an outstretched arm inflates a box's width but not its height. 0.15 is
+# about a head's width - generous for one person's keypoints regressed from
+# two slightly different boxes, far below the gap between two people.
+_DEDUPE_SKELETON_MAX_DIST = 0.15
+
 # Diagnostic for the "three people in a row, middle one gets no animation"
 # report. Off by default; set DEDUPE_DEBUG=1 to log every discarded detection
 # with the overlap that caused it, so it can be confirmed on real bodies
@@ -361,10 +382,43 @@ def _keypoints_fit_box(kps_xyn, box, frame_shape, track_id=None) -> bool:
     return True
 
 
-def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
+def _same_skeleton(i, j, boxes_xyxy, kps_xyn, kps_conf, frame_shape):
+    """(same, dist): whether detections i and j have the same head and torso,
+    judged on the _DEDUPE_CORE_KPS both are confident about, and the mean
+    distance between them as a fraction of the smaller box's height.
+
+    `same` is None when fewer than two such points exist - undecidable, so the
+    caller falls back to box overlap alone. `dist` is None whenever it is.
+
+    `kps_xyn` is normalised to `frame_shape`, which must be the frame YOLO ran
+    on, since the boxes are in that frame's pixels."""
+    if kps_xyn is None or kps_conf is None or frame_shape is None:
+        return None, None
+    h, w = frame_shape[:2]
+    dists = []
+    for k in _DEDUPE_CORE_KPS:
+        if k >= len(kps_xyn[i]) or k >= len(kps_xyn[j]):
+            continue
+        if kps_conf[i][k] < _DEDUPE_KP_MIN_CONF or kps_conf[j][k] < _DEDUPE_KP_MIN_CONF:
+            continue
+        dx = (kps_xyn[i][k][0] - kps_xyn[j][k][0]) * w
+        dy = (kps_xyn[i][k][1] - kps_xyn[j][k][1]) * h
+        dists.append((dx * dx + dy * dy) ** 0.5)
+    if len(dists) < 2:
+        return None, None
+    box_h = min(boxes_xyxy[i][3] - boxes_xyxy[i][1], boxes_xyxy[j][3] - boxes_xyxy[j][1])
+    if box_h <= 0:
+        return None, None
+    d = float(np.mean(dists) / box_h)
+    return d < _DEDUPE_SKELETON_MAX_DIST, d
+
+
+def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None,
+                       kps_xyn=None, kps_conf=None, frame_shape=None):
     """Indices (into boxes_xyxy) to keep after dropping near-duplicate
     detections of the same physical person — the lower-confidence box of
-    any pair overlapping past _DUPLICATE_OVERLAP_THRESH is dropped.
+    any pair overlapping past _DUPLICATE_OVERLAP_THRESH is dropped, unless
+    their keypoints show two distinct people (see _same_skeleton).
 
     Symptom this fixes: with multi-person tracking on, a person close/large
     enough in frame can occasionally get detected twice in one frame under
@@ -372,11 +426,15 @@ def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
     YOLO's own NMS doesn't already catch it). Each ID looks like a distinct
     person downstream, so every multi-person character assigns it its own
     slot — which is why e.g. several owls have been seen landing on the
-    same one person's arm at once instead of on separate people."""
+    same one person's arm at once instead of on separate people.
+
+    `kps_xyn`/`kps_conf`/`frame_shape` are optional: left out, only box
+    overlap decides, as before."""
     n = len(boxes_xyxy)
     order = keep_indices if keep_indices is not None else list(range(n))
     dropped = set()
-    why = {}  # index -> (kept index it lost to, overlap) for the debug log
+    why = {}  # index -> (kept index it lost to, overlap, skeleton dist) for the debug log
+    kept_pairs = []  # (i, j, overlap, skeleton dist) overlapping but distinct, for the debug log
     # Highest confidence first, so when a pair overlaps, the box being
     # compared against is always the more-trusted one of the two.
     by_conf = sorted(order, key=lambda i: -box_conf[i])
@@ -389,23 +447,36 @@ def _dedupe_detections(boxes_xyxy, box_conf, keep_indices=None):
             if j in dropped:
                 continue
             ratio = _box_overlap_ratio(boxes_xyxy[i], boxes_xyxy[j])
-            if ratio >= _DUPLICATE_OVERLAP_THRESH:
-                dropped.add(j)
-                why[j] = (i, ratio)
+            if ratio < _DUPLICATE_OVERLAP_THRESH:
+                continue
+            same, dist = _same_skeleton(i, j, boxes_xyxy, kps_xyn, kps_conf, frame_shape)
+            if same is False:
+                # Overlapping boxes, separate heads and torsos: two people,
+                # one reaching across the other.
+                kept_pairs.append((i, j, ratio, dist))
+                continue
+            dropped.add(j)
+            why[j] = (i, ratio, dist)
 
-    if _DEDUPE_DEBUG and dropped:
+    if _DEDUPE_DEBUG and (dropped or kept_pairs):
         def _fmt(k):
             b = boxes_xyxy[k]
             return 'box=[%4d,%4d,%4d,%4d] cx=%4d conf=%.2f' % (
                 b[0], b[1], b[2], b[3], (b[0] + b[2]) / 2, box_conf[k])
+
+        def _fmt_dist(d):
+            return 'n/a' if d is None else '%.2f' % d
         log.info("dedupe: %d detected, discarding %d", len(order), len(dropped))
         for k in order:
             if k in dropped:
-                lost_to, ratio = why[k]
-                log.info("  DROPPED #%d %s  <- %.0f%% inside #%d",
-                         k, _fmt(k), ratio * 100, lost_to)
+                lost_to, ratio, dist = why[k]
+                log.info("  DROPPED #%d %s  <- %.0f%% inside #%d, skeleton d=%s",
+                         k, _fmt(k), ratio * 100, lost_to, _fmt_dist(dist))
             else:
                 log.info("  kept    #%d %s", k, _fmt(k))
+        for i, j, ratio, dist in kept_pairs:
+            log.info("  KEPT (distinct skeleton, d=%s) #%d %.0f%% inside #%d",
+                     _fmt_dist(dist), j, ratio * 100, i)
 
     return [i for i in order if i not in dropped]
 
@@ -1185,7 +1256,13 @@ def run_pose_detection(
                     # physical person (see _dedupe_detections) before anything
                     # downstream gets a chance to hand each one its own
                     # animation slot.
-                    keep = _dedupe_detections(boxes_xyxy, box_conf)
+                    # Keypoints too, in the same frame the boxes came from,
+                    # so a neighbour overlapped by an outstretched arm is not
+                    # mistaken for a duplicate (see _same_skeleton).
+                    keep = _dedupe_detections(
+                        boxes_xyxy, box_conf,
+                        kps_xyn=kps_xyn, kps_conf=kps_conf, frame_shape=frame.shape,
+                    )
                     if len(keep) != len(kps_xyn):
                         kps_xyn    = kps_xyn[keep]
                         kps_conf   = kps_conf[keep] if kps_conf is not None else None
@@ -2487,16 +2564,26 @@ async def configure_camera_handler(request: web.Request) -> web.Response:
 
 
 async def pose_source_handler(request: web.Request) -> web.Response:
-    """POST {"source": "local"|"rtsp"} - which feed the frontend is showing.
+    """POST {"source": "local"|"rtsp", "multi"?: bool} - which feed the
+    frontend is showing, and whether Multi-Person Tracking is on.
+
+    `multi` is here because the webcam path had no other way to say it: only
+    ws_stream_handler's ?multi= query ever set _multi_target, and the webcam
+    never opens that socket. So on the webcam _multi_target stayed at its
+    boot default, run_pose_detection kept only the single highest-confidence
+    person, and every per-person character showed one animation however many
+    people were in shot. Optional, so a frontend that leaves it out leaves
+    _multi_target alone.
 
     GET is a diagnostic: it reports both the declared source and the one that
     last actually reached inference, which is how you catch a capture thread
     still running for a camera nobody is watching.
     """
-    global _active_pose_source, _active_pose_source_since
+    global _active_pose_source, _active_pose_source_since, _multi_target
     if request.method == 'GET':
         return web.json_response(
-            {'active': _active_pose_source, 'last_seen': _current_pose_source},
+            {'active': _active_pose_source, 'last_seen': _current_pose_source,
+             'multi': _multi_target},
             headers=_CORS,
         )
     try:
@@ -2504,6 +2591,11 @@ async def pose_source_handler(request: web.Request) -> web.Response:
         source = data.get('source', '')
         if source not in ('local', 'rtsp'):
             return web.Response(status=400, text='Invalid source', headers=_CORS)
+        if 'multi' in data:
+            multi = bool(data['multi'])
+            if multi != _multi_target:
+                _multi_target = multi
+                log.info("Multi-target: %s (from /pose_source)", multi)
         if source != _active_pose_source:
             _active_pose_source = source
             _active_pose_source_since = time.monotonic()
@@ -2908,7 +3000,13 @@ def _analyze_clip(path: pathlib.Path) -> dict:
                         boxes_xyxy = r.boxes.xyxy.cpu().numpy()
                         box_conf = (r.boxes.conf.cpu().numpy() if r.boxes.conf is not None
                                     else np.ones(len(boxes_xyxy)))
-                        keep = (_dedupe_detections(boxes_xyxy, box_conf)
+                        # Same keypoint-aware dedupe as run_pose_detection,
+                        # so this people count matches what goes live.
+                        keep = (_dedupe_detections(
+                                    boxes_xyxy, box_conf,
+                                    kps_xyn=r.keypoints.xyn.cpu().numpy(),
+                                    kps_conf=kps_conf, frame_shape=resized.shape,
+                                )
                                 if len(boxes_xyxy) > 1 else list(range(len(boxes_xyxy))))
                         num_people = len(keep)
                         if num_people and kps_conf is not None:

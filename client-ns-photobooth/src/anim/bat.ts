@@ -9,15 +9,18 @@ import { AnimStateManager } from './AnimState'
 import { BatArmSide as ArmSide, getForearmTarget } from './batArm'
 import { createArmDebugLogger, f2 } from './armDebug'
 import {
+  PERCH_BLEND_S,
   createPerchState,
   perchBob,
   perchSettleProgress,
+  perchWingStretch,
   stepPerch,
 } from './batPerch'
 
 import batFlyGif from '../assets/Bat_anim/Bat.gif'
 import batSwoopGif from '../assets/Bat_anim/bat_swoop.gif'
 import batVanishGif from '../assets/Bat_anim/bat_vanish.gif'
+import batPerchPng from '../assets/Bat_anim/bat_perch.png'
 
 /** anim duration & timing config */
 const ANIM = {
@@ -33,20 +36,29 @@ const KF_PARAMS = { R: 0.03, Q: 2 }
 // multiples of batSize. Was 0.27, lowered on request so the bat reads as
 // standing/perched on the arm rather than hanging below it.
 const BAT_MARGIN_B = 0.12
-// The perched bat (see batPerch.ts) is drawn from Bat.gif, at the same size
-// and bottom-middle anchor as the fly/swoop/vanish sprites so the swoop hands
-// over to it without a jump. Within Bat.gif's 300x300 frames, though, the
-// bat's body sits right of centre and well above the bottom edge (its feet at
-// about (0.63, 0.66) of the frame, measured from the brown body pixels, which
-// stay within ~10px across all frames), so during the settle the sprite is
-// eased by this much to put the feet on the forearm, the wings draping over it.
-const PERCH_FEET = { x: 0.63, y: 0.66 }
+// The perched bat is its own art, bat_perch.png: upright, front-facing, wings
+// spread, standing on the arm (see batPerch.ts for why it is not Bat.gif).
+// Its anchor is the point between its feet - measured from the image (claws'
+// horizontal centre, at their lowest row) - so placing the sprite places the
+// feet, and any scaling grows up and out from where they grip the arm.
+const PERCH_FEET = { x: 0.4774, y: 0.9862 }
+/** bat_perch.png's width / height; sized aspect-correct, unlike the square
+ * flight gifs, or it would be squashed. */
+const PERCH_ASPECT = 2.4414
+/** Perched wingspan, in multiples of batSize. */
+const PERCH_WIDTH = 1.1
 // How far below the forearm's centre line the feet sit, in multiples of
-// batSize. 0 = right on the line the bat targets (batArm.ts).
-const PERCH_SINK = 0
-// Breathing on the perch, in multiples of batSize (bob) and of scale (squash).
-const PERCH_BOB_AMP = 0.015
+// batSize. 0 = right on the line the bat targets (batArm.ts); negative lifts
+// them onto the top of the arm rather than into the middle of it.
+const PERCH_SINK = -0.04
+// Breathing on the perch: a vertical squash only, in multiples of scale. The
+// sprite itself does not bob - it is anchored at the feet, and moving it would
+// lift them off the arm, which is exactly the hovering look this art replaced.
 const PERCH_SQUASH_AMP = 0.02
+// How far the wings stretch out during a flutter, in multiples of width.
+const PERCH_STRETCH_AMP = 0.06
+// Scale the perch starts at as it blends in from the swoop, growing to 1.
+const PERCH_POP = 0.85
 // Which arms qualify, and where on them the bat lands, live in batArm.ts.
 
 // Debounce for the raw per-frame arm qualification, same pattern as
@@ -84,18 +96,16 @@ export async function createBatAnim(app: PIXI.Application) {
   const batContainer = new PIXI.Container()
 
   // cloning necessary for reuse since animation itself is a single sprite...
-  const [flySprite, landSprite, vanishSprite] = await Promise.all([
+  const [flySprite, landSprite, vanishSprite, perchTexture] = await Promise.all([
     PIXI.ensureLoaded(loader, batFlyGif).then((res) => res.animation!.clone()),
     PIXI.ensureLoaded(loader, batSwoopGif).then((res) => res.animation!.clone()),
     PIXI.ensureLoaded(loader, batVanishGif).then((res) => res.animation!.clone()),
+    PIXI.ensureLoaded(loader, batPerchPng).then((res) => res.texture!),
   ])
-  // The perched bat is another copy of the fly animation, never play()ed:
-  // update() picks its frame by hand (batPerch.ts), on the same ticker
-  // deltaMS as everything else here, so it restarts cleanly with each landing.
-  const perchSprite = flySprite.clone()
-  perchSprite.autoUpdate = false
+  // A still image; its motion comes from drawPerch (batPerch.ts timing).
+  const perchSprite = PIXI.Sprite.from(perchTexture)
 
-  perchSprite.anchor.set(0.5, 1)
+  perchSprite.anchor.set(PERCH_FEET.x, PERCH_FEET.y)
   batContainer.addChild(perchSprite)
 
   flySprite.anchor.set(0.5, 1)
@@ -114,26 +124,34 @@ export async function createBatAnim(app: PIXI.Application) {
     landSprite.stop()
     vanishSprite.stop()
     perchSprite.alpha = flySprite.alpha = landSprite.alpha = vanishSprite.alpha = 0
-    perchSprite.currentFrame = flySprite.currentFrame = landSprite.currentFrame = vanishSprite.currentFrame = 0
-    perchSprite.position.set(0, 0)
+    flySprite.currentFrame = landSprite.currentFrame = vanishSprite.currentFrame = 0
   }
   initialState()
 
   let perch = createPerchState()
-  /** shows the perched bat for this frame: steps its idle by `dt` seconds and
-   * places it on the arm (relative to batContainer, which tracking moves). */
+  /** Whether the bat is on the perch: set on the first 'entered' frame, which
+   * starts a fresh perch, and cleared once the lift-off begins. Tracked
+   * explicitly because the perch's alpha ramps in and out, so "alpha is 0"
+   * no longer means "not perched yet". */
+  let perched = false
+  /** The perch's alpha when the lift-off began, faded from there to 0. */
+  let perchLeaveAlpha = 0
+  /** shows the perched bat for this frame: steps its timing by `dt` seconds
+   * and places it on the arm (relative to batContainer, which tracking
+   * moves). Over the settle it blends in from the swoop's last frame. */
   const drawPerch = (dt: number) => {
-    const frame = stepPerch(perch, dt)
-    // AnimatedGIF redraws its texture on every frame change, so skip no-ops.
-    if (perchSprite.currentFrame !== frame) perchSprite.currentFrame = frame
+    stepPerch(perch, dt)
     const settle = perchSettleProgress(perch)
     const bob = perchBob(perch)
-    perchSprite.position.set(
-      -(PERCH_FEET.x - 0.5) * batSize * settle,
-      ((1 - PERCH_FEET.y - BAT_MARGIN_B + PERCH_SINK) * settle + PERCH_BOB_AMP * bob) * batSize,
-    )
-    // width/height were just set to batSize by update(); squash on top of it.
-    perchSprite.scale.y *= 1 + PERCH_SQUASH_AMP * bob
+    const pop = PERCH_POP + (1 - PERCH_POP) * lerpEO(settle, 0, 1)
+    const width = batSize * PERCH_WIDTH * pop
+    perchSprite.width = width * (1 + PERCH_STRETCH_AMP * perchWingStretch(perch))
+    perchSprite.height = (width / PERCH_ASPECT) * (1 + PERCH_SQUASH_AMP * bob)
+    // The container sits BAT_MARGIN_B below the forearm target (shared with
+    // the flight sprites); cancel that so the anchored feet land on it.
+    perchSprite.position.set(0, (-BAT_MARGIN_B + PERCH_SINK) * batSize)
+    perchSprite.alpha = settle
+    landSprite.alpha = 1 - settle
   }
 
   const kf = {
@@ -197,9 +215,8 @@ export async function createBatAnim(app: PIXI.Application) {
     const x = wristX
     const y = wristY + batSize * BAT_MARGIN_B
 
-    perchSprite.height =
-      perchSprite.width =
-      flySprite.height =
+    // (the perch sizes itself, aspect-correct, in drawPerch)
+    flySprite.height =
       flySprite.width =
       landSprite.height =
       landSprite.width =
@@ -228,12 +245,18 @@ export async function createBatAnim(app: PIXI.Application) {
     switch (state) {
       case 'exited':
         initialState()
+        // Here and not in initialState(), which runs during setup before these
+        // `let` bindings exist (temporal dead zone - see owl.ts's resetPerch).
+        perched = false
+        perchLeaveAlpha = 0
         lockedSide = undefined
         break
       case 'entering':
         batContainer.alpha = 1
         // Only non-zero if this is a resume out of 'exiting'.
         vanishSprite.alpha = 0
+        // Not perched yet, so a loss from here must not fade a perch out.
+        perchSprite.alpha = perchLeaveAlpha = 0
         batContainer.position.set(
           lerpEO(time, 0, toLandTime) * x,
           lerpEO(time, 0, toLandTime) * y,
@@ -262,15 +285,19 @@ export async function createBatAnim(app: PIXI.Application) {
         break
       case 'entered':
         batContainer.alpha = 1
-        // Hidden means this is the first frame after the swoop, or a resume
-        // out of 'exiting' — either way the bat is arriving from the swoop's
-        // last (wings-up) pose, so start the perch over from its settle.
-        if (perchSprite.alpha === 0) perch = createPerchState()
-        perchSprite.alpha = 1
-        drawPerch(ticker.deltaMS / 1000)
-        landSprite.alpha = flySprite.alpha = 0
-        // Undo a lift-off/vanish that a resume out of 'exiting' interrupted.
+        // Not perched means this is the first frame after the swoop, or a
+        // resume out of 'exiting' — either way the bat is arriving from the
+        // swoop, so start the perch over from its settle, which blends the
+        // swoop's frame (held, side-on) into the perched art (front-on).
+        if (!perched) {
+          perch = createPerchState()
+          perched = true
+        }
+        flySprite.alpha = 0
+        // Hold the swoop on its frame for the blend, and undo a lift-off a
+        // resume out of 'exiting' interrupted.
         if (landSprite.playing) landSprite.stop()
+        drawPerch(ticker.deltaMS / 1000)
         if (vanishSprite.playing || vanishSprite.alpha !== 0) {
           vanishSprite.stop()
           vanishSprite.currentFrame = 0
@@ -282,7 +309,7 @@ export async function createBatAnim(app: PIXI.Application) {
         switch (true) {
           case time < ANIM.RETRACK:
             // Keep a perched bat alive while waiting for the arm to return.
-            if (perchSprite.alpha !== 0) drawPerch(ticker.deltaMS / 1000)
+            if (perched) drawPerch(ticker.deltaMS / 1000)
             break
           default:
             // landSprite already played through once during entering and is
@@ -295,7 +322,16 @@ export async function createBatAnim(app: PIXI.Application) {
         }
         break
       case 'exiting':
-        perchSprite.alpha = flySprite.alpha = 0
+        flySprite.alpha = 0
+        // The perch fades out over the start of the lift-off, under the swoop
+        // clip, rather than cutting straight from front-on to side-on.
+        // Clearing `perched` here is what makes a resume out of 'exiting'
+        // blend back in like a fresh landing.
+        if (perched) {
+          perched = false
+          perchLeaveAlpha = perchSprite.alpha
+        }
+        perchSprite.alpha = perchLeaveAlpha * (1 - lerpLinear(time, 0, PERCH_BLEND_S))
         switch (true) {
           case time < liftOffDuration:
             // Mirrors the landing sequence's swoop phase — same clip reused
