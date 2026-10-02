@@ -14,6 +14,7 @@ import { createOCFusionAnim } from './ocfusion'
 import { createOwlAnim } from './owl'
 import { createPigNoseAnim } from './pignose'
 import { createScubaAnim } from './scuba'
+import { handsOwnedBy } from './scubaHands'
 import { createSixSevenAnim } from './sixseven'
 import { createSunglassesAnim } from './sunglasses'
 
@@ -66,9 +67,18 @@ export async function createAnimForGif(
     const [container, updateScuba] = await createScubaAnim(app, marginOpts)
     // Needs both its assigned person (pose, to place the cat above their
     // head) and the hand list (for the palm-orientation gesture) — see
-    // scuba.ts's matchHand, which pairs the two by position.
+    // scuba.ts's matchHands, which pairs the two by position. Only the hands
+    // this person owns (or nobody does) are passed on: with several people
+    // in frame every instance used to see every hand and could claim a
+    // neighbour's - see handsOwnedBy.
+    const { height, width } = app.renderer
     const wrappedUpdate = (pose: NormalizedLandmarkList) =>
-      updateScuba(pose, dataRef.current.hands ?? [])
+      updateScuba(
+        pose,
+        handsOwnedBy(
+          dataRef.current.hands ?? [], dataRef.current.allPoses ?? {}, pose, height, width,
+        ),
+      )
     return [container, wrappedUpdate] as const
   } else if (option === 'ocfusion') {
     // No longer hand-tracked (see ocfusion.ts) — reads its assigned person's

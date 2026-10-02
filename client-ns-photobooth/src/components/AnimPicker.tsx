@@ -55,8 +55,14 @@ export function AnimPicker() {
   // Display.tsx), not by picking one here.
   if (qrMode) return null
 
+  // Centred with inset-x-0 + mx-auto on a fit-content box, not
+  // left-1/2 + -translate-x-1/2: a fixed box whose left edge sits at the
+  // middle of the screen can only grow into the right half, so the row
+  // wrapped once it passed 50vw (e.g. the last button, Boxing Gloves,
+  // dropping to a second line under 125% Windows display scaling) - long
+  // before the max-w-[95vw] it was meant to be capped by.
   return (
-    <div tw='fixed top-3 left-1/2 -translate-x-1/2 z-40 flex flex-row flex-wrap justify-center gap-2 max-w-[95vw]'>
+    <div tw='fixed top-3 inset-x-0 mx-auto w-[fit-content] z-40 flex flex-row flex-wrap justify-center gap-2 max-w-[95vw]'>
       {/* OC Fusion has its own standalone picker (OcFusionPicker, bottom-right) — skip it here. */}
       {Object.entries(GIF_OPTIONS).filter(([key]) => key !== 'ocfusion').map(([key, label]) => {
         const option = key as GifOption

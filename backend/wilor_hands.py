@@ -77,6 +77,14 @@ WILOR_CKPT_DIR = os.environ.get('WILOR_CKPT_DIR', os.path.join(_HERE, 'wilor_mod
 
 WILOR_FP16 = os.environ.get('WILOR_FP16', '1') != '0'
 WILOR_DET_CONF = float(os.environ.get('WILOR_DET_CONF', '0.3'))
+# Input size for the hand DETECTOR (not the per-hand reconstruction, which
+# crops from the full frame regardless). Left unset, Ultralytics shrank every
+# frame to its default 640 - so the 960-wide frame main.py's HANDS_WIDTH
+# prepares was thrown away before detection, and a hand 3-5 m from the camera
+# (~15-30 px at 960) reached the detector at ~10-20 px: missed outright, or
+# found at a confidence the scuba gesture then rejected. Matches HANDS_WIDTH's
+# default. Costs ~2.25x the detector's ~8 ms; set 640 for the old behaviour.
+WILOR_DET_IMGSZ = int(os.environ.get('WILOR_DET_IMGSZ', '960'))
 # Reconstruction is per-hand, so a crowd is what threatens the frame rate.
 # Hands are kept in detector-confidence order, so the clearest ones survive.
 #
@@ -588,7 +596,7 @@ def _infer(frame: np.ndarray) -> tuple:
     h, w = frame.shape[:2]
     rgb = frame[:, :, ::-1].copy()
 
-    det = _detector(frame, conf=WILOR_DET_CONF, verbose=False)[0]
+    det = _detector(frame, conf=WILOR_DET_CONF, imgsz=WILOR_DET_IMGSZ, verbose=False)[0]
     boxes = det.boxes.xyxy.cpu().numpy()
     if len(boxes) == 0:
         return [], []

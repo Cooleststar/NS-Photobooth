@@ -794,21 +794,20 @@ export default function Display({
       'Camera stream actual resolution:', settings?.width, 'x', settings?.height,
       '@', settings?.frameRate, 'fps',
     )
-    // The pose-frame upload below draws the camera into Detection
-    // Resolution's rect with no letterboxing, so a camera whose aspect ratio
-    // differs reaches the detectors stretched - which skews the hand
-    // orientation scuba gates on. Warned rather than corrected: letterboxing
-    // there would move landmarks out of the coordinate space remapPoint
-    // assumes.
+    // The pose-frame upload below used to stretch a camera whose aspect ratio
+    // differed from Detection Resolution's, skewing the hand orientation scuba
+    // gates on, so this warned about it. The upload now takes its height from
+    // the camera's own aspect (see fitFrameToVideo), so a mismatch is just
+    // reported for reference.
     if (settings?.width && settings?.height) {
       const det = detectionCamSize.get()
       const camAspect = settings.width / settings.height
       const detAspect = det.width / det.height
       if (Math.abs(camAspect - detAspect) / detAspect > 0.02) {
-        console.warn(
-          `Camera aspect ${settings.width}x${settings.height} does not match ` +
+        console.info(
+          `Camera aspect ${settings.width}x${settings.height} differs from ` +
           `Detection Resolution ${det.width}x${det.height} - detection frames ` +
-          `are being stretched. Set Detection Resolution to the camera's aspect ratio.`,
+          `keep the camera's aspect (width ${det.width}).`,
         )
       }
     }
@@ -857,12 +856,32 @@ export default function Display({
     // buffer) for the GC to collect. Sized from detectionRes (a dependency
     // of this effect below), so a Settings change tears this down and
     // reconnects with a freshly-sized canvas rather than the old one lingering.
+    //
+    // Only the WIDTH comes from detectionRes; the height follows the camera's
+    // own aspect ratio (see fitFrameToVideo). Drawing the camera into
+    // detectionRes's fixed rect stretched any camera that wasn't the same
+    // shape, and the stretch skewed the palm orientation scuba gates on - the
+    // RTSP path never had that, since its hands frame keeps its aspect.
+    // Landmarks are unaffected: remapPoint maps them through the VIDEO's
+    // aspect, and an unstretched frame of that same aspect normalises
+    // identically. Falls back to detectionRes.height until the video reports
+    // its size.
     const frameWidth = detectionRes.width
-    const frameHeight = detectionRes.height
+    let frameHeight = detectionRes.height
     const frameCanvas = document.createElement('canvas')
     frameCanvas.width = frameWidth
     frameCanvas.height = frameHeight
     const frameCtx = frameCanvas.getContext('2d')
+    const fitFrameToVideo = () => {
+      if (!video.videoWidth || !video.videoHeight) return
+      const h = Math.max(2, Math.round((frameWidth * video.videoHeight) / video.videoWidth / 2) * 2)
+      // Only on a real change - every resize hands the backend a new frame
+      // size, which resets its BoT-SORT tracker.
+      if (h === frameHeight) return
+      frameHeight = h
+      frameCanvas.height = h
+      console.log(`Detection frames sent at ${frameWidth}x${h} (camera aspect)`)
+    }
 
     function connect() {
       if (!active) return
@@ -874,8 +893,9 @@ export default function Display({
             if (!video || video.readyState < 2 || !ws || ws.readyState !== WebSocket.OPEN || sending) return
             if (!frameCtx) return
             sending = true
+            fitFrameToVideo()
 
-            // Draw the camera frame into the fixed 16:9 pose input, under
+            // Draw the camera frame into the pose input, under
             // the same orientation the preview is drawn with. This is the
             // half that makes the flip safe: the landmarks the backend
             // returns are in THIS frame's coordinates, so flipping here
@@ -901,7 +921,11 @@ export default function Display({
               blob.arrayBuffer().then(buf => {
                 if (ws?.readyState === WebSocket.OPEN) ws.send(buf)
               })
-            }, 'image/jpeg', 0.7)
+              // 0.92, not 0.7: the RTSP path infers on raw decoded frames, and
+              // 0.7's compression smeared the finger edges WiLoR reads palm
+              // orientation from, so scuba's knife-hand test flickered on the
+              // webcam only. The backend is local; the extra bytes are free.
+            }, 'image/jpeg', 0.92)
           }, 100)
         }
         ws.onclose = () => {

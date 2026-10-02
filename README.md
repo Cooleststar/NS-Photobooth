@@ -251,7 +251,16 @@ A camera on HDMI capture or USB is a **local webcam** to the booth, not RTSP. It
 - **Shutter speed 1/250 or faster** (S or M mode; raise ISO to compensate). Slower shutters blur moving hands and arms. Scuba is a swinging gesture and suffers most.
 - **Frame the guest down to the hips.** The Bat needs a tracked hip to appear.
 - **Capture card at MJPEG 1080p30.** Open the browser console and look for `Camera stream actual resolution: … @ … fps`. Some cards fall back to ~5 fps at 1080p.
-- Set **Detection Resolution** (Settings) to the camera's aspect ratio, usually 16:9. The console warns if they differ.
+- **Detection Resolution** (Settings) sets the width of the frames sent for detection (1280 by default). Their height follows the camera's own aspect ratio automatically, and the console logs `Detection frames sent at …`.
+
+### Camera settings for hand gestures (Scuba) with groups and at distance
+
+The Scuba cat reads a swinging, edge-on hand, and a hand 3–5 m away is only a few dozen pixels across. Motion blur and compression artefacts on it decide whether it is detected at all. On every camera:
+
+- **Shutter 1/250 or faster.** Add light rather than slowing the shutter.
+- **Hikvision (RTSP):** in the camera's web UI, turn **H.264+ / Smart Codec off**, use the main stream at 1080p25 with a generous bitrate, and keep **WDR and 3D DNR off or low**. Noise reduction smears moving hands.
+- **DJI Osmo Pocket 3 (webcam stand-in):** turn **face tracking / auto-framing off** and lock the gimbal. A camera that pans to follow people moves every hand on screen, which reads as hand motion. Lock exposure at a fast shutter, use 1080p, and turn beauty and HDR off.
+- **Sony A7 III:** see the capture-card checklist above. SteadyShot off.
 
 **Diagnosing the Owl, Bat and Scuba on site** (browser console, no restart needed):
 
@@ -259,7 +268,7 @@ A camera on HDMI capture or USB is a **local webcam** to the booth, not RTSP. It
 |---|---|
 | `window.ARM_DEBUG = true` | Prints the Owl/Bat arm checks live: state, locked arm, and which gate failed per side (e.g. `vis=0.42`, `angle=38`, `hipVis=0.10`, `away=135`) |
 | `copy(armDump())` | Copies the recorded Owl/Bat history (kept even with `ARM_DEBUG` off) |
-| `window.SCUBA_DEBUG = true` / `copy(scubaDump())` | The same for the Scuba gesture |
+| `window.SCUBA_DEBUG = true` / `copy(scubaDump())` | The same for the Scuba gesture. Each line is tagged `[scuba @x=…]` with that person's on-screen position (pixels from the left), so in a group you can tell whose line is whose. `anchor=wrist/elbow/none` shows what their hand was looked for around. |
 | `window.SCUBA_FORCE = true` | Shows the cat without the gesture, which proves it can render |
 
 To rehearse without the event camera, feed a recorded clip through **OBS Virtual Camera** and pick it as the local webcam. This exercises the same path as a capture card. A `replay:` video goes through the RTSP path instead.

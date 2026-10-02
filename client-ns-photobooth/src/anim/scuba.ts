@@ -6,6 +6,10 @@ import KalmanFilter from 'kalmanjs'
 import { lerpLinear } from './utils'
 import { convertPoint } from '../api/nicepipe/mpPose'
 import { AnimStateManager } from './AnimState'
+// The globe's confirm/hold debounce - pure and already tested, reused here
+// rather than duplicated.
+import { createLatch, resetLatch, stepLatch } from './globePose'
+import { ANCHOR_MIN_VIS, ArmAnchors, armAnchors } from './scubaHands'
 import { HandData } from '../api/nicepipe'
 
 import scubaGif from '../assets/cat_anim/scuba.gif'
@@ -97,15 +101,11 @@ function getHeadAnchor(
 // 'both'.
 // ---------------------------------------------------------------------------
 
-const LEFT_WRIST = 15
-const RIGHT_WRIST = 16
-// Pose confidence needed before a wrist landmark is used to claim a hand.
-// Only gates the person-matching step, not the gesture itself.
-const VISIBILITY_MIN = 0.3
-// How far a hand may sit from this person's pose-tracked wrist and still
-// count as theirs, in shoulder widths — so a neighbour's hand in frame is
-// not picked up by mistake.
-const MAX_HAND_MATCH_FACTOR = 1.0
+// Pose confidence needed before a shoulder is used. Where each hand is looked
+// for (wrist, or elbow when the wrist is lost), how far from it, and which
+// person a hand belongs to when several could reach it, live in
+// scubaHands.ts.
+const VISIBILITY_MIN = ANCHOR_MIN_VIS
 
 // --- Orientation gates, both on WiLoR unit vectors in camera space ---------
 //
@@ -131,9 +131,19 @@ const UPRIGHT_MIN = 0.6
  * the test that rejects "up, down, forward or backwards". */
 const PALM_SIDE_MIN = 0.6
 
+/** Looser versions of the two gates above, applied to a side that is already
+ * mid-swing (its buffer has points) - the ACQUIRE/KEEP hysteresis the owl,
+ * bat and globe use. A hand 3-5 m away is reconstructed from a small crop, so
+ * its orientation wobbles around 0.6 and kept dropping a swing that was
+ * still going. Starting a swing still needs the full 0.6. */
+const UPRIGHT_KEEP = 0.5
+const PALM_SIDE_KEEP = 0.5
+
 /** Reject a hand the detector itself barely believes in, before its
- * orientation is trusted enough to gate a gesture on. */
-const MIN_HAND_CONF = 0.5
+ * orientation is trusted enough to gate a gesture on. Was 0.5, which threw
+ * away most hands 3-5 m from the camera: they are detected (the detector's
+ * own gate is 0.3, WILOR_DET_CONF) but typically score 0.3-0.5. */
+const MIN_HAND_CONF = 0.35
 
 // --- Motion, measured only while both gates above hold --------------------
 
@@ -156,6 +166,18 @@ const MIN_HORIZONTAL_RATIO = 0.5
 /** How long the whole gesture must hold continuously before the cat appears,
  * so a single incidental swing does not trigger it. */
 const GESTURE_CONFIRM_SEC = 0.3
+/** How long a confirmed gesture survives the swing test failing. Without it,
+ * any single failed frame dropped the cat straight out of its fade-in into
+ * 'lost', where it froze half-transparent - the faint cat fading in and out.
+ * Detection arrives at ~8-10Hz, so one bad detection fails ~6 ticks in a row. */
+const GESTURE_HOLD_SEC = 0.5
+/** How long a hand may fail the knife-hand test (or go unmatched) before its
+ * motion buffer is cleared. Nothing is buffered during the grace, so it
+ * bridges gaps without adding motion. Was 0.25 (~2 detections at 8-10Hz), but
+ * hand updates slow to ~5-7Hz with three or four people in frame (WiLoR costs
+ * ~21 ms per hand), where 0.25 s barely outlasted ONE bad update. 0.4 covers
+ * about two at that rate. */
+const KNIFE_GRACE_SEC = 0.4
 
 /** How long a lost pose is tolerated before the gesture gives up on it.
  *
@@ -193,11 +215,15 @@ function handPos(h: HandData, height: number, width: number) {
  *
  * Returns false when the vectors are missing entirely, which is what an
  * older backend sends — the cat then simply never appears, rather than an
- * absent orientation reading as some particular direction. */
-function isKnifeHand(h: HandData) {
+ * absent orientation reading as some particular direction.
+ *
+ * `keep`: this side is already mid-swing, so the looser KEEP gates apply. */
+function isKnifeHand(h: HandData, keep = false) {
   if (h.fingerAxis.length < 3 || h.palmNormal.length < 3) return false
   if (h.conf < MIN_HAND_CONF) return false
-  return Math.abs(h.fingerAxis[1]) >= UPRIGHT_MIN && Math.abs(h.palmNormal[0]) >= PALM_SIDE_MIN
+  const upright = keep ? UPRIGHT_KEEP : UPRIGHT_MIN
+  const palmSide = keep ? PALM_SIDE_KEEP : PALM_SIDE_MIN
+  return Math.abs(h.fingerAxis[1]) >= upright && Math.abs(h.palmNormal[0]) >= palmSide
 }
 
 type SwingMetrics = { ok: boolean; energy: number; osc: number; horiz: number }
@@ -236,32 +262,31 @@ function isSwinging(buffer: MotionPoint[], shoulderWidth: number): SwingMetrics 
   }
 }
 
-type Wrists = { left?: { x: number; y: number }; right?: { x: number; y: number } }
-
-/** Pairs this person's two wrists to the nearest hands, within maxDist — so a
- * hand belonging to a neighbouring person in frame is not claimed.
+/** Pairs this person's two arm anchors (wrist, or elbow when the wrist is
+ * lost - see armAnchors) to the nearest hands, each within its own radius.
+ * Hands a neighbour owns never get here: createAnimForGif.ts filters them out
+ * first (handsOwnedBy).
  *
- * Both wrists are resolved together, and a hand can only be claimed once.
+ * Both sides are resolved together, and a hand can only be claimed once.
  * Matching each side independently let a single hand win both wrists (seen
  * live: identical conf/vectors reported for left and right), which silently
  * halves the gesture's chances — one real hand occupying two slots while the
  * other hand is tracked by neither.
  */
 function matchHands(
-  wrists: Wrists,
+  anchors: ArmAnchors,
   hands: HandData[],
   height: number,
   width: number,
-  maxDist: number,
 ) {
   const pairs: { side: 'left' | 'right'; hand: HandData; d: number }[] = []
   for (const side of ['left', 'right'] as const) {
-    const wrist = wrists[side]
-    if (!wrist) continue
+    const anchor = anchors[side]
+    if (!anchor) continue
     for (const hand of hands) {
       const p = handPos(hand, height, width)
-      const d = Math.hypot(p.x - wrist.x, p.y - wrist.y)
-      if (d <= maxDist) pairs.push({ side, hand, d })
+      const d = Math.hypot(p.x - anchor.x, p.y - anchor.y)
+      if (d <= anchor.radius) pairs.push({ side, hand, d })
     }
   }
   // Closest pairing wins outright, then both that wrist and that hand are
@@ -311,7 +336,9 @@ declare global {
 const LOG_HISTORY = 120
 
 type SideDebug = {
-  wrist: boolean
+  /** what this side's hand was looked for around: its wrist, its elbow
+   * (wrist lost - see armAnchors), or nothing */
+  anchor?: 'wrist' | 'elbow'
   matched: boolean
   conf?: number
   fingerAxis?: number[]
@@ -319,20 +346,32 @@ type SideDebug = {
   upright?: boolean
   palmSide?: boolean
   buffered: number
+  /** failed the knife-hand test this frame but kept its buffer (KNIFE_GRACE_SEC) */
+  graced?: boolean
   swing?: SwingMetrics
 }
 
-let lastLog = 0
+/** One scuba instance's diagnostics. The throttle is per instance: it used
+ * to be one module-level timer shared by every instance (up to 32 with
+ * Multi-Person Tracking), so in a group the log showed whichever person
+ * happened to log first, not the one gesturing. Each line is tagged with the
+ * person's on-screen position (`@x=...` - the shoulder midpoint, in canvas
+ * pixels from the left) so it can be read back against who stood where. */
 function debugLog(
+  logState: { last: number },
+  where: number | undefined,
   handCount: number,
   torso: boolean,
   sides: Record<string, SideDebug>,
   pose?: NormalizedLandmarkList,
+  /** the confirm/hold latch's state, for telling "never confirmed" from
+   * "confirmed, then the hold ran out" */
+  gestureInfo = '',
 ) {
   if (typeof window === 'undefined') return
   const now = performance.now()
-  if (now - lastLog < 400) return
-  lastLog = now
+  if (now - logState.last < 400) return
+  logState.last = now
   const fmt = (v?: number[]) => (v ? v.map((n) => n.toFixed(2)).join(',') : '-')
   // Which way the vector mostly points, in words, so the axis labels can be
   // checked against what the hand is physically doing. If this disagrees with
@@ -346,7 +385,7 @@ function debugLog(
     return z > 0 ? 'CAMERA(+z)' : 'CAMERA(-z)'
   }
   const line = (name: string, d: SideDebug) =>
-    `${name}: wrist=${d.wrist} matched=${d.matched}` +
+    `${name}: anchor=${d.anchor ?? 'none'} matched=${d.matched}` +
     (d.matched
       ? ` conf=${d.conf?.toFixed(2)}` +
         ` fingersPoint=${dir(d.fingerAxis)} palmFaces=${dir(d.palmNormal)}` +
@@ -354,6 +393,7 @@ function debugLog(
         ` upright=${d.upright}(|fy|>=${UPRIGHT_MIN}) palmSide=${d.palmSide}(|nx|>=${PALM_SIDE_MIN})`
       : '') +
     ` buf=${d.buffered}` +
+    (d.graced ? ' (graced)' : '') +
     (d.swing
       ? ` swing=${d.swing.ok} energy=${d.swing.energy.toFixed(2)}/${MOTION_ENERGY_FACTOR}` +
         ` osc=${d.swing.osc.toFixed(2)}/${MIN_OSCILLATION_RATIO}` +
@@ -367,7 +407,9 @@ function debugLog(
   }
   const poseInfo = `pose=${pose?.length ?? 0} shoulderVis=[${vis(11)},${vis(12)}]/${VISIBILITY_MIN}`
   const text =
-    `[scuba] hands=${handCount} torso=${torso} ${poseInfo}` +
+    `[scuba @x=${where === undefined ? '?' : Math.round(where)}] ` +
+    `hands=${handCount} torso=${torso} ${poseInfo}` +
+    (gestureInfo ? ` ${gestureInfo}` : '') +
     (Object.keys(sides).length
       ? '\n  ' + Object.entries(sides).map(([n, d]) => line(n, d)).join('\n  ')
       : '')
@@ -430,14 +472,18 @@ export async function createScubaAnim(
     size: new KalmanFilter(KF_PARAMS),
   }
   const buffers: Record<'left' | 'right', MotionPoint[]> = { left: [], right: [] }
+  /** last time each side passed isKnifeHand - see KNIFE_GRACE_SEC */
+  const lastKnifeAt: Record<'left' | 'right', number> = { left: -Infinity, right: -Infinity }
   let elapsed = 0
-  let confirmTimer = 0
+  const gesture = createLatch()
   const animManager = new AnimStateManager()
 
   let targetX = 0
   let targetY = 0
   let scubaSize = 150
-  let lastPose: { torso: Torso; wrists: Wrists; at: number } | undefined
+  let lastPose: { torso: Torso; anchors: ArmAnchors; at: number } | undefined
+  /** this instance's own log throttle - see debugLog */
+  const logState = { last: 0 }
 
   const update = (pose: NormalizedLandmarkList, hands: HandData[]) => {
     const deltaSec = ticker.deltaMS / 1000
@@ -445,16 +491,9 @@ export async function createScubaAnim(
 
     const freshTorso = getTorso(pose, height, width)
     if (freshTorso) {
-      const visible = (lm?: NormalizedLandmarkList[number]) =>
-        !!lm && (lm.visibility ?? 1) >= VISIBILITY_MIN
-      const leftLm = pose[LEFT_WRIST]
-      const rightLm = pose[RIGHT_WRIST]
       lastPose = {
         torso: freshTorso,
-        wrists: {
-          left: visible(leftLm) ? convertPoint(leftLm, height, width) : undefined,
-          right: visible(rightLm) ? convertPoint(rightLm, height, width) : undefined,
-        },
+        anchors: armAnchors(pose, height, width, freshTorso.shoulderWidth),
         at: elapsed,
       }
     }
@@ -467,14 +506,13 @@ export async function createScubaAnim(
 
     if (recent) {
       const torso = recent.torso
-      const wrists = recent.wrists
-      const maxMatch = torso.shoulderWidth * MAX_HAND_MATCH_FACTOR
+      const anchors = recent.anchors
 
-      const matched = matchHands(wrists, hands, height, width, maxMatch)
+      const matched = matchHands(anchors, hands, height, width)
       const dbg: Record<string, SideDebug> = {}
       for (const side of ['left', 'right'] as const) {
         const hand = matched[side]
-        const d: SideDebug = { wrist: !!wrists[side], matched: !!hand, buffered: 0 }
+        const d: SideDebug = { anchor: anchors[side]?.src, matched: !!hand, buffered: 0 }
         if (hand) {
           d.conf = hand.conf
           d.fingerAxis = hand.fingerAxis
@@ -482,19 +520,26 @@ export async function createScubaAnim(
           d.upright = Math.abs(hand.fingerAxis[1] ?? 0) >= UPRIGHT_MIN
           d.palmSide = Math.abs(hand.palmNormal[0] ?? 0) >= PALM_SIDE_MIN
         }
-        // Losing the orientation for even one frame clears the buffer, so the
-        // palm has to STAY facing left/right across the whole swing rather
-        // than passing through that pose on the way to something else. This
-        // is what enforces the "while palm still faces left or right" half of
-        // the gesture; without it a hand rolling over mid-wave would still
-        // accumulate path length and trigger.
-        if (!hand || !isKnifeHand(hand)) {
-          buffers[side] = []
+        // Losing the orientation for longer than KNIFE_GRACE_SEC clears the
+        // buffer, so the palm has to STAY facing left/right across the whole
+        // swing rather than passing through that pose on the way to something
+        // else. This is what enforces the "while palm still faces left or
+        // right" half of the gesture; without it a hand rolling over mid-wave
+        // would still accumulate path length and trigger. The grace only
+        // forgives a couple of bad detections - it was zero, and one noisy
+        // frame threw the whole swing away.
+        // KEEP gates once this side is mid-swing - see UPRIGHT_KEEP.
+        if (!hand || !isKnifeHand(hand, buffers[side].length > 0)) {
+          if (elapsed - lastKnifeAt[side] > KNIFE_GRACE_SEC) buffers[side] = []
+          else d.graced = buffers[side].length > 0
         } else {
+          lastKnifeAt[side] = elapsed
           const p = handPos(hand, height, width)
           buffers[side].push({ t: elapsed, x: p.x, y: p.y })
-          buffers[side] = buffers[side].filter((s) => elapsed - s.t <= SHAKE_WINDOW_SEC)
         }
+        // Aged out even through a grace, or a bridged gap could keep stale
+        // points inside the window.
+        buffers[side] = buffers[side].filter((s) => elapsed - s.t <= SHAKE_WINDOW_SEC)
         d.buffered = buffers[side].length
         dbg[side] = d
       }
@@ -503,10 +548,18 @@ export async function createScubaAnim(
       const swingRight = isSwinging(buffers.right, torso.shoulderWidth)
       dbg['left'].swing = swingLeft
       dbg['right'].swing = swingRight
-      debugLog(hands.length, true, dbg, pose)
 
-      confirmTimer = swingLeft.ok || swingRight.ok ? confirmTimer + deltaSec : 0
-      gestureActive = confirmTimer >= GESTURE_CONFIRM_SEC
+      // Confirming still takes GESTURE_CONFIRM_SEC of unbroken swinging; once
+      // confirmed it holds through GESTURE_HOLD_SEC of failures.
+      gestureActive = stepLatch(gesture, swingLeft.ok || swingRight.ok, deltaSec, {
+        confirmS: GESTURE_CONFIRM_SEC,
+        holdS: GESTURE_HOLD_SEC,
+      })
+      debugLog(
+        logState, torso.center.x, hands.length, true, dbg, pose,
+        `gesture=${gesture.on} confirm=${gesture.confirm.toFixed(2)}/${GESTURE_CONFIRM_SEC}` +
+        ` hold=${gesture.hold.toFixed(2)}`,
+      )
 
       // Only on a genuinely fresh pose: re-filtering a stale head position
       // every frame would feed the Kalman filters the same sample repeatedly
@@ -525,8 +578,8 @@ export async function createScubaAnim(
       // AnimStateManager's own RETRACK window covers brief dropouts below.
       buffers.left = []
       buffers.right = []
-      confirmTimer = 0
-      debugLog(hands.length, false, {}, pose)
+      resetLatch(gesture)
+      debugLog(logState, undefined, hands.length, false, {}, pose)
     }
 
     // Outside the torso branch on purpose: the point of the override is to
