@@ -14,6 +14,7 @@ import {
   resetLatch,
   stepLatch,
 } from './globePose'
+import { orbitAlpha, stepOrbitAngle } from './globeOrbit'
 
 import globeGif from '../assets/globe_anim/globe.gif'
 
@@ -24,7 +25,6 @@ const ANIM = {
 
 const KF_PARAMS = { R: 0.03, Q: 2 }
 const HAND_KF_PARAMS = { R: 0.02, Q: 3 }
-const ORBIT_SPEED = 0.8
 const ORBIT_RADIUS_FACTOR = 0.9
 const ORBIT_Y_SQUISH = 0.5
 
@@ -38,19 +38,9 @@ const ORBIT_Y_SQUISH = 0.5
 // as a loop through depth rather than a flat arc across the body.
 const DEPTH_SCALE = 0.25
 
-// Depth at which the globe has faded out completely. It starts fading as it
-// crosses the side of the body (depth 0), is fully gone by this much depth,
-// and stays gone across the deepest part of the pass before easing back in
-// on the other side.
-//
-// There's no person-segmentation mask in this pipeline, so "behind the body"
-// has to be sold with opacity rather than real occlusion. This replaced a
-// hard cut at a fixed angle followed by a timed absence, which read as the
-// globe blinking out rather than travelling anywhere. At the default orbit
-// speed the globe is fully hidden for roughly 2.5s with about 0.7s of fade
-// at each end — raise this to shorten the hidden stretch and lengthen the
-// fades, lower it for the reverse.
-const BEHIND_FADE_DEPTH = 0.55
+// The orbit's speed, its fade behind the body (BEHIND_FADE_DEPTH) and how
+// much faster it travels while hidden (BEHIND_SPEED_BOOST - the knob for how
+// long the globe is gone between passes) live in globeOrbit.ts.
 const BOB_SPEED = 2.5
 const BOB_AMPLITUDE = 0.08
 
@@ -178,7 +168,7 @@ export async function createGlobeAnim(
   const debugLog = createArmDebugLogger('globe')
 
   const advanceOrbit = (dt: number) => {
-    orbitAngle = (orbitAngle + dt * ORBIT_SPEED) % (Math.PI * 2)
+    orbitAngle = stepOrbitAngle(orbitAngle, dt)
   }
 
   /** Where the globe sits, how big it is and how solid it looks at the
@@ -192,11 +182,7 @@ export async function createGlobeAnim(
       torsoY + depth * orbitR * ORBIT_Y_SQUISH + bobOffset,
       size, bounds,
     )
-    // Smoothstep over the clamped ramp: a bare linear fade leaves a visible
-    // corner where it meets full opacity and full transparency, which is the
-    // same kind of abruptness this is meant to get rid of.
-    const t = lerpLinear(depth, -BEHIND_FADE_DEPTH, 0)
-    return { x: p.x, y: p.y, size, alpha: smoothstep(t) }
+    return { x: p.x, y: p.y, size, alpha: orbitAlpha(orbitAngle) }
   }
 
   /** The orbit frame blended toward the held-between-hands frame by
