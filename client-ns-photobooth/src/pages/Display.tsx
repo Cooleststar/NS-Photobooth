@@ -82,7 +82,8 @@ import {
 // Every AnimPicker character now has a code except 67 (sixseven), which is
 // deliberately left out: it is hand-driven and needs BOTH of a person's
 // palms, so it has nothing to do with the single-person lock this pattern is
-// built around. OC Fusion used to be excluded for the same reason, but it
+// built around. The Caped Cat also has none yet - not for any structural
+// reason; adding one is a single QR_CHARACTERS entry like the bat's. OC Fusion used to be excluded for the same reason, but it
 // was reworked into a face-anchored character (see anim/ocfusion.ts) and now
 // fits. Scuba keeps its own gesture trigger on top of the lock — the code
 // picks who it belongs to, the gesture still decides when it shows.
@@ -117,12 +118,12 @@ const QR_CHARACTERS: { payload: string; gif: GifOption; locked: typeof qrOwlLock
 // be rejected as "clearly not it."
 const QR_LOCK_MAX_DIST_FRACTION = 0.25
 
-const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>, string> = {}
+const GIF_URLS: Record<Exclude<GifOption, 'owl' | 'bat' | 'capecat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>, string> = {}
 
 /** Pose/hand-anchored characters (follow a tracked person) — everything else
  * in GIF_OPTIONS (besides 'none') is a fixed corner-prop type. */
 const CHARACTER_OPTIONS = new Set<GifOption>([
-  'owl', 'bat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
+  'owl', 'bat', 'capecat', 'globe', 'drone', 'scuba', 'ocfusion', 'pignose', 'batears',
   'clownwignose', 'sunglasses', 'mustache', 'sixseven', 'boxglove',
 ])
 
@@ -140,6 +141,7 @@ const DETECTION_MODE_BY_GIF: Record<GifOption, 'pose' | 'hands' | 'none' | 'both
   none: 'none',
   owl: 'pose',
   bat: 'pose',
+  capecat: 'pose',
   globe: 'pose',
   drone: 'hands',
   scuba: 'both',
@@ -1283,7 +1285,7 @@ export default function Display({
             }
             animGroups.push({ instances, assign: createSlotAssigner<NormalizedLandmarkList>(instances.length, SLOT_HOLD_MS) })
           } else {
-            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>]
+            const animUrl = GIF_URLS[option as Exclude<GifOption, 'owl' | 'bat' | 'capecat' | 'globe' | 'drone' | 'scuba' | 'ocfusion' | 'pignose' | 'batears' | 'clownwignose' | 'sunglasses' | 'mustache' | 'sixseven' | 'boxglove' | 'none'>]
             // A stale option can still be sitting in the persisted
             // selectedGifs from before a character was removed from
             // GIF_OPTIONS (e.g. localStorage from an older session) — that's

@@ -5,6 +5,7 @@ import { GifOption } from '../store'
 
 import { createBatAnim } from './bat'
 import { createBatEarsAnim } from './batears'
+import { createCapeCatAnim } from './capecat'
 import { createBoxGloveAnim } from './boxglove'
 import { createClownWigNoseAnim } from './clownwignose'
 import { createDroneAnim } from './drone'
@@ -56,6 +57,8 @@ export async function createAnimForGif(
     return await createOwlAnim(app)
   } else if (option === 'bat') {
     return await createBatAnim(app)
+  } else if (option === 'capecat') {
+    return await createCapeCatAnim(app)
   } else if (option === 'globe') {
     return await createGlobeAnim(app, marginOpts)
   } else if (option === 'drone') {

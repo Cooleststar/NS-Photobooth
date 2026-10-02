@@ -16,6 +16,8 @@ import {
 // plain PNG (see the animation's own asset folder for the source gif).
 import owlThumb from '../assets/owl_anim/owl_thumb.png'
 import batThumb from '../assets/Bat_anim/Bat_rest.png'
+// Frame 0 of Bat_rest2.gif, cut from _bat_rest2_sheet_small.png's top-left cell.
+import capeCatThumb from '../assets/Bat_anim/capecat_thumb.png'
 import globeThumb from '../assets/globe_anim/globe_thumb.png'
 import droneThumb from '../assets/drone_anim/drone_thumb.png'
 import scubaThumb from '../assets/cat_anim/scuba_thumb.png'
@@ -34,6 +36,7 @@ const THUMBS: Partial<Record<GifOption, string>> = {
   bat: batThumb,
   globe: globeThumb,
   drone: droneThumb,
+  capecat: capeCatThumb,
   scuba: scubaThumb,
   pignose: pigNoseThumb,
   batears: batEarsThumb,
@@ -91,7 +94,10 @@ export function AnimPicker() {
                 selectedGifs.set([...current, option])
               }
             }}
-            tw='w-14 h-14 rounded-lg overflow-hidden border-2 flex items-center justify-center bg-gray-300 transition-all duration-150 disabled:(opacity-25 cursor-not-allowed)'
+            // 56px from 1024px wide up (the booth display), 44px below: 14
+            // buttons need 888px at 56 and only 720px at 44, so the row stays
+            // on one line down to ~760px instead of wrapping below ~935px.
+            tw='w-11 h-11 lg:(w-14 h-14) rounded-lg overflow-hidden border-2 flex items-center justify-center bg-gray-300 transition-all duration-150 disabled:(opacity-25 cursor-not-allowed)'
             css={
               active
                 ? tw`border-blue-500 opacity-100`

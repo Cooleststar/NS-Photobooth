@@ -24,6 +24,7 @@ export const GIF_OPTIONS = {
   bat: 'Bat',
   globe: 'Globe',
   drone: 'Drone',
+  capecat: 'Caped Cat',
   scuba: 'Scuba',
   ocfusion: 'OC Fusion',
   pignose: 'Pig Nose & Ears',
@@ -103,10 +104,12 @@ export const MAX_SELECTED = 5
 
 /** Sets of characters that cannot be active together.
  *
- * owl + bat: both perch on the forearm, between elbow and wrist, on the same
- * tracked arm — see calculateArmFromPose in api/nicepipe/mpPose. Selecting
- * both puts two creatures in one spot, overlapping and fighting for the same
- * few pixels rather than reading as two characters.
+ * owl + bat + capecat: all perch on the forearm, between elbow and wrist, on
+ * the same tracked arm — see calculateArmFromPose in api/nicepipe/mpPose (owl)
+ * and getForearmTarget in anim/batArm (bat, and the caped cat, which reuses
+ * the bat's gate outright). Selecting two puts two creatures in one spot,
+ * overlapping and fighting for the same few pixels rather than reading as two
+ * characters.
  *
  * drone + sixseven: both trigger on the same palm-to-the-sky gesture, so
  * selecting both spawns a drone and a number on every one of the same palms,
@@ -144,7 +147,7 @@ export const MAX_SELECTED = 5
  *
  * Add further groups here; nothing else needs changing. */
 export const EXCLUSIVE_GROUPS: readonly (readonly GifOption[])[] = [
-  ['owl', 'bat'],
+  ['owl', 'bat', 'capecat'],
   ['drone', 'sixseven'],
   ['scuba', 'boxglove'],
 ]

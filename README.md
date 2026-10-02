@@ -13,7 +13,7 @@ An interactive photobooth application for events. It captures photos via a webca
 ## Features
 
 - **Camera selection page** — choose a preset RTSP IP camera, enter a custom RTSP URL, or use a local USB/built-in webcam
-- **Pose- and hand-reactive animations** — Owl, Bat, Globe, Drone, Scuba, OC Fusion, Pig Nose & Ears, Bat Ears, Clown Wig & Nose, Sunglasses, Mustache, and 67, all toggleable from an on-screen picker (up to 5 at once — see [`booth-field-guide.md`](booth-field-guide.md) for which pairs can't be combined and why)
+- **Pose- and hand-reactive animations** — Owl, Bat, Caped Cat, Globe, Drone, Scuba, OC Fusion, Pig Nose & Ears, Bat Ears, Clown Wig & Nose, Sunglasses, Mustache, and 67, all toggleable from an on-screen picker (up to 5 at once — see [`booth-field-guide.md`](booth-field-guide.md) for which pairs can't be combined and why)
 - **QR Code Mode** — an alternate mode where a guest holds up a physical QR card instead of using the picker; the matching character locks onto them
 - **67 Mode** — a standalone 20-second arm-waving minigame with name entry and a persisted leaderboard, swapping out the normal capture flow entirely
 - **Photo capture flow** — single shots or Burst Mode (3 shots into one strip), countdown timer, confirm/cancel preview, automatic save
@@ -249,7 +249,7 @@ A camera on HDMI capture or USB is a **local webcam** to the booth, not RTSP. It
 
 - **HDMI Info Display: Off** on the camera, so focus boxes and settings text do not end up in the feed.
 - **Shutter speed 1/250 or faster** (S or M mode; raise ISO to compensate). Slower shutters blur moving hands and arms. Scuba is a swinging gesture and suffers most.
-- **Frame the guest down to the hips.** The Bat needs a tracked hip to appear.
+- **Frame the guest down to the hips.** The Bat and the Caped Cat need a tracked hip to appear.
 - **Capture card at MJPEG 1080p30.** Open the browser console and look for `Camera stream actual resolution: … @ … fps`. Some cards fall back to ~5 fps at 1080p.
 - **Detection Resolution** (Settings) sets the width of the frames sent for detection (1280 by default). Their height follows the camera's own aspect ratio automatically, and the console logs `Detection frames sent at …`.
 
@@ -266,8 +266,8 @@ The Scuba cat reads a swinging, edge-on hand, and a hand 3–5 m away is only a 
 
 | Command | What it does |
 |---|---|
-| `window.ARM_DEBUG = true` | Prints the Owl/Bat arm checks live: state, locked arm, and which gate failed per side (e.g. `vis=0.42`, `angle=38`, `hipVis=0.10`, `away=135`) |
-| `copy(armDump())` | Copies the recorded Owl/Bat history (kept even with `ARM_DEBUG` off) |
+| `window.ARM_DEBUG = true` | Prints the Owl/Bat/Caped Cat arm checks live: state, locked arm, and which gate failed per side (e.g. `vis=0.42`, `angle=38`, `hipVis=0.10`, `away=135`) |
+| `copy(armDump())` | Copies the recorded Owl/Bat/Caped Cat history (kept even with `ARM_DEBUG` off) |
 | `window.SCUBA_DEBUG = true` / `copy(scubaDump())` | The same for the Scuba gesture. Each line is tagged `[scuba @x=…]` with that person's on-screen position (pixels from the left), so in a group you can tell whose line is whose. `anchor=wrist/elbow/none` shows what their hand was looked for around. |
 | `window.SCUBA_FORCE = true` | Shows the cat without the gesture, which proves it can render |
 
