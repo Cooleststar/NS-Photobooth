@@ -106,8 +106,8 @@ export const MAX_SELECTED = 5
  *
  * owl + bat + capecat: all perch on the forearm, between elbow and wrist, on
  * the same tracked arm — see calculateArmFromPose in api/nicepipe/mpPose (owl)
- * and getForearmTarget in anim/batArm (bat, and the caped cat, which reuses
- * the bat's gate outright). Selecting two puts two creatures in one spot,
+ * and getForearmTarget in anim/batArm (bat, and the caped cat, which runs
+ * the same check with looser gates). Selecting two puts two creatures in one spot,
  * overlapping and fighting for the same few pixels rather than reading as two
  * characters.
  *

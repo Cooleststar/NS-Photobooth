@@ -35,9 +35,11 @@ export function runFrame(t: number, duration: number): RunFrame {
   // |sin| gives RUN_HOPS arches over the run; zero at both ends.
   const arch = Math.abs(Math.sin(Math.PI * RUN_HOPS * linear))
   const hop = arch * HOP_HEIGHT * (1 - linear)
-  // Only near each touchdown (arch close to 0), and not at the very end of
-  // the run - the arrival has its own settle in capecat.ts.
+  // Only near each touchdown (arch close to 0). Not at take-off - the cat
+  // starts from standing, and a crouch there pops for a frame or two, which
+  // shows when it runs off the arm - and tapering to nothing at the end, so
+  // it hands over without a jump to the arrival settle in capecat.ts.
   const contact = Math.max(0, 1 - arch * 4)
-  const squash = linear < 1 ? SQUASH * contact * (1 - linear * 0.5) : 0
+  const squash = linear > 0.5 / RUN_HOPS ? SQUASH * contact * (1 - linear ** 2) : 0
   return { progress, hop, squash }
 }

@@ -34,10 +34,43 @@ export const FOREARM_LAND_RATIO = 0.75
  * image instead (people at a booth stand upright), so the away-from-body test
  * still runs — an arm lowered to the side still sends the bat away. That
  * fallback is KEEP-only; a fresh arm still needs a tracked hip. */
-export const BAT_ARM_GATES = {
+export interface ArmGate {
+  minVis: number
+  hipMinVis: number
+  maxStraightDeg: number
+  awayMinDeg: number
+  awayMaxDeg: number
+  /** Qualify without a tracked hip, taking the torso as straight down the
+   * image. Always on for KEEP; opt-in for ACQUIRE. */
+  hipOptional?: boolean
+}
+export interface ArmGates {
+  ACQUIRE: ArmGate
+  KEEP: ArmGate
+}
+
+export const BAT_ARM_GATES: ArmGates = {
   ACQUIRE: { minVis: 0.35, hipMinVis: 0.35, maxStraightDeg: 40, awayMinDeg: 70, awayMaxDeg: 120 },
   KEEP: { minVis: 0.25, hipMinVis: 0.25, maxStraightDeg: 50, awayMinDeg: 60, awayMaxDeg: 130 },
-} as const
+}
+
+/** The caped cat's gate: the same test as the bat's, made much easier to
+ * trigger on request (the bat's never fired for it in practice). No tracked
+ * hip needed even to acquire - at booth range the hips are often out of frame
+ * or barely visible - a loosely bent arm counts, and anything from halfway
+ * down (45) to well above horizontal (150) counts as "held out". An arm
+ * hanging at the side (~0-20) still doesn't, so it won't appear unasked. */
+export const CAPECAT_ARM_GATES: ArmGates = {
+  ACQUIRE: {
+    minVis: 0.25,
+    hipMinVis: 0.25,
+    hipOptional: true,
+    maxStraightDeg: 60,
+    awayMinDeg: 45,
+    awayMaxDeg: 150,
+  },
+  KEEP: { minVis: 0.2, hipMinVis: 0.2, maxStraightDeg: 75, awayMinDeg: 35, awayMaxDeg: 165 },
+}
 
 export type BatArmSide = 'left' | 'right'
 export type BatArmTarget = { x: number; y: number; side: BatArmSide; vis: number }
@@ -54,8 +87,9 @@ export function checkBatArm(
   width: number,
   side: BatArmSide,
   keep = false,
+  gates: ArmGates = BAT_ARM_GATES,
 ): BatArmCheck {
-  const gate = keep ? BAT_ARM_GATES.KEEP : BAT_ARM_GATES.ACQUIRE
+  const gate = keep ? gates.KEEP : gates.ACQUIRE
   const useLeft = side === 'left'
   const s = pose[useLeft ? 11 : 12]
   const e = pose[useLeft ? 13 : 14]
@@ -66,7 +100,7 @@ export function checkBatArm(
   if (vis < gate.minVis) return { ok: false, reason: `vis=${vis.toFixed(2)}` }
   const hipVis = h?.visibility ?? 0
   const hipOk = !!h && hipVis >= gate.hipMinVis
-  if (!hipOk && !keep) return { ok: false, reason: `hipVis=${hipVis.toFixed(2)}` }
+  if (!hipOk && !keep && !gate.hipOptional) return { ok: false, reason: `hipVis=${hipVis.toFixed(2)}` }
 
   const shoulder = convertPoint(s, height, width)
   const elbow = convertPoint(e, height, width)
@@ -135,20 +169,22 @@ export function checkBatArm(
  * first landed on. Only falls back to confidence-based picking (against
  * ACQUIRE) once the locked side actually stops qualifying.
  *
- * `diag`, if given, is filled with each side's gate outcome for armDebug. */
+ * `diag`, if given, is filled with each side's gate outcome for armDebug.
+ * `gates` defaults to the bat's; the caped cat passes its own, looser set. */
 export function getForearmTarget(
   pose: NormalizedLandmarkList,
   height: number,
   width: number,
   lockedSide?: BatArmSide,
   diag?: Partial<Record<BatArmSide, string>>,
+  gates: ArmGates = BAT_ARM_GATES,
 ): BatArmTarget | undefined {
   if (pose.length === 0) {
     if (diag) diag.left = diag.right = 'noPose'
     return undefined
   }
   const evaluate = (side: BatArmSide, keep: boolean) => {
-    const r = checkBatArm(pose, height, width, side, keep)
+    const r = checkBatArm(pose, height, width, side, keep, gates)
     if (diag) diag[side] = r.ok ? 'ok' : r.reason
     return r.ok ? r.target : undefined
   }

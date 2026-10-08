@@ -2,7 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { NormalizedLandmark, NormalizedLandmarkList } from '../api/landmarks'
-import { BatArmSide, FOREARM_LAND_RATIO, getForearmTarget } from './batArm'
+import { BatArmSide, CAPECAT_ARM_GATES, FOREARM_LAND_RATIO, getForearmTarget } from './batArm'
 
 const W = 1920
 const H = 1080
@@ -105,5 +105,22 @@ describe('getForearmTarget (bat)', () => {
     const both = pose({ vis: 0.6 }, { vis: 0.95 })
     assert.equal(target(both).t?.side, 'right')
     assert.equal(target(both, 'left').t?.side, 'left')
+  })
+})
+
+describe('getForearmTarget (caped cat gates)', () => {
+  const cat = (p: NormalizedLandmarkList, locked?: BatArmSide) =>
+    getForearmTarget(p, H, W, locked, undefined, CAPECAT_ARM_GATES)
+
+  it('acquires arms the bat rejects', () => {
+    // no tracked hip, a loose bend, held low or high
+    for (const spec of [{ hipVis: 0 }, { bend: 55 }, { away: 50 }, { away: 145 }, { vis: 0.28 }]) {
+      assert.equal(target(pose(spec)).t, undefined, JSON.stringify(spec))
+      assert.equal(cat(pose(spec))?.side, 'left', JSON.stringify(spec))
+    }
+  })
+
+  it('still ignores an arm hanging at the side', () => {
+    assert.equal(cat(pose({ away: 10 })), undefined)
   })
 })

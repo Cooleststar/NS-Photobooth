@@ -50,6 +50,13 @@ describe('caped cat run', () => {
     assert.equal(runFrame(D, D).squash, 0)
   })
 
+  it('takes off without a crouch and lands without a jump in squash', () => {
+    assert.equal(runFrame(0, D).squash, 0)
+    assert.equal(runFrame(D / 100, D).squash, 0)
+    // Into the end of the run the squash fades out rather than cutting to 0.
+    assert.ok(runFrame(D * 0.999, D).squash < SQUASH * 0.01)
+  })
+
   it('handles a zero-length run as already arrived', () => {
     assert.deepEqual(runFrame(0, 0), { progress: 1, hop: 0, squash: 0 })
   })
