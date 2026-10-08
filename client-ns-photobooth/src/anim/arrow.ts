@@ -33,10 +33,6 @@ const ANIM = {
   FADE: parseFloat(import.meta.env.VITE_ANIM_FADE),
 }
 
-// Was Q: 5. The arrow tracks a head, which moves slowly and smoothly, so it
-// wants the steady end of the range rather than the responsive one.
-const KF_PARAMS = { R: 0.02, Q: 1.5 }
-
 // MP-33 landmarks.
 const NOSE = 0
 const LEFT_EAR = 7

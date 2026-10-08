@@ -142,7 +142,7 @@ async function createHandDrone(
   bobAmplitude: number,
   bounds: FeedBounds,
 ) {
-  const { height, width } = app.renderer
+  const { height } = app.renderer
   const { ticker, loader } = app
 
   const container = new PIXI.Container()

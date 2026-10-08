@@ -153,7 +153,6 @@ _COCO_WRISTS = (9, 10)
 # (see the dizzy stars there); nothing else needs body pose, which is why this
 # stays inside the hand worker rather than turning on the main YOLO+ViTPose
 # pipeline for a hands-only character.
-_COCO_NOSE = 0
 _COCO_EYES = (1, 2)
 _COCO_EARS = (3, 4)
 _HEAD_MIN_CONF = 0.3

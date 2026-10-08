@@ -2676,11 +2676,6 @@ async def qr_debug_handler(request: web.Request) -> web.Response:
     }, headers=_CORS)
 
 
-async def gallery_client_handler(request: web.Request) -> web.Response:
-    html_path = pathlib.Path(__file__).parent / 'gallery.html'
-    return web.FileResponse(html_path)
-
-
 async def list_photos_handler(request: web.Request) -> web.Response:
     photos_dir = pathlib.Path('./photos')
     if not photos_dir.exists():
@@ -3094,7 +3089,6 @@ def make_http_app() -> web.Application:
     app.router.add_post('/photos/{filename}/reupload', reupload_photo_handler)
     app.router.add_delete('/photos/{filename}', delete_photo_handler)
     app.router.add_get('/photos/{filename}/strips', fetch_strips_handler)
-    app.router.add_get('/gallery', gallery_client_handler)
     app.router.add_get('/replay/check', replay_check_handler)
     app.router.add_post('/replay/upload', replay_upload_handler)
     app.router.add_post('/testing/analyze', testing_analyze_handler)

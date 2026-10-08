@@ -16,7 +16,6 @@ const opts = {
 // aka its only acceptable for top-level components like pages or settings
 
 export const debugEnabled = persistentAtom('debugEnabled', false, opts)
-export const owlEnabled = persistentAtom('owlEnabled', true, opts)
 
 export const GIF_OPTIONS = {
   none: 'No animation',
@@ -474,8 +473,6 @@ export const detectionCamSize = persistentAtom(
   },
   opts,
 )
-
-export const enableRTC = atom(false)
 
 export const nicepipeURL = persistentAtom<string>(
   'nicepipeURL',

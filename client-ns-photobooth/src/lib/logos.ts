@@ -28,15 +28,3 @@ export const LOGO_URLS = {
 } as const
 
 export type LogoKey = keyof typeof LOGO_URLS
-
-/** Human labels, shared by both dropdowns. 'none' is not a file, so it is not
- * in LOGO_URLS - each slot handles it by drawing nothing. */
-export const LOGO_LABELS: Record<LogoKey, string> = {
-  '11': '11',
-  fusion: 'Fusion',
-  atlas: 'Atlas',
-  boreas: 'Boreas',
-  hq: 'HQ',
-  rsta: 'RSTA',
-  signal: 'Signal',
-}

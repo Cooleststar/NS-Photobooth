@@ -111,11 +111,3 @@ export type Analysis = {
    * show a "delay" metric (how stale the detection data currently in use is) */
   lastUpdateTs?: number
 }
-
-export type FrameEvent = {
-  img: string
-  data: Analysis
-}
-
-/** TODO: nicepipe WebRTC API */
-export type NiceRTCEvent = {}

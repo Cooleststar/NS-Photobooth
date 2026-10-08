@@ -54,7 +54,6 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY main.py .
-COPY gallery.html .
 COPY botsort_photobooth.yaml .
 
 # Hand detection. wilor_src is the vendored model source (718 KB); without it
