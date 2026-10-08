@@ -343,6 +343,7 @@ Compiles the tests and runs them with Node's built-in test runner. No extra pack
 
 - [**NS Photobooth Guide.pdf**](NS%20Photobooth%20Guide.pdf): the setup and run guide, covering usage, how pose detection works, and troubleshooting
 - [`client-ns-photobooth/boothfieldguide.docx`](client-ns-photobooth/boothfieldguide.docx): field guide for running the booth at an event (`boothfieldguide_with_evidence.docx` alongside it is the version with supporting evidence)
+- [`RTSPinfo.md`](RTSPinfo.md): how the RTSP camera feed reaches the screen with near-zero latency, for anyone debugging or changing the camera pipeline
 - [`backend/replay_videos/README.md`](backend/replay_videos/README.md): adding test videos for the replay camera source
 
 ---

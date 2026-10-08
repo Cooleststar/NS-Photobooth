@@ -79,7 +79,7 @@ Three threads access the frame simultaneously:
 
 - **FFmpeg thread** writes new frames (exclusive write lock)
 - **Encode thread** reads the frame to produce JPEG (shared read lock)
-- **Pose detection** reads the frame for MediaPipe (shared read lock)
+- **Pose detection** reads the frame for YOLO/ViTPose (shared read lock)
 
 The `RWLock` lets multiple readers work at the same time but blocks the writer
 until all readers finish. This prevents a half-written frame from being read
@@ -111,7 +111,9 @@ When the user clicks Start with a Hikvision camera selected, the backend
 automatically configures the camera via its ISAPI REST API:
 
 - **H.264 Baseline profile** — no B-frames, eliminates decode reordering
-- **GOP length = 1** — every frame is an I-frame, independently decodable
+- **GOP length = 10** — a keyframe every 0.4 s at 25 fps. GOP 1 (every frame a
+  keyframe) was tried first, but the camera's bitrate cap made the video grainy;
+  10 still refreshes far faster than the camera's ~1 s default (`_GOP_LENGTH`)
 
 This runs best-effort; if the camera doesn't respond, startup proceeds anyway.
 
@@ -149,7 +151,7 @@ Ports were moved from the defaults to avoid conflicts with other Docker services
 
 ```
 Hikvision camera
-  │  H.264 Baseline, GOP=1 (auto-configured)
+  │  H.264 Baseline, GOP=10 (auto-configured)
   │  Main stream /Streaming/Channels/101
   │
   ▼  RTSP/TCP
