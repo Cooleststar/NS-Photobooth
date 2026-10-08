@@ -85,3 +85,6 @@ backend/replay_videos/*
 # composite project (tsconfig.node.json); derived, machine-local, and
 # invalidated by any differing node_modules, so it is never worth sharing.
 *.tsbuildinfo
+
+# Office lock files ("~$name.docx"), created while a document is open.
+~$*
