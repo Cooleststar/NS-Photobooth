@@ -88,3 +88,6 @@ backend/replay_videos/*
 
 # Office lock files ("~$name.docx"), created while a document is open.
 ~$*
+
+# Internal notes on the RTSP camera pipeline - kept locally, not published.
+RTSPinfo.md
