@@ -123,7 +123,7 @@ yarn install
 cd ..
 
 copy client-ns-photobooth\.env.example client-ns-photobooth\.env
-# optional, for photo uploads: set VITE_IMGBB_API_KEY in client-ns-photobooth\.env
+# optional, for photo uploads: set VITE_IMGBB_API_KEY in client-ns-photobooth\.env, or enter the key later in Settings
 
 py -3.11 -m venv venv
 venv\Scripts\Activate.ps1
@@ -171,7 +171,7 @@ Open [http://localhost:3000](http://localhost:3000) for the booth and [http://lo
 
 | Section | What's there |
 |---|---|
-| Connection | **Disable Online Features**: on by default; turn off to upload photos and show QR codes |
+| Connection | **Disable Online Features**: on by default; turn off to upload photos and show QR codes. **ImgBB API Key**: paste your key and press Save (free key at [api.imgbb.com](https://api.imgbb.com/)) |
 | Display | Canvas size, camera size, and (local webcam only) detection resolution |
 | Camera | Mirror horizontally / flip upside down, for cameras mounted that way |
 | Capture | Countdown length, Burst Mode, photos per burst, interval between shots |

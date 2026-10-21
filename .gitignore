@@ -91,3 +91,6 @@ backend/replay_videos/*
 
 # Internal notes on the RTSP camera pipeline - kept locally, not published.
 RTSPinfo.md
+
+# ImgBB API key saved from the booth Settings page. A secret, so never committed.
+backend/settings/

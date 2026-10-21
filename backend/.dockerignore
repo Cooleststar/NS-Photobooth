@@ -25,3 +25,6 @@ install_torch.py
 # build time instead of copying these, so sending them would only bloat the
 # context. fetch_mediapipe.py itself is NOT excluded - the Dockerfile COPYs it.
 mediapipe_models/
+
+# ImgBB API key saved from Settings - a secret, mounted in from the host at runtime.
+settings/

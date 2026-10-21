@@ -1,4 +1,5 @@
 import { waitTill } from '../utils'
+import { imgbbApiKey } from '../store'
 
 export interface ImgbbResponse {
   data: {
@@ -23,8 +24,11 @@ export async function uploadImage(
   // ImgBB wants the raw base64 payload, not a full data: URI
   const base64Data = b64img.includes(',') ? b64img.split(',', 2)[1] : b64img
 
+  const key = imgbbApiKey.get().trim() || import.meta.env.VITE_IMGBB_API_KEY
+  if (!key) throw new Error('No ImgBB API key set - add one in Settings.')
+
   const data = new FormData()
-  data.append('key', import.meta.env.VITE_IMGBB_API_KEY)
+  data.append('key', key)
   data.append('image', base64Data)
   data.append('name', `photo_${Date.now()}`)
 

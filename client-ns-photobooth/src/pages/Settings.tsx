@@ -33,6 +33,7 @@ import {
   cameraInitialized,
   cameraSource,
   getBackendHttpUrl,
+  imgbbApiKey,
   replayReturnSource,
   replayVideo,
   replayVideoLabel,
@@ -733,6 +734,99 @@ function NumberRow({
   )
 }
 
+/** ImgBB API key field. Saved in this browser (used for the booth's own
+ * uploads) and posted to the backend (used when the gallery re-uploads a
+ * recoloured strip - the gallery runs on other devices and has no copy). */
+function ImgbbKeyRow() {
+  const [draft, setDraft] = useState(() => imgbbApiKey.get())
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null)
+  const unchanged = draft.trim() === imgbbApiKey.get().trim()
+
+  const save = async () => {
+    const key = draft.trim()
+    setBusy(true)
+    imgbbApiKey.set(key)
+    try {
+      const res = await fetch(`${getBackendHttpUrl()}/settings/imgbb`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      setStatus({ text: key ? 'Saved.' : 'Cleared.', ok: true })
+    } catch (e) {
+      setStatus({
+        text: `Saved on this device only - the backend could not store it (${(e as Error).message}). Gallery recolouring will not upload.`,
+        ok: false,
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div tw='flex flex-col gap-1.5 py-0.5'>
+      <span tw='text-sm text-ink-dim'>ImgBB API Key</span>
+      <div tw='flex gap-2'>
+        <div tw='relative flex-1 min-w-0'>
+          <input
+            // Autocorrect and friends off for the same reason as the 67 Mode
+            // password box: an on-screen keyboard silently changing a pasted
+            // or typed key would make uploads fail with no obvious cause.
+            type={show ? 'text' : 'password'}
+            autoComplete='off'
+            autoCapitalize='off'
+            autoCorrect='off'
+            spellCheck={false}
+            placeholder='Paste key'
+            value={draft}
+            onChange={(e) => {
+              setDraft((e.target as HTMLInputElement).value)
+              setStatus(null)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !busy && !unchanged) save()
+            }}
+            tw='w-full bg-surface-sunken border border-edge text-ink text-sm pl-2 pr-8 py-1.5 rounded focus:outline-none focus:border-accent'
+          />
+          <button
+            type='button'
+            tabIndex={-1}
+            onClick={() => setShow((s) => !s)}
+            title={show ? 'Hide key' : 'Show key'}
+            tw='absolute right-1.5 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink text-sm leading-none px-0.5'
+          >
+            {show ? '🙈' : '👁️'}
+          </button>
+        </div>
+        <button
+          tw='bg-accent hover:bg-accent-hover disabled:opacity-50 text-ink text-sm px-3 rounded'
+          disabled={busy || unchanged}
+          onClick={(e) => {
+            save()
+            // Same as SwitchRow: a clicked button keeps focus and would
+            // swallow the next Space meant for the shutter.
+            ;(e.currentTarget as HTMLButtonElement).blur()
+          }}
+        >
+          Save
+        </button>
+      </div>
+      {status ? (
+        <p tw='text-xs leading-snug' css={status.ok ? tw`text-ink-muted` : tw`text-red-400`}>
+          {status.text}
+        </p>
+      ) : (
+        <p tw='text-xs text-ink-muted leading-snug'>
+          Needed to upload photos and show QR codes. Free key at api.imgbb.com.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function Settings() {
   const [shown, setShown] = useState(false)
   const canvasRes = useStore(canvasSize)
@@ -784,6 +878,7 @@ export default function Settings() {
         <div tw='flex-1 overflow-y-auto px-5'>
           <Section title='Connection'>
             <SwitchRow label='Disable Online Features' boolVar={offlineOnly} />
+            <ImgbbKeyRow />
           </Section>
 
           <Section title='Display'>

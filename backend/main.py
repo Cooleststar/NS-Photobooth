@@ -2754,12 +2754,22 @@ async def fetch_strips_handler(request: web.Request) -> web.Response:
 # kiosk itself); this is the path used when a photo is RE-uploaded after being
 # recoloured in the gallery.
 #
-# Falls back to reading the booth's existing .env so there's nothing new to
-# configure for a setup that already works - set IMGBB_API_KEY to override.
+# Lookup order: the IMGBB_API_KEY environment variable, then a key saved from
+# the booth's Settings page (below), then the booth's existing .env - so a setup
+# that already works needs nothing new.
+_IMGBB_KEY_FILE = pathlib.Path(__file__).parent / 'settings' / 'imgbb_key.txt'
+
+
 def _imgbb_api_key() -> str:
     key = os.environ.get('IMGBB_API_KEY', '').strip()
     if key:
         return key
+    try:
+        key = _IMGBB_KEY_FILE.read_text(encoding='utf-8').strip()
+        if key:
+            return key
+    except OSError:
+        pass
     env_path = pathlib.Path(__file__).parent.parent / 'client-ns-photobooth' / '.env'
     try:
         for line in env_path.read_text(encoding='utf-8').splitlines():
@@ -2769,6 +2779,40 @@ def _imgbb_api_key() -> str:
     except Exception:
         pass
     return ''
+
+
+async def imgbb_key_status_handler(request: web.Request) -> web.Response:
+    """GET - whether a key is configured. Never returns the key itself."""
+    return web.json_response({'configured': bool(_imgbb_api_key())}, headers=_CORS)
+
+
+async def imgbb_key_save_handler(request: web.Request) -> web.Response:
+    """POST {"key": "..."} - saves the key entered in Settings so the backend's
+    recolour re-upload can use it too (the gallery is opened from other
+    devices and has no copy of its own). An empty key clears the saved one."""
+    try:
+        data = await request.json()
+    except Exception:
+        return web.Response(status=400, text='Invalid JSON', headers=_CORS)
+    key = data.get('key', '') if isinstance(data, dict) else ''
+    if not isinstance(key, str):
+        return web.Response(status=400, text='Invalid key', headers=_CORS)
+    key = key.strip()
+    # ImgBB keys are 32 hex characters; this only rejects obvious junk (spaces,
+    # quotes, newlines) that would corrupt the form field, not unusual keys.
+    if key and not (len(key) <= 128 and key.isalnum()):
+        return web.Response(status=400, text='Invalid key', headers=_CORS)
+    try:
+        if key:
+            _IMGBB_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _IMGBB_KEY_FILE.write_text(key, encoding='utf-8')
+        elif _IMGBB_KEY_FILE.exists():
+            _IMGBB_KEY_FILE.unlink()
+    except OSError as e:
+        log.error(f"Could not save ImgBB key: {e}")
+        return web.Response(status=500, text='Could not save key', headers=_CORS)
+    log.info("ImgBB API key %s from Settings", 'saved' if key else 'cleared')
+    return web.json_response({'configured': bool(_imgbb_api_key())}, headers=_CORS)
 
 
 async def reupload_photo_handler(request: web.Request) -> web.Response:
@@ -2788,7 +2832,7 @@ async def reupload_photo_handler(request: web.Request) -> web.Response:
     if not key:
         return web.Response(
             status=503,
-            text='No ImgBB API key configured (set IMGBB_API_KEY)',
+            text='No ImgBB API key configured (set one in Settings, or IMGBB_API_KEY)',
             headers=_CORS,
         )
     try:
@@ -3087,6 +3131,8 @@ def make_http_app() -> web.Application:
     app.router.add_get('/photos/{filename}', serve_photo_handler)
     app.router.add_put('/photos/{filename}', replace_photo_handler)
     app.router.add_post('/photos/{filename}/reupload', reupload_photo_handler)
+    app.router.add_get('/settings/imgbb', imgbb_key_status_handler)
+    app.router.add_post('/settings/imgbb', imgbb_key_save_handler)
     app.router.add_delete('/photos/{filename}', delete_photo_handler)
     app.router.add_get('/photos/{filename}/strips', fetch_strips_handler)
     app.router.add_get('/replay/check', replay_check_handler)

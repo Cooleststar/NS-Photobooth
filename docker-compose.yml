@@ -13,6 +13,9 @@ services:
       # anything captured in Docker landed where the host run would never look
       # for it. This makes both setups share one library.
       - ./backend/photos:/app/photos
+      # The ImgBB API key entered in the booth's Settings page. Kept on the host so
+      # it survives rebuilds and `down`; main.py reads it from /app/settings.
+      - ./backend/settings:/app/settings
       # Without this, weights fetched via `fetch_wilor.py` (see
       # backend/Dockerfile) live only in the container's writable layer and
       # vanish the next time the image is rebuilt - a ~2.5 GB re-download

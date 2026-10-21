@@ -438,6 +438,11 @@ export const replayReturnSource = persistentAtom<CameraSource>('replayReturnSour
 
 
 export const offlineOnly = persistentAtom('offlineOnly', true, opts)
+/** ImgBB API key entered in Settings. Takes priority over VITE_IMGBB_API_KEY
+ * from .env, so a booth can be set up without editing files or rebuilding.
+ * Stored in this browser only; Settings also posts it to the backend, which
+ * needs it for the gallery's recolour re-upload. */
+export const imgbbApiKey = persistentAtom<string>('imgbbApiKey', '')
 export const cameraInitialized = persistentAtom('cameraInitialized', false, opts)
 
 export const canvasSize = persistentAtom(
