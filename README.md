@@ -97,18 +97,11 @@ All commands below are run from this repository root unless they say otherwise.
 
 ## Installation & Running — With Docker.
 
-First time only, download the WiLoR hand-model weights (~2.5 GB) into their Docker volume. Without them the backend exits at startup and prints this command:
-
-```bash
-docker-compose build backend
-docker-compose run --rm backend python fetch_wilor.py
-```
-
-Then start everything:
-
 ```bash
 docker-compose up -d --build
 ```
+
+**The first start downloads the WiLoR hand-model weights (~2.5 GB)** into a Docker volume, so the backend is not ready for several minutes. Watch progress with `docker-compose logs -f backend`; the booth works once it logs `MJPEG HTTP server ready on port 8081`. Later starts skip the download, so they are fast and need no internet.
 
 Open [http://localhost:3000](http://localhost:3000) for the booth and [http://localhost:5173](http://localhost:5173) for the gallery.
 

@@ -106,14 +106,16 @@ COPY fetch_mediapipe.py .
 RUN python fetch_mediapipe.py
 
 # The ~2.5 GB of weights are NOT baked into the image - that would make every
-# layer push and pull enormous. Fetch them once into a volume mounted at
-# /app/wilor_models:
+# layer push and pull enormous. They live in a volume mounted at
+# /app/wilor_models, and the container fetches them itself on start.
 #
-#     docker compose run --rm backend python fetch_wilor.py
-#
-# Without that, the container starts and immediately exits with the command to
-# run, rather than silently degrading.
+# fetch_wilor.py skips files that are already present, so this downloads on the
+# very first start only (watch it with `docker compose logs -f backend`; the
+# backend is not up until it finishes) and costs nothing on later starts -
+# including at an offline event, once the volume is populated. It exits
+# non-zero if a download fails, so main.py is not started without its weights.
+# `exec` hands PID 1 to main.py so `docker compose stop` reaches it.
 
 EXPOSE 9091 8081
 
-CMD ["python", "main.py"]
+CMD ["sh", "-c", "python fetch_wilor.py && exec python main.py"]
