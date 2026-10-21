@@ -75,7 +75,15 @@ COPY mediapipe_handedness.py .
 # .task files, but all of it needs internet at RUNTIME - and this booth runs
 # offline at events, where those downloads simply fail and take 67 Mode,
 # pose tracking and handedness with them.
-COPY yolo26n-pose.pt .
+#
+# yolo26n-pose.pt is fetched HERE at build time rather than copied in. It used
+# to be `COPY yolo26n-pose.pt .`, which could not work from a clean checkout:
+# .gitignore excludes every *.pt file, so a fresh clone has no such file and
+# the build failed on "not found". Constructing YOLO() makes ultralytics
+# download the weights into the working directory (/app), which is where
+# main.py loads them from. Needs internet at BUILD time only.
+RUN python -c "from ultralytics import YOLO; YOLO('yolo26n-pose.pt')" \
+    && test -f yolo26n-pose.pt
 
 # The mediapipe models are fetched HERE at build time rather than copied in.
 # This line used to be `COPY mediapipe_models ./mediapipe_models`, which could
