@@ -57,6 +57,8 @@ Docker handles Python, Node, and all dependencies inside containers. For GPU acc
 | **Python** | 3.11.x | Required by the backend — see note below |
 | **pip** | Latest | Comes bundled with Python 3.11+ |
 | **FFmpeg** | Latest | System binary (not a pip package) — required for RTSP camera streaming. `winget install Gyan.FFmpeg`, then reopen your terminal so `ffmpeg` is on `PATH` |
+| **NVIDIA GPU driver** | Recent | The backend needs an NVIDIA GPU. `nvidia-smi` should run in a terminal |
+| **PyTorch (GPU/CUDA build)** | 2.6.0 | **Must be the GPU build, not the default CPU-only one** — install it with `python backend/install_torch.py` *before* `pip install -r backend/requirements.txt` (step 8). The backend refuses to start on a CPU build |
 
 > **Why Python 3.11 specifically:** that's the version `backend/requirements.txt` is pinned and tested against. Earlier revisions of this project required 3.10 (numpy had no prebuilt wheel for 3.12 under the old pins), but that constraint no longer applies with the current pins — 3.11 is simply what's verified.
 
