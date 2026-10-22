@@ -1399,7 +1399,7 @@ _challenge67_lock: asyncio.Lock | None = None  # initialised inside main(), same
 # Plaintext, same trust level as e.g. HIKVISION_PASS in the frontend's
 # store.ts: this booth's whole security model is "only trusted people are on
 # this network", not per-user auth.
-_CHALLENGE67_ADMIN_PASSWORD = 'Timely@objective'
+_CHALLENGE67_ADMIN_PASSWORD = 'password123'
 
 
 def _challenge67_check_password(supplied) -> bool:
