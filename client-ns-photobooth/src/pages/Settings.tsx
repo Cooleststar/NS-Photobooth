@@ -70,6 +70,13 @@ function Section({ title, children }: { title: string; children: any }) {
   )
 }
 
+/** Whether the "QR Code Mode" switch is offered in Settings. Off: QR mode is
+ * hidden but fully intact - all its detection and character-locking code is
+ * untouched, so flipping this back to true restores it. A browser that
+ * already has QR mode switched on still shows the switch (see where it is
+ * used), so it can be turned off rather than getting stuck on. */
+const SHOW_QR_MODE_TOGGLE = false
+
 function SwitchRow({
   label,
   boolVar,
@@ -953,7 +960,7 @@ export default function Settings() {
             {!challenge67 && <CoyLogoSelect />}
             <SwitchRow label='Arrow Pointer' boolVar={pointerEnabled} />
             <SwitchRow label='Debug Animation' boolVar={debugEnabled} />
-            {!challenge67 && (
+            {!challenge67 && (SHOW_QR_MODE_TOGGLE || qrMode) && (
               <SwitchRow
                 label='QR Code Mode'
                 boolVar={qrModeEnabled}

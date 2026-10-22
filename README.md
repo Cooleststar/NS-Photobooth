@@ -28,7 +28,7 @@ An interactive photobooth application for events. It captures photos via a webca
   Some combinations are blocked because they compete for the same arm or gesture: Owl/Bat/Caped Cat, Drone/67 and Scuba/Boxing Gloves. A greyed-out button's tooltip says which character it clashes with. The reasons are documented on `EXCLUSIVE_GROUPS` in [`client-ns-photobooth/src/store.ts`](client-ns-photobooth/src/store.ts).
 - **Multi-Person Tracking** — puts the selected characters on everyone in frame instead of one person
 - **Per-character size** — a slider in Settings scales any character up or down live, for booths where people stand closer or further than usual
-- **QR Code Mode** — instead of using the picker, a guest holds up a printed QR card and the matching character locks onto them until **Reset Animation** is pressed. Cards are in [`qr-test-codes/`](qr-test-codes/). ORDLO is a QR-only character.
+- **QR Code Mode** (currently hidden from Settings; set `SHOW_QR_MODE_TOGGLE` to `true` in [`Settings.tsx`](client-ns-photobooth/src/pages/Settings.tsx) to show it again) — instead of using the picker, a guest holds up a printed QR card and the matching character locks onto them until **Reset Animation** is pressed. Cards are in [`qr-test-codes/`](qr-test-codes/). ORDLO is a QR-only character.
 - **67 Mode** — a standalone 20-second "67 as fast as you can" minigame with name entry and a persisted leaderboard (editable from Settings), replacing the normal capture flow entirely
 - **Photo capture flow** — single shots or Burst Mode (1–12 shots into one strip, 1–10 s apart), a 0–15 s countdown, confirm/cancel preview, automatic save
 - **QR code sharing** — when online features are on, every saved photo/strip is uploaded and gets its own QR code linking to a downloadable copy
@@ -175,7 +175,7 @@ Open [http://localhost:3000](http://localhost:3000) for the booth and [http://lo
 | Display | Canvas size, camera size, and (local webcam only) detection resolution |
 | Camera | Mirror horizontally / flip upside down, for cameras mounted that way |
 | Capture | Countdown length, Burst Mode, photos per burst, interval between shots |
-| Animation | Character selection, per-character size, Multi-Person Tracking, banner and footer logos, arrow pointer, debug overlay, QR Code Mode (with **Reset Animation**), 67 Mode |
+| Animation | Character selection, per-character size, Multi-Person Tracking, banner and footer logos, arrow pointer, debug overlay, 67 Mode |
 | 67 Mode | Leaderboard editor, for pruning scores between events |
 | Testing | Play a test video from `backend/replay_videos/` as the camera, and analyse a clip's detection accuracy |
 | Actions | **Reset Application**: clears the booth's photo list and returns to camera selection (saved files are kept) |
