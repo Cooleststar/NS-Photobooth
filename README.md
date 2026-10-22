@@ -123,7 +123,7 @@ yarn install
 cd ..
 
 copy client-ns-photobooth\.env.example client-ns-photobooth\.env
-# optional, for photo uploads: set VITE_IMGBB_API_KEY in client-ns-photobooth\.env, or enter the key later in Settings
+# the ImgBB API key is not set in this file - enter it later in the booth Settings page
 
 py -3.11 -m venv venv
 venv\Scripts\Activate.ps1
