@@ -225,8 +225,7 @@ Compiles the tests and runs them with Node's built-in test runner. No extra pack
 
 ## Full Documentation
 
-- [**NS Photobooth Guide.pdf**](NS%20Photobooth%20Guide.pdf): the setup and run guide, covering usage, how pose detection works, and troubleshooting
-- [`client-ns-photobooth/boothfieldguide.docx`](client-ns-photobooth/boothfieldguide.docx): field guide for running the booth at an event (`boothfieldguide_with_evidence.docx` alongside it is the version with supporting evidence)
+- [**Fusion Photobooth Guide.docx**](Fusion%20Photobooth%20Guide.docx): the full guide to setting up and running the photobooth
 - [`backend/replay_videos/README.md`](backend/replay_videos/README.md): adding test videos for the replay camera source
 
 ---
