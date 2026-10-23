@@ -1,108 +1,119 @@
 # NS Photobooth
 
-An interactive photobooth application for events. It captures photos via a webcam (USB/local or RTSP IP camera), overlays animated GIF characters onto the live feed, and uses real-time pose detection so animations react to the person standing in front of the camera.
+## Description
 
-## Tech Stack
+An interactive photobooth for events. It shows a live camera feed (USB webcam, capture card or RTSP IP camera), puts animated characters onto the people in it using real-time body, hand and face tracking, and takes photos and photo strips that guests can download by scanning a QR code. A separate gallery lets anyone on the same network browse, recolour, download and delete the photos, and a built-in "67 Mode" minigame keeps a leaderboard.
 
-| Part | Tech | Port |
-|---|---|---|
-| Frontend (`client-ns-photobooth`) | Vite + Preact + PixiJS + TypeScript | 3000 |
-| Backend (`backend`) | Python + WiLoR/Ultralytics + WebSockets | 8081 (HTTP/WS), 9091 (rosbridge) |
-| Gallery (`gallery`) | Vite + Preact | 5173 |
+Everything runs locally on the booth PC. Detection runs on the PC's own NVIDIA GPU, and no camera frames are sent to any outside service.
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation & Setup](#installation--setup)
+  - [Prerequisites](#prerequisites)
+  - [Quick Start with Docker Compose (Recommended)](#quick-start-with-docker-compose-recommended)
+  - [Docker Desktop View](#docker-desktop-view)
+  - [Local Setup (Without Docker)](#local-setup-without-docker)
+- [Usage](#usage)
+  - [Photobooth (Port 3000)](#photobooth-port-3000)
+  - [Gallery (Port 5173)](#gallery-port-5173)
+  - [67 Mode](#67-mode)
+  - [Testing Tools](#testing-tools)
+  - [Event Camera Setup](#event-camera-setup)
+  - [Troubleshooting](#troubleshooting)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Documentation](#documentation)
+- [Acknowledgements](#acknowledgements)
 
 ## Features
 
-- **Camera selection page** — choose a preset Hikvision RTSP camera, enter a custom RTSP URL, or use a local USB/built-in webcam (capture cards included). Cameras mounted mirrored or upside down can be flipped in Settings.
-- **Pose- and hand-reactive animations**, toggled from the thumbnail bar at the top of the screen (up to 5 at once):
+- **Camera selection**: a preset Hikvision RTSP camera, a custom RTSP URL, or a local USB webcam or capture card. Cameras mounted mirrored or upside down can be flipped in Settings.
+- **Pose-, hand- and face-reactive characters**, toggled from the thumbnail bar at the top of the screen (up to 5 at once):
 
   | Character | Triggered by |
   |---|---|
   | Owl, Bat, Caped Cat | Holding a bent arm out; the character perches on the forearm |
   | Globe | Orbits the body; hold your hands apart and it moves between them |
   | Drone | An open palm facing the sky |
-  | 67 | Both palms up with the arms held diagonally — a 6 and a 7 appear above them |
+  | 67 | Both palms up with the arms held diagonally; a 6 and a 7 appear above them |
   | Scuba | Waving a hand side to side |
   | Boxing Gloves | A closed fist (with dizzy stars) |
   | Pig Nose & Ears, Bat Ears, Clown Wig & Nose, Sunglasses, Mustache, OC Fusion | Face-tracked; always on while selected. OC Fusion has its own button, bottom-right |
 
   Some combinations are blocked because they compete for the same arm or gesture: Owl/Bat/Caped Cat, Drone/67 and Scuba/Boxing Gloves. A greyed-out button's tooltip says which character it clashes with. The reasons are documented on `EXCLUSIVE_GROUPS` in [`client-ns-photobooth/src/store.ts`](client-ns-photobooth/src/store.ts).
-- **Multi-Person Tracking** — puts the selected characters on everyone in frame instead of one person
-- **Per-character size** — a slider in Settings scales any character up or down live, for booths where people stand closer or further than usual
-- **QR Code Mode** (currently hidden from Settings; set `SHOW_QR_MODE_TOGGLE` to `true` in [`Settings.tsx`](client-ns-photobooth/src/pages/Settings.tsx) to show it again) — instead of using the picker, a guest holds up a printed QR card and the matching character locks onto them until **Reset Animation** is pressed. Cards are in [`qr-test-codes/`](qr-test-codes/). ORDLO is a QR-only character.
-- **67 Mode** — a standalone 20-second "67 as fast as you can" minigame with name entry and a persisted leaderboard (editable from Settings), replacing the normal capture flow entirely
-- **Photo capture flow** — single shots or Burst Mode (1–12 shots into one strip, 1–10 s apart), a 0–15 s countdown, confirm/cancel preview, automatic save
-- **QR code sharing** — when online features are on, every saved photo/strip is uploaded and gets its own QR code linking to a downloadable copy
-- **Logos** — choose one or more company logos for the live-feed banner and the photo-strip footer
-- **Gallery** — a separate site ([http://localhost:5173](http://localhost:5173)) where anyone on the network enters the booth PC's IP to browse, recolour, download or delete saved photos
-- **Testing tools** — replay a recorded video as the camera source, and measure detection accuracy on an uploaded clip, both from Settings
+- **Multi-Person Tracking**: puts the selected characters on everyone in frame instead of one person.
+- **Per-character size**: a slider in Settings scales any character up or down live.
+- **Photo capture**: single shots or Burst Mode (1–12 shots, 1–10 s apart, grouped into strips of 3), a 0–15 s countdown, and a confirm/cancel preview.
+- **QR code download**: with online features on and an ImgBB API key entered in Settings, every photo or strip is uploaded and gets a QR code printed on it, linking to a downloadable copy.
+- **Logos**: one or more company logos on the live-feed banner and the photo-strip footer.
+- **Gallery**: a separate site for browsing, recolouring, downloading and deleting saved photos, from any device on the network.
+- **67 Mode**: a 20-second arm-flapping minigame with name entry and a password-protected, editable leaderboard. It replaces the normal capture flow while switched on.
+- **Testing tools**: play a recorded video as the camera, and measure detection accuracy on a clip, both from Settings.
+- **QR Code Mode** (currently hidden): a guest holds up a printed QR card and the matching character locks onto them. Set `SHOW_QR_MODE_TOGGLE` to `true` in [`Settings.tsx`](client-ns-photobooth/src/pages/Settings.tsx) to show its switch again. Cards are in [`qr-test-codes/`](qr-test-codes/).
 
----
+## Installation & Setup
 
-## Prerequisites
+### Prerequisites
 
-### Option 1 — Docker (recommended)
+**Hardware**
 
-- **Docker Desktop** — https://www.docker.com/products/docker-desktop
-- **Git** — to clone the repository
+| Item | Requirement |
+|---|---|
+| GPU | **NVIDIA GPU with CUDA 11.8 or later** (check with `nvidia-smi`). Required: the backend refuses to start without one |
+| GPU memory | About 8 GB minimum, 12 GB+ recommended (estimated; the pose and hand models need ~2.5 GB each) |
+| RAM | 16 GB minimum, 32 GB recommended (estimated) |
+| Disk | 20 GB free, 30 GB with Docker (models, PyTorch, Docker images and photos) |
+| Camera | USB webcam / capture card, or a Hikvision / RTSP IP camera |
 
-Docker handles Python, Node, and all dependencies inside containers. For GPU acceleration you also need an NVIDIA GPU with Docker Desktop's GPU support (WSL 2 backend) working — `docker-compose.yml` passes one GPU through to the backend.
+The booth was developed and timed on an RTX A5000. The memory and disk figures above are estimates, not tested minimums.
 
-### Option 2 — Without Docker
+**Software**
 
-| Requirement | Version | Notes |
-|---|---|---|
-| **fnm** | Latest | Node version manager — installs and switches Node versions |
-| **Node.js** | 18.x | Installed via fnm — newer versions will break the project |
-| **Yarn** | 3.2.3+ | Comes with Node 18 via fnm |
-| **Python** | 3.11.x | Required by the backend — see note below |
-| **pip** | Latest | Comes bundled with Python 3.11+ |
-| **FFmpeg** | Latest | System binary (not a pip package) — required for RTSP camera streaming. `winget install Gyan.FFmpeg`, then reopen your terminal so `ffmpeg` is on `PATH` |
-| **NVIDIA GPU driver** | Recent | The backend needs an NVIDIA GPU. `nvidia-smi` should run in a terminal |
-| **PyTorch (GPU/CUDA build)** | 2.6.0 | **Must be the GPU build, not the default CPU-only one** — install it with `python backend/install_torch.py` *before* `pip install -r backend/requirements.txt`. The backend refuses to start on a CPU build |
+- [Visual Studio Code](https://code.visualstudio.com/) (or an equivalent code editor)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), which includes Docker Compose (for the Docker setup)
+- [NVIDIA GPU driver](https://www.nvidia.com/Download/index.aspx), with GPU support enabled in Docker Desktop (WSL 2 backend) when using Docker
+- [Git](https://git-scm.com/downloads) (for cloning and updating the repository)
+- A web browser such as Chrome or Edge
 
-> **Why Python 3.11 specifically:** that's the version `backend/requirements.txt` is pinned and tested against. Earlier revisions of this project required 3.10 (numpy had no prebuilt wheel for 3.12 under the old pins), but that constraint no longer applies with the current pins — 3.11 is simply what's verified.
+For the local setup without Docker, also:
 
-Python packages are pinned in [`backend/requirements.txt`](backend/requirements.txt) and installed via `pip install -r backend/requirements.txt`. A couple of things worth knowing if you're setting this up for the first time:
-- Hand detection uses **WiLoR**, not MediaPipe (MediaPipe was removed). The WiLoR source is vendored at `backend/wilor_src/`; its model weights (~2.5 GB) are not pip-installable and are not committed to git — fetch them once per machine with `python backend/fetch_wilor.py`. The MANO hand mesh model is deliberately not required — it's licensed separately and its loader (`chumpy`) doesn't install on modern Python, so that layer is stubbed out; this pipeline never renders a mesh anyway.
-- **If you have an NVIDIA GPU, `pip install -r backend/requirements.txt` alone will NOT use it.** `torch`/`torchvision` are deliberately left unpinned in `requirements.txt` — the correct wheel depends on your CUDA version, and the default PyPI wheel on Windows is CPU-only (`torch.cuda.is_available()` returns `False` even with a GPU present), silently making pose detection (and ViTPose++, see `ENABLE_VITPOSE` in `main.py`) run 20-50x slower. **Install torch FIRST, before the rest of `requirements.txt`:**
-  1. Check your driver's supported CUDA version: `nvidia-smi` (top-right of the output, e.g. `CUDA Version: 12.6`).
-  2. Pick the newest `cuXXX` PyTorch index your driver supports (e.g. CUDA 12.6 → `cu124`; CUDA 12.2 → `cu118`) and install:
-     ```powershell
-     pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
-     ```
-  3. Verify with `python -c "import torch; print(torch.cuda.is_available())"` — this should print `True`.
+- [Python 3.11](https://www.python.org/downloads/) (3.11 is required; the pinned packages need at least 3.11)
+- **PyTorch 2.6.0, GPU/CUDA build**: installed by `backend/install_torch.py`, which must run **before** `pip install -r backend/requirements.txt`. Otherwise pip installs the CPU-only build, which is 20–50× slower and which the backend refuses to start on
+- [FFmpeg](https://ffmpeg.org/download.html) (for reading RTSP camera streams)
+- [fnm](https://github.com/Schniz/fnm) and [Node.js 18.x](https://nodejs.org/en/download) (newer Node versions break the project)
+- [Yarn 3.2.3 or later](https://yarnpkg.com/getting-started/install) (comes with Node 18)
 
-  Or just run `python backend/install_torch.py`, which detects the right wheel for your driver and does this for you. Either way, do it **before** `pip install -r backend/requirements.txt` — pip then sees torch already satisfied and won't overwrite it with a CPU build. `main.py` refuses to start on a CPU build, so a mistake here is loud rather than silent.
+Internet is needed for the first setup and the first start, to download several GB of packages and models. After that the booth runs offline.
 
-  Docker users don't need to do this: the backend image installs the CUDA 11.8 build of torch itself, and `docker-compose.yml` reserves the host GPU for the `backend` service. That only works if Docker Desktop's GPU support is enabled — check with `docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi`.
-- **Once CUDA is working, the very first startup can hang for a very long time (10+ minutes) with the camera showing nothing.** `main.py` auto-enables ViTPose++ (a ~900MB Hugging Face model) whenever a GPU is detected (`ENABLE_VITPOSE` defaults to on when `torch.cuda.is_available()`). Loading it calls `from_pretrained()`, which re-validates every file over the network against Hugging Face **on every single startup**, even once the model is fully cached locally — and without an `HF_TOKEN`, those requests are rate-limited and can take many minutes. This blocks the entire backend from binding its ports (RTSP/camera included) until it finishes, which looks exactly like a dead camera feed. Once the model has fully downloaded and cached once, skip the revalidation on every future run:
-  ```powershell
-  $env:HF_HUB_OFFLINE = "1"
-  python app.py
-  ```
-  Don't set this on the very first run — offline mode requires the model to already be fully cached, or `VitPoseForPoseEstimation.from_pretrained()` fails outright and falls back to YOLO-only keypoints (not fatal, just less precise arm/shoulder/wrist tracking). Let the first run finish completely and uninterrupted, then use `HF_HUB_OFFLINE=1` for every run after that.
+### Quick Start with Docker Compose (Recommended)
 
----
-
-## Installation & Running
-
-All commands are run in **PowerShell**, from the repository root.
-
-### Get the code
+Run in PowerShell:
 
 ```powershell
 git clone https://github.com/Cooleststar/NS-Photobooth
 cd NS-Photobooth
-```
-
-### With Docker
-
-```powershell
 docker compose build
 docker compose up
 ```
 
-### Without Docker — one-time setup
+The first start downloads the hand-detection model (~2.5 GB), so it may take some time before the booth works. The backend is ready when its log shows `MJPEG HTTP server ready on port 8081`. Later starts skip the download.
+
+Then open [http://localhost:3000](http://localhost:3000) for the booth and [http://localhost:5173](http://localhost:5173) for the gallery.
+
+> If you download the repository as a ZIP instead of cloning it, Windows' "Extract All" puts it in a folder inside another folder of the same name. Run the commands from the inner folder, the one containing `docker-compose.yml`.
+
+### Docker Desktop View
+
+After the first `docker compose up`, Docker Desktop's **Containers** list shows the photobooth as one application, named after the project folder (for example `ns-photobooth`), containing three containers: **frontend**, **backend** and **gallery**. Running containers have a green circle.
+
+From then on there is no need to use the terminal: start and stop the whole booth with the play/stop button on the right. After changing any code, run `docker compose build` again; the play button alone restarts the old build.
+
+The backend has no page of its own to open. It is the engine that reads the camera and runs the detection, and the frontend and gallery connect to it automatically.
+
+### Local Setup (Without Docker)
+
+One-time setup, in PowerShell from the repository root:
 
 ```powershell
 winget install Schniz.fnm
@@ -133,114 +144,167 @@ python backend/fetch_wilor.py
 python backend/fetch_mediapipe.py
 ```
 
-### Without Docker — run
+Every time you run it:
 
 ```powershell
 venv\Scripts\Activate.ps1
 python app.py
 ```
 
-Open [http://localhost:3000](http://localhost:3000) for the booth and [http://localhost:5173](http://localhost:5173) for the gallery.
+`app.py` starts the backend, frontend and gallery together. Open [http://localhost:3000](http://localhost:3000) for the booth and [http://localhost:5173](http://localhost:5173) for the gallery.
 
----
+## Usage
 
-## Using the Programme
+The full step-by-step guide for each part is in the [Fusion Photobooth Guide](Fusion%20Photobooth%20Guide.docx). The essentials are below.
 
-1. Open `http://localhost:3000` in your browser, then click the window to give it focus (required for keyboard shortcuts).
-2. On the **camera selection page**, pick a preset RTSP camera, enter a custom RTSP URL, or choose your local webcam.
-3. On the **Booth screen**, your live feed appears. Toggle characters from the thumbnail bar at the top; banner logo and Burst Mode have quick controls on screen too.
-4. Press **Space** (or click the round shutter button) to take a photo. A countdown plays, then **confirm** or **cancel** the preview.
-5. Confirmed photos are saved automatically. With online features on, a **QR code** appears so the guest can scan and download it.
-6. Press **S** to open **Settings**.
+#### Photobooth (Port 3000)
 
-### Keyboard shortcuts
+1. Open [http://localhost:3000](http://localhost:3000) and click once on the page, so the keyboard shortcuts work.
+2. Choose the camera and click **Start**. For a USB webcam, make sure the browser is allowed to use the camera and is set to the right one.
+3. Toggle characters from the thumbnail bar at the top. Banner logo and Burst Mode have quick controls on screen too.
+4. Press **Space** (or click the round shutter button) to take a photo, then **Confirm** or **Cancel** the preview. Confirmed photos are saved and appear in the gallery.
+5. Press **S** to open **Settings**.
 
-**PageUp**/**PageDown** are what a presentation clicker sends, so a clicker can run the booth.
+**Keyboard shortcuts.** PageUp/PageDown are what a presentation clicker sends, so a clicker can run the booth.
 
 | Key | Action |
 |---|---|
 | **Space** or **PageUp** | Take a photo |
 | **PageUp** / **PageDown** | Confirm / cancel the photo preview |
-| **←** / **→** | Previous / next photo in a burst preview |
+| **←** / **→** | Previous / next strip in a burst preview |
 | **PageDown** (while waiting for a shot) | Switch which tracked person the characters follow (single-person mode) |
 | **S** | Open/close Settings |
 | **D** | Toggle the debug overlay |
 | **PageUp** / **R** | 67 Mode: start or play / retry |
 
-### Settings
+**Settings.** Saved in the browser, so they survive restarts.
 
 | Section | What's there |
 |---|---|
-| Connection | **Disable Online Features**: on by default; turn off to upload photos and show QR codes. **ImgBB API Key**: paste your key and press Save (free key at [api.imgbb.com](https://api.imgbb.com/)) |
-| Display | Canvas size, camera size, and (local webcam only) detection resolution |
-| Camera | Mirror horizontally / flip upside down, for cameras mounted that way |
+| Connection | **Disable Online Features**: on by default; turn off to upload photos and get QR codes. **ImgBB API Key**: paste a key (free at [api.imgbb.com](https://api.imgbb.com/)) and press Save |
+| Display | Canvas size, camera size, and (local webcam only) detection resolution (1280 wide by default) |
+| Camera | Mirror horizontally / flip upside down |
 | Capture | Countdown length, Burst Mode, photos per burst, interval between shots |
 | Animation | Character selection, per-character size, Multi-Person Tracking, banner and footer logos, arrow pointer, debug overlay, 67 Mode |
-| 67 Mode | Leaderboard editor, for pruning scores between events |
-| Testing | Play a test video from `backend/replay_videos/` as the camera, and analyse a clip's detection accuracy |
-| Actions | **Reset Application**: clears the booth's photo list and returns to camera selection (saved files are kept) |
+| 67 Mode | Password-protected leaderboard editor |
+| Testing | Test video and detection accuracy tools |
+| Actions | **Reset Application**: clears the booth's photo list and returns to camera selection (saved photos are kept) |
 
-Settings are saved in the browser, so they survive restarts.
+#### Gallery (Port 5173)
 
-### Using a capture-card camera (e.g. Sony A7 III)
+1. On the booth PC, open [http://localhost:5173](http://localhost:5173). On another device on the same network, open `http://<booth-PC-IP>:5173`; it needs only a browser, no installation.
+2. Enter the booth PC's address: `localhost` on the booth PC itself, or its IPv4 address (from `ipconfig`) on another device. Click **Connect**; the address is remembered.
+3. Click a thumbnail to open a photo, then scan its QR code, **Download** it, change its **Background** colour, or **Delete** it. Delete happens immediately, with no undo. Recolouring needs the ImgBB key and gives the photo a new QR link.
 
-A camera on HDMI capture or USB is a **local webcam** to the booth, not RTSP. It goes through a different backend path from the Hikvision cameras, so check these before an event:
+Other devices need the booth PC's Windows Firewall to allow ports **5173** and **8081**, and a network that lets devices reach each other (many guest Wi-Fi networks don't).
 
-- **HDMI Info Display: Off** on the camera, so focus boxes and settings text do not end up in the feed.
-- **Shutter speed 1/250 or faster** (S or M mode; raise ISO to compensate). Slower shutters blur moving hands and arms. Scuba is a swinging gesture and suffers most.
-- **Frame the guest down to the hips.** The Bat needs a tracked hip to appear. The Caped Cat doesn't, but tracks better with one.
-- **Capture card at MJPEG 1080p30.** Open the browser console and look for `Camera stream actual resolution: … @ … fps`. Some cards fall back to ~5 fps at 1080p.
-- **Detection Resolution** (Settings) sets the width of the frames sent for detection (1280 by default). Their height follows the camera's own aspect ratio automatically, and the console logs `Detection frames sent at …`.
+#### 67 Mode
 
-### Camera settings for hand gestures (Scuba) with groups and at distance
+Turn on **Enable 67 Mode** in Settings (QR Code Mode must be off). A player clicks **Start**, enters a unique name, and has 20 seconds to flap their forearms, keeping the elbows steady, with shoulders, arms and hips in view. Each flap scores a point. Results show the score, rank and the top 10. **Play** starts a new player, **R** retries for the same one. Staff can edit or clear scores in Settings → 67 Mode → **Edit Leaderboard…** (the password is in the [Fusion Photobooth Guide](Fusion%20Photobooth%20Guide.docx)).
 
-The Scuba cat reads a swinging, edge-on hand, and a hand 3–5 m away is only a few dozen pixels across. Motion blur and compression artefacts on it decide whether it is detected at all. On every camera:
+#### Testing Tools
 
-- **Shutter 1/250 or faster.** Add light rather than slowing the shutter.
-- **Hikvision (RTSP):** in the camera's web UI, turn **H.264+ / Smart Codec off**, use the main stream at 1080p25 with a generous bitrate, and keep **WDR and 3D DNR off or low**. Noise reduction smears moving hands.
-- **DJI Osmo Pocket 3 (webcam stand-in):** turn **face tracking / auto-framing off** and lock the gimbal. A camera that pans to follow people moves every hand on screen, which reads as hand motion. Lock exposure at a fast shutter, use 1080p, and turn beauty and HDR off.
-- **Sony A7 III:** see the capture-card checklist above. SteadyShot off.
+In Settings → **Testing**:
 
-**Diagnosing the Owl, Bat and Scuba on site** (browser console, no restart needed):
+- **Test Video**: **Choose video…** plays a recording on a loop as if it were the camera. **Stop replay (back to camera)** returns to the live camera. See [`backend/replay_videos/README.md`](backend/replay_videos/README.md). Test videos show real people, so they are kept out of git; never commit them.
+- **Detection Accuracy**: **Analyze clip…** reports how reliably people and hands were detected over a clip. It pauses live tracking while it runs, so don't use it while guests are at the booth.
+
+#### Event Camera Setup
+
+A camera on HDMI capture or USB counts as a **local webcam**, not RTSP. Before an event:
+
+- **Shutter 1/250 or faster** (add light rather than slowing the shutter). Slower shutters blur moving hands; Scuba suffers most.
+- **Frame guests down to the hips.** The Bat needs a tracked hip; the Caped Cat tracks better with one.
+- **Sony A7 III (capture card):** HDMI Info Display off, SteadyShot off, capture card at MJPEG 1080p30. The browser console logs `Camera stream actual resolution: … @ … fps`; some cards fall back to ~5 fps at 1080p.
+- **Hikvision (RTSP):** in the camera's web UI, turn **H.264+ / Smart Codec off**, use the main stream at 1080p25 with a generous bitrate, and keep **WDR and 3D DNR off or low**.
+- **DJI Osmo Pocket 3 (webcam):** turn face tracking / auto-framing off and lock the gimbal; lock exposure at a fast shutter, 1080p, beauty and HDR off.
+
+To rehearse without the event camera, feed a recording through **OBS Virtual Camera** and pick it as the webcam, or use the Test Video tool.
+
+**On-site diagnosis** (browser console, no restart needed):
 
 | Command | What it does |
 |---|---|
-| `window.ARM_DEBUG = true` | Prints the Owl/Bat/Caped Cat arm checks live: state, locked arm, and which gate failed per side (e.g. `vis=0.42`, `angle=38`, `hipVis=0.10`, `away=135`) |
+| `window.ARM_DEBUG = true` | Prints the Owl/Bat/Caped Cat arm checks live, including which check failed per side |
 | `copy(armDump())` | Copies the recorded Owl/Bat/Caped Cat history (kept even with `ARM_DEBUG` off) |
-| `window.SCUBA_DEBUG = true` / `copy(scubaDump())` | The same for the Scuba gesture. Each line is tagged `[scuba @x=…]` with that person's on-screen position (pixels from the left), so in a group you can tell whose line is whose. `anchor=wrist/elbow/none` shows what their hand was looked for around. |
-| `window.SCUBA_FORCE = true` | Shows the cat without the gesture, which proves it can render |
+| `window.SCUBA_DEBUG = true` / `copy(scubaDump())` | The same for the Scuba gesture; each line is tagged with that person's on-screen position |
+| `window.SCUBA_FORCE = true` | Shows the Scuba cat without the gesture, which proves it can render |
 
-To rehearse without the event camera, feed a recorded clip through **OBS Virtual Camera** and pick it as the local webcam. This exercises the same path as a capture card. A `replay:` video goes through the RTSP path instead.
+#### Troubleshooting
 
-### Tests
+| Problem | What to check |
+|---|---|
+| Page blank or no camera | The backend may still be starting. Check `docker compose logs -f backend` for `MJPEG HTTP server ready on port 8081`, then refresh |
+| Backend keeps restarting | Docker can't see the GPU, or a model download failed. Test the GPU with `docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi` |
+| "Port already in use" | Another copy is running (for example `python app.py`). Stop it, or run `docker compose down` |
+| Code changes not showing | Run `docker compose build`, then `docker compose up` |
+| Webcam not found | The webcam is used by the browser: check its camera permission and selected camera, and close other apps using the camera |
+| Gallery won't connect from another device | Wrong IP (use the booth PC's Wi-Fi or Ethernet IPv4 address), firewall blocking ports 5173/8081, or a network that isolates devices. Test with `Test-NetConnection <IP> -Port 5173` |
+| No upload or QR code | In Settings, turn off **Disable Online Features** and enter a valid ImgBB API key |
 
-```
+To restart cleanly: `docker compose down`, `docker compose build`, `docker compose up`. Avoid `docker compose down -v`, which also deletes the downloaded models.
+
+## Architecture
+
+The booth is three applications:
+
+| Part | Folder | Tech | Port |
+|---|---|---|---|
+| Frontend (the booth) | `client-ns-photobooth` | Vite + Preact + PixiJS + TypeScript | 3000 |
+| Backend | `backend` | Python + aiohttp, PyTorch / Ultralytics / WiLoR / MediaPipe | 8081 (HTTP and WebSocket), 9091 (rosbridge WebSocket) |
+| Gallery | `gallery` | Vite + Preact | 5173 |
+
+### Frontend
+
+Shows the camera feed and draws the characters on it with PixiJS, runs the capture flow, builds the photo strips, and uploads them to ImgBB for the QR codes. For a local webcam the browser opens the camera itself and sends frames to the backend for detection. Settings are kept in the browser's local storage.
+
+### Backend
+
+- Reads RTSP cameras directly through FFmpeg with buffering disabled, for near-zero delay, or receives webcam frames from the browser.
+- Detects people with YOLO26-Pose, keeps track of who is who with BoT-SORT, and refines arm and shoulder points with ViTPose++ when a GPU is available.
+- Detects hands with WiLoR, using MediaPipe to tell left from right. 67 Mode uses its own MediaPipe pose model.
+- Saves photos, serves them to the gallery, keeps the 67 Mode leaderboard, and re-uploads recoloured strips to ImgBB.
+
+| Data | Location |
+|---|---|
+| Saved photos | `backend/photos/` |
+| 67 Mode leaderboard | `backend/challenge67_leaderboard.json` |
+| ImgBB key saved from Settings | `backend/settings/imgbb_key.txt` (never committed) |
+| Hand models | `backend/wilor_models/` (Docker: `wilor_models` volume) |
+| MediaPipe models | `backend/mediapipe_models/` |
+| ViTPose model | Hugging Face cache (Docker: `hf_cache` volume) |
+
+### Gallery
+
+A separate site that loads the photo list and images from the backend on port 8081. It refreshes every few seconds, so new photos appear on their own.
+
+## Development
+
+Run the frontend tests:
+
+```powershell
 cd client-ns-photobooth
 yarn test
 ```
 
-Compiles the tests and runs them with Node's built-in test runner. No extra packages are needed. They cover the animation state machine, the Owl/Bat/Caped Cat arm checks, the bat's perch, the caped cat's run, the globe's orbit and hand pose, Scuba hand detection, multi-person slot assignment and pose-point conversion.
+They compile with TypeScript and run on Node's built-in test runner, with no extra packages. They cover the animation state machine, the Owl/Bat/Caped Cat arm checks, the bat's perch, the caped cat's run, the globe's orbit and hand pose, Scuba hand detection, multi-person slot assignment and pose-point conversion.
 
----
-
-## Full Documentation
+## Documentation
 
 - [**Fusion Photobooth Guide.docx**](Fusion%20Photobooth%20Guide.docx): the full guide to setting up and running the photobooth
 - [`backend/replay_videos/README.md`](backend/replay_videos/README.md): adding test videos for the replay camera source
 
----
+## Acknowledgements
 
-## Models & Credits
-
-The backend's body/hand tracking is built on the following third-party models, run locally — no frames or keypoints are sent to any external API:
+The backend's body and hand tracking is built on these third-party models, all run locally:
 
 | Model | Used for | Repository |
 |---|---|---|
-| **YOLO26-Pose** (`yolo26n-pose.pt`) | Real-time body pose detection and per-person tracking | [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) |
-| **BoT-SORT** | Multi-person tracking across frames (keeps the same animation on the same person) | [NirAharon/BoT-SORT](https://github.com/NirAharon/BoT-SORT) |
-| **ViTPose++ (Huge)** (`usyd-community/vitpose-plus-huge`) | Refines YOLO's keypoints for more precise arm/shoulder/wrist tracking, used when a GPU is available | [ViTAE-Transformer/ViTPose](https://github.com/ViTAE-Transformer/ViTPose) |
-| **WiLoR** | Hand detection and palm orientation, used to trigger the Drone, 67, Scuba and Boxing Gloves animations | [rolpotamias/WiLoR](https://github.com/rolpotamias/WiLoR) |
+| **YOLO26-Pose** (`yolo26n-pose.pt`) | Real-time body pose detection | [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) |
+| **BoT-SORT** | Multi-person tracking across frames (keeps the same character on the same person) | [NirAharon/BoT-SORT](https://github.com/NirAharon/BoT-SORT) |
+| **ViTPose++ (Huge)** (`usyd-community/vitpose-plus-huge`) | Refines YOLO's arm, shoulder and wrist points, when a GPU is available | [ViTAE-Transformer/ViTPose](https://github.com/ViTAE-Transformer/ViTPose) |
+| **WiLoR** | Hand detection and palm orientation for the Drone, 67, Scuba and Boxing Gloves | [rolpotamias/WiLoR](https://github.com/rolpotamias/WiLoR) |
 | **MediaPipe Hand Landmarker** | Telling left hands from right, so the boxing gloves land on the correct hand | [google-ai-edge/mediapipe](https://github.com/google-ai-edge/mediapipe) |
-| **MediaPipe Pose Landmarker** (lite) | Pose tracking for 67 Mode specifically — kept independent of the YOLO/ViTPose/WiLoR pipeline above | [google-ai-edge/mediapipe](https://github.com/google-ai-edge/mediapipe) |
+| **MediaPipe Pose Landmarker** (lite) | Pose tracking for 67 Mode | [google-ai-edge/mediapipe](https://github.com/google-ai-edge/mediapipe) |
 
-All six run as vendored/pip-installed dependencies of this project; none of their original authors are affiliated with or endorse NS Photobooth.
+None of their original authors are affiliated with or endorse NS Photobooth.
