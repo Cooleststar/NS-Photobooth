@@ -23,7 +23,6 @@ Everything runs locally on the booth PC. Detection runs on the PC's own NVIDIA G
   - [Troubleshooting](#troubleshooting)
 - [Architecture](#architecture)
 - [Development](#development)
-- [Documentation](#documentation)
 - [Acknowledgements](#acknowledgements)
 
 ## Features
@@ -155,7 +154,7 @@ python app.py
 
 ## Usage
 
-The full step-by-step guide for each part is in the [Fusion Photobooth Guide](Fusion%20Photobooth%20Guide.docx). The essentials are below.
+The full step-by-step guide for each part is the Fusion Photobooth Guide, which is shared within the team rather than kept in this repository. The essentials are below.
 
 #### Photobooth (Port 3000)
 
@@ -200,7 +199,7 @@ Other devices need the booth PC's Windows Firewall to allow ports **5173** and *
 
 #### 67 Mode
 
-Turn on **Enable 67 Mode** in Settings (QR Code Mode must be off). A player clicks **Start**, enters a unique name, and has 20 seconds to flap their forearms, keeping the elbows steady, with shoulders, arms and hips in view. Each flap scores a point. Results show the score, rank and the top 10. **Play** starts a new player, **R** retries for the same one. Staff can edit or clear scores in Settings → 67 Mode → **Edit Leaderboard…** (the password is in the [Fusion Photobooth Guide](Fusion%20Photobooth%20Guide.docx)).
+Turn on **Enable 67 Mode** in Settings (QR Code Mode must be off). A player clicks **Start**, enters a unique name, and has 20 seconds to flap their forearms, keeping the elbows steady, with shoulders, arms and hips in view. Each flap scores a point. Results show the score, rank and the top 10. **Play** starts a new player, **R** retries for the same one. Staff can edit or clear scores in Settings → 67 Mode → **Edit Leaderboard…** (the password is in the Fusion Photobooth Guide).
 
 #### Testing Tools
 
@@ -288,11 +287,6 @@ yarn test
 ```
 
 They compile with TypeScript and run on Node's built-in test runner, with no extra packages. They cover the animation state machine, the Owl/Bat/Caped Cat arm checks, the bat's perch, the caped cat's run, the globe's orbit and hand pose, Scuba hand detection, multi-person slot assignment and pose-point conversion.
-
-## Documentation
-
-- [**Fusion Photobooth Guide.docx**](Fusion%20Photobooth%20Guide.docx): the full guide to setting up and running the photobooth
-- [`backend/replay_videos/README.md`](backend/replay_videos/README.md): adding test videos for the replay camera source
 
 ## Acknowledgements
 

@@ -94,3 +94,6 @@ RTSPinfo.md
 
 # ImgBB API key saved from the booth Settings page. A secret, so never committed.
 backend/settings/
+
+# Internal team guide (contains passwords) - kept locally, not published.
+Fusion Photobooth Guide.docx
